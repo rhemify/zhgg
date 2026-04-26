@@ -1,6 +1,6 @@
 ## Important notes:
 - Use bun
-- 
+- Use threejs fibre for 3D animation
 
 ## Frontend Optimization techniques:
 when implementing any certain features, think about whether the following can be implemented:
