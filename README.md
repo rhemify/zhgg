@@ -22,7 +22,7 @@ ExecutionContext (scoped, passkey-bound, TTL-limited)
          ↓
 Policy Engine — evaluates action against rules before execution
          ↓
-MCP Tool Layer — Uniswap, Aave, Lido, ENS, ...
+MCP Tool Layer — Uniswap, ENS, ...
          ↓
 Payment Abstraction — x402 | MPP | onchain gas
          ↓
@@ -35,7 +35,7 @@ Onchain execution on Ethereum
 
 **Policy Engine** — OPA-style rule evaluation at the tool call layer, not just at spawn time. Actions are classified by risk tier (LOW / MEDIUM / HIGH / CRITICAL) with stepped-up auth requirements. Prompt injection cannot bypass it because the constraint is enforced at execution, not in the LLM's judgment.
 
-**Intent Taxonomy** — a structured schema of ~45 Ethereum retail intent classes across four tiers. Each intent maps to extracted params, a protocol template, a risk tier, and which protocol rails (ACP / MCP / payment) to activate. This is the core of what makes agent routing deterministic.
+**Intent Taxonomy** — a structured schema of Ethereum retail intent classes across four tiers, focused on Uniswap-based trading and liquidity actions. Each intent maps to extracted params, a protocol template, a risk tier, and which protocol rails (ACP / MCP / payment) to activate. This is the core of what makes agent routing deterministic.
 
 **Payment Abstraction** — unified support for x402 (crypto micropayments for data feeds and agent services), MPP (web2 rails for retail billing), and onchain gas. The runtime selects the right rail per action transparently.
 
@@ -72,27 +72,18 @@ The taxonomy is the foundation. It makes agent routing deterministic — no hall
 
 | Intent | Example | Protocol |
 |--------|---------|---------|
-| `deposit_lending` | "deposit 500 USDC to Aave" | Aave v3 |
-| `withdraw_lending` | "withdraw my USDC from Aave" | Aave v3 |
-| `yield_route` | "find best APY for my USDC" | Aave / Compound / Morpho |
-| `borrow` | "borrow 200 USDC against my ETH" | Aave v3 |
-| `repay` | "repay my USDC loan" | Aave v3 |
-| `add_collateral` | "add collateral to my position" | Aave v3 |
-| `leverage` | "open 2x long on ETH" | Aave + Uniswap |
-| `liquid_stake` | "liquid stake 5 ETH" | Lido |
 | `add_liquidity` | "add to ETH/USDC pool on Uniswap" | Uniswap v3 |
 | `remove_liquidity` | "remove my LP position" | Uniswap v3 |
-| `buy_nft` | "buy floor NFT from collection X" | OpenSea / Blur |
-| `claim_airdrop` | "claim my airdrop" | protocol-specific |
+| `collect_fees` | "collect my LP fees" | Uniswap v3 |
+| `claim_airdrop` | "claim my UNI airdrop" | Uniswap / protocol-specific |
 
 ### Tier 4 — Compound (multi-step chains)
 
 | Intent | Example | Agents involved |
 |--------|---------|----------------|
-| `harvest_and_reinvest` | "claim rewards and restake" | harvest-agent → yield-specialist → executor |
-| `borrow_and_swap` | "borrow USDC and buy ETH" | risk-agent → executor |
-| `unwind_position` | "remove LP, repay loan, withdraw" | risk-agent → executor (ordered) |
-| `rebalance_full` | "sell yield, rebalance portfolio" | yield-specialist → executor |
+| `rebalance_full` | "rebalance my portfolio to 60/40 ETH/USDC" | monitor-agent → executor |
+| `range_reposition` | "move my LP range up as price rises" | monitor-agent → executor (ordered) |
+| `collect_and_reinvest` | "collect LP fees and compound back in" | executor → executor |
 
 ### Risk tier enforcement
 
@@ -137,7 +128,7 @@ zhgg/
 ├── packages/
 │   ├── sdk/      # ExecutionContext, policy engine, tool wrapping, payment abstraction
 │   ├── tui/      # Operator control plane (Ink)
-│   └── tools/    # MCP tool implementations (Uniswap, Aave, Lido, ENS, ...)
+│   └── tools/    # MCP tool implementations (Uniswap v3/v4, ENS)
 └── apps/
     └── demo/     # End-to-end demo agent
 ```
@@ -158,7 +149,7 @@ The terminal UI is the operator control plane. It gives developers and ops teams
 - **Policy-at-tool-layer** — constraints live at call time, not spawn time. Prompt injection cannot bypass them because the enforcement is in the execution layer, not the LLM.
 - **Attenuation guarantee** — sub-agents can only narrow scope, never expand it. Enforced by the SDK, not by the agent's judgment.
 - **Signed audit trail** — every action is logged and signed, forensically useful not just operationally. Enterprise compliance story (SOC2, fintech).
-- **Protocol templates** — correct Ethereum DeFi integrations (Uniswap v3/v4, Aave v3, Lido) take months to harden. Each template is a defensive asset.
+- **Protocol templates** — correct Uniswap v3/v4 integrations take months to harden. Each template is a defensive asset.
 - **Unified payment rails** — nobody has cleanly abstracted x402 + MPP + onchain gas into one SDK primitive for agent use cases.
 
 ## Tech stack
@@ -169,7 +160,7 @@ The terminal UI is the operator control plane. It gives developers and ops teams
 - **Token format**: Macaroons (native attenuation support)
 - **Identity**: ENS (agent principals, metadata, access gating)
 - **Chain**: Ethereum
-- **Protocols**: Uniswap v3/v4 · Aave v3 · Compound · Morpho · Lido · Curve · Balancer · OpenSea · Blur
+- **Protocols**: Uniswap v3/v4 · ENS
 - **Agent protocols**: Virtuals ACP · Gensyn AXL · MCP · x402 · MPP
 
 ## Hackathon prize tracks
@@ -185,8 +176,8 @@ The terminal UI is the operator control plane. It gives developers and ops teams
 ## Getting started
 
 ```bash
-pnpm install
-pnpm --filter @zhgg/sdk dev
+bun install
+bun --filter @zhgg/sdk dev
 ```
 
 ## Business model
