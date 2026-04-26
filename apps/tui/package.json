@@ -5,6 +5,7 @@
   "module": "src/index.tsx",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
+    "flow": "bun run src/payment-flow.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
