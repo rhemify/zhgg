@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
+    "demo": "bun run src/index.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@zhgg/router": "workspace:*",
     "@zhgg/sdk": "workspace:*",
     "@zhgg/tools": "workspace:*"
   },
