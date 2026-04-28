@@ -1,0 +1,28 @@
+{
+  "name": "@zhgg/router",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "catalog:",
+    "lru-cache": "^11.0.2",
+    "ethers": "^5.8.0",
+    "@0glabs/0g-serving-broker": "^0.7.5",
+    "@0glabs/0g-ts-sdk": "^0.3.3",
+    "@x402/core": "^2.10.0",
+    "@x402/evm": "^2.10.0",
+    "@modelcontextprotocol/sdk": "^1.11.0"
+  },
+  "devDependencies": {
+    "@my-better-t-app/config": "workspace:*",
+    "@types/bun": "latest",
+    "typescript": "catalog:"
+  }
+}
