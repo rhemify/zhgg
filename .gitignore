@@ -51,3 +51,14 @@ tmp
 temp
 
 .lock
+
+# Local Claude config (never push)
+CLAUDE.local.md
+.claude/
+
+# Local docs (never push)
+docs/
+
+# Foundry build artifacts
+contracts/cache/
+contracts/out/
