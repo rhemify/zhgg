@@ -1,189 +1,196 @@
 # zhgg
 
-A web3 agent execution runtime for Ethereum — scoped permission enforcement, policy-guarded tool execution, and unified payment rail support (x402 + MPP) packaged as a TypeScript SDK with an operator TUI.
+**Trust-level inference router for crypto-native AI agents.**
 
-Built for [ETHGlobal OpenAgents](https://ethglobal.com/events/openagents).
-## Simplified execution runtime it solves
+Built for [ETHGlobal OpenAgents](https://ethglobal.com/events/openagents) — submitting to 0G, KeeperHub, and ENS prize tracks.
+
+---
+
+## The problem
+
+AI agents in 2026 have wallets and USDC, not credit cards and API keys. They need:
+
+- **Cheap inference** for routine tasks (research, classification)
+- **Verifiable inference** for on-chain decisions (votes, trades, credentials) — a smart contract has to be able to prove an AI actually approved the action
+- **Crypto-native payment** — no API keys, no Stripe, no human-in-the-loop
+- **Settlement reliability** — silent payment failures break the agent loop
+
+Today an agent developer wires this themselves. It's ~400 lines of fragile glue: provider selection, x402 payment, retry, audit logging, attestation verification. It breaks at 3am.
+
+## What zhgg is
+
+The Stripe for AI agent inference. One API surface, four trust modes:
+
+| Mode | Behaviour | When to use |
+|---|---|---|
+| `zhgg/fast` | Cheapest live provider on x402 Bazaar | Research, classification, anything where the AI's answer doesn't move money |
+| `zhgg/verified` | TEE-attested 0G Compute | The agent is about to take an on-chain action and a smart contract needs to verify the AI authorised it |
+| `zhgg/consensus` | 3 providers in parallel + 0G TEE anchor | Multi-sig for AI: high-stakes decisions where accuracy AND proof matter |
+| `zhgg/pipeline` | Cheap research → TEE-attested decision | Multi-step reasoning where step 1 doesn't need attestation but step 2 does |
+
+Underneath: KeeperHub settles every payment, 0G Storage logs every event with `keccak256` hashes, an ERC-7857 iNFT carries the agent's identity, ERC-8021 calldata suffix captures protocol fees.
+
 ```
-Intent (What does the user want to do?)
-         ↓
-Rails (What payment protocol rails are needed to purchase a certain service?)
-         ↓
-Execute (Where should the execution occur at?)
-```
-## What it does
-
-zhgg provides the execution infrastructure that agents are missing: a structured intent taxonomy for web3 retail actions, a policy engine that enforces permissions at the tool layer, and a payment abstraction that unifies crypto (x402) and web2 (MPP) rails — so agents can act on behalf of users safely and verifiably on Ethereum.
-
-```
-User intent (structured)
-         ↓
-ExecutionContext (scoped, passkey-bound, TTL-limited)
-         ↓
-Policy Engine — evaluates action against rules before execution
-         ↓
-MCP Tool Layer — Uniswap, ENS, ...
-         ↓
-Payment Abstraction — x402 | MPP | onchain gas
-         ↓
-Onchain execution on Ethereum
-```
-
-## Core primitives
-
-**ExecutionContext** — every agent run gets a scoped execution context. Agents never touch credentials directly. Permissions only narrow as they pass down a chain (attenuation — a sub-agent can never gain more scope than its parent).
-
-**Policy Engine** — OPA-style rule evaluation at the tool call layer, not just at spawn time. Actions are classified by risk tier (LOW / MEDIUM / HIGH / CRITICAL) with stepped-up auth requirements. Prompt injection cannot bypass it because the constraint is enforced at execution, not in the LLM's judgment.
-
-**Intent Taxonomy** — a structured schema of Ethereum retail intent classes across four tiers, focused on Uniswap-based trading and liquidity actions. Each intent maps to extracted params, a protocol template, a risk tier, and which protocol rails (ACP / MCP / payment) to activate. This is the core of what makes agent routing deterministic.
-
-**Payment Abstraction** — unified support for x402 (crypto micropayments for data feeds and agent services), MPP (web2 rails for retail billing), and onchain gas. The runtime selects the right rail per action transparently.
-
-**Virtuals ACP / Gensyn AXL Support** — route intents to specialist agents via the Virtuals Agent Commerce Protocol or communicate peer-to-peer across Gensyn's AXL encrypted mesh. Agents are sourced from the ecosystem rather than built in-house.
-
-**ENS Identity Layer** — agent principals are bound to ENS names, not raw addresses. Enables human-readable agent identity, metadata storage, and access gating via ENS records.
-
-## Intent taxonomy
-
-The taxonomy is the foundation. It makes agent routing deterministic — no hallucinated tool calls, no ambiguous execution paths. Each intent class is fully specced: param schema, protocol template, risk tier, and protocol rails.
-
-### Tier 1 — Casual (high frequency, low complexity)
-
-| Intent | Example | Protocol |
-|--------|---------|---------|
-| `simple_swap` | "swap 100 USDC to ETH" | Uniswap v3 |
-| `swap_with_slippage` | "swap but max 0.5% slippage" | Uniswap v3 |
-| `send_token` | "send 50 USDC to vitalik.eth" | ERC-20 transfer + ENS |
-| `check_balance` | "what's my ETH balance" | read-only |
-| `check_portfolio` | "show all my holdings" | read-only |
-
-### Tier 2 — Active Trader (conditional, time-sensitive)
-
-| Intent | Example | Protocol |
-|--------|---------|---------|
-| `limit_swap` | "swap ETH to USDC if ETH hits $4000" | Uniswap v4 hooks |
-| `stop_loss` | "sell my ETH if it drops to $2800" | Uniswap + price feed |
-| `take_profit` | "sell 50% of my ETH at $4500" | Uniswap |
-| `recurring_swap` | "buy $100 of ETH every Monday" | Uniswap |
-| `price_alert` | "tell me when ETH hits $3500" | Chainlink feed |
-| `rebalance` | "keep 60% ETH 40% USDC" | Uniswap |
-
-### Tier 3 — DeFi Power User (complex, multi-step)
-
-| Intent | Example | Protocol |
-|--------|---------|---------|
-| `add_liquidity` | "add to ETH/USDC pool on Uniswap" | Uniswap v3 |
-| `remove_liquidity` | "remove my LP position" | Uniswap v3 |
-| `collect_fees` | "collect my LP fees" | Uniswap v3 |
-| `claim_airdrop` | "claim my UNI airdrop" | Uniswap / protocol-specific |
-
-### Tier 4 — Compound (multi-step chains)
-
-| Intent | Example | Agents involved |
-|--------|---------|----------------|
-| `rebalance_full` | "rebalance my portfolio to 60/40 ETH/USDC" | monitor-agent → executor |
-| `range_reposition` | "move my LP range up as price rises" | monitor-agent → executor (ordered) |
-| `collect_and_reinvest` | "collect LP fees and compound back in" | executor → executor |
-
-### Risk tier enforcement
-
-| Tier | Behaviour |
-|------|-----------|
-| LOW | auto-execute, no confirmation |
-| MEDIUM | show user summary, 5s to cancel |
-| HIGH | explicit user confirmation required |
-| CRITICAL | passkey sign required + policy check |
-
-### Classifier output schema
-
-Every intent produces a structured output the execution layer consumes directly:
-
-```json
-{
-  "intent": "simple_swap",
-  "params": {
-    "from_token": "USDC",
-    "to_token": "ETH",
-    "amount": 100,
-    "amount_type": "exact_in",
-    "slippage_bps": 50
-  },
-  "risk_tier": "LOW",
-  "protocol_rail": {
-    "acp": [],
-    "axl": [],
-    "mcp": ["uniswap_v3_swap"],
-    "payment": {
-      "data_cost": null,
-      "service_cost": null
-    }
-  }
-}
+┌─────────────────────────────────────────────────────┐
+│  agent calls router.route({ prompt, mode, budget })  │
+└─────────────────────┬───────────────────────────────┘
+                      ▼
+        ┌──────────── policy ────────────┐
+        │ scope check, mode allowed,     │
+        │ spend cap, expiry              │
+        └────────────┬───────────────────┘
+                     ▼
+        ┌──── unified provider pool ─────┐
+        │ 0G Compute  ·  Bazaar (x402)   │
+        │ ranked by price, filtered by   │
+        │ trust requirement              │
+        └────────────┬───────────────────┘
+                     ▼
+        ┌────── adapter dispatch ────────┐
+        │ zg.infer()  or  x402.infer()    │
+        └────────────┬───────────────────┘
+                     ▼
+        ┌────── KeeperHub MCP ───────────┐
+        │ settle, retry, gas, nonce      │
+        └────────────┬───────────────────┘
+                     ▼
+        ┌──── 0G Storage audit ──────────┐
+        │ append-only log, keccak256     │
+        │ hashed prompt + response       │
+        └────────────┬───────────────────┘
+                     ▼
+        ┌────── ERC-8021 suffix ─────────┐
+        │ protocol fee on every settle   │
+        └────────────────────────────────┘
 ```
 
-## Monorepo structure
+Full architecture: [`docs/architecture.md`](./docs/architecture.md). Pivot brief: [`docs/pivot.md`](./docs/pivot.md).
+
+---
+
+## Run it
+
+```bash
+bun install                            # one-time
+
+# CLI demo — 5 headlines through the router with mock providers
+bun --filter demo demo
+
+# Live TUI dashboard — same demo, judge-friendly side-by-side panels
+bun --filter @zhgg/tui router
+
+# Type check (6 packages)
+bun run check-types
+
+# Tests (319 router + 45 contract)
+cd packages/router && bun test
+cd contracts && forge test
+```
+
+The demo prints 5 headlines: 3 routed through `zhgg/fast`, 2 through `zhgg/consensus`. Headline 5 deliberately produces 67% provider agreement so the `low_confidence` flag fires — that's the consensus mode's killer feature on display.
+
+```
+[5] Smart contract upgrade proposal passes
+     mode:        consensus  (on-chain protocol consequence)
+     response:    bullish
+     providers:   x402:groq, x402:together, zg:0xnode-a
+     cost:        $0.000480
+     attestation: 0xde2f45…454b
+     agreement:   67%  ⚠ low confidence
+     audit_cid:   0x000000…0005
+```
+
+---
+
+## Deploy contracts (testnet)
+
+```bash
+cd contracts
+forge install                          # one-time
+forge build
+forge script script/Deploy.s.sol \
+  --rpc-url $ZG_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast
+```
+
+Copy the printed `AGENT_NFT_ADDRESS`, `ACP_STUB_ADDRESS`, `ZG_INFT_TOKEN_ID` into `.env`. The deploy script also mints the demo iNFT (token #1) with a permissive capability manifest.
+
+---
+
+## Prize tracks targeted
+
+| Sponsor | Track | What we ship |
+|---|---|---|
+| **0G** | Best Agent Framework & Tooling ($7,500) | zhgg packaged as an OpenClaw provider plugin. 0G Compute powers `zhgg/verified` and the consensus anchor. 0G Storage holds every audit log entry. |
+| **0G** | Best Autonomous Agents + iNFT ($7,500) | ERC-7857 iNFT (`AgentNFT.sol`) on 0G Galileo. Agent owns identity + memory root. `authorizeUsage` pays royalty to owner. Demo agent earns from usage and pays its own inference. |
+| **KeeperHub** | Best Integration ($4,500) + feedback bounty ($500) | Every settlement (both adapters) routes through KeeperHub MCP. See [`docs/FEEDBACK.md`](./docs/FEEDBACK.md). |
+| **ENS** | Creative Use ($2,500, stretch) | ENS text records as agent capability manifests. `agent.zhgg.eth` resolves via `zhgg.inft`/`zhgg.modes`/`zhgg.maxCostUsd` text records to the iNFT identity. |
+
+**Total target: ~$20,500.**
+
+---
+
+## What's in the repo
 
 ```
 zhgg/
 ├── packages/
-│   ├── sdk/      # ExecutionContext, policy engine, tool wrapping, payment abstraction
-│   ├── tui/      # Operator control plane (Ink)
-│   └── tools/    # MCP tool implementations (Uniswap v3/v4, ENS)
-└── apps/
-    └── demo/     # End-to-end demo agent
+│   ├── router/              @zhgg/router — the entire core (319 tests)
+│   │   └── src/
+│   │       ├── intent.ts            mode + output_type + provider types
+│   │       ├── scope.ts             HMAC-signed ExecutionScope
+│   │       ├── policy.ts            spend / latency / mode / expiry rules
+│   │       ├── pool.ts              unified provider pool
+│   │       ├── consensus.ts         majority-vote / cosine / numeric / json
+│   │       ├── router.ts            mode orchestration + RouterEventBus
+│   │       ├── adapters/
+│   │       │   ├── zg.ts            0G broker adapter (TEE)
+│   │       │   └── x402.ts          Bazaar adapter (x402 USDC)
+│   │       ├── keeper.ts            KeeperHub MCP client
+│   │       ├── audit.ts             async 0G Storage writer
+│   │       ├── erc8021.ts           protocol fee calldata suffix
+│   │       ├── identity/
+│   │       │   ├── inft.ts          ERC-7857 iNFT adapter
+│   │       │   └── ens.ts           ENS text-record agent resolver
+│   │       ├── providers/
+│   │       │   └── openclaw.ts      OpenClaw provider plugin
+│   │       └── testing/
+│   │           └── mock-stack.ts    shared demo/TUI mock stack
+│   └── …
+├── apps/
+│   ├── demo/                CLI: 5 headlines, mock providers, prints summary
+│   └── tui/                 Live dashboard: agent / routing / audit / settle
+└── contracts/               Foundry workspace (45 tests)
+    └── src/
+        ├── AgentNFT.sol             ERC-7857 iNFT + royalties
+        ├── ACPJobStub.sol           job lifecycle escrow
+        └── interfaces/IERC7857.sol
 ```
 
-## TUI
-
-The terminal UI is the operator control plane. It gives developers and ops teams visibility and control without a full platform build:
-
-- Live agent activity feed with permission scopes
-- Approve / deny queue for HIGH and CRITICAL risk actions with passkey confirmation
-- Audit trail filterable by agent, risk tier, or protocol
-- Payment rail spend monitoring (x402 vs MPP vs onchain gas)
-- Virtuals / AXL agent marketplace management
-- Policy editor — add and simulate rules live
-
-## Why this is defensible
-
-- **Policy-at-tool-layer** — constraints live at call time, not spawn time. Prompt injection cannot bypass them because the enforcement is in the execution layer, not the LLM.
-- **Attenuation guarantee** — sub-agents can only narrow scope, never expand it. Enforced by the SDK, not by the agent's judgment.
-- **Signed audit trail** — every action is logged and signed, forensically useful not just operationally. Enterprise compliance story (SOC2, fintech).
-- **Protocol templates** — correct Uniswap v3/v4 integrations take months to harden. Each template is a defensive asset.
-- **Unified payment rails** — nobody has cleanly abstracted x402 + MPP + onchain gas into one SDK primitive for agent use cases.
+---
 
 ## Tech stack
 
-- **Language**: TypeScript
-- **TUI**: Ink (React for terminals)
-- **Policy engine**: OPA (Rego)
-- **Token format**: Macaroons (native attenuation support)
-- **Identity**: ENS (agent principals, metadata, access gating)
-- **Chain**: Ethereum
-- **Protocols**: Uniswap v3/v4 · ENS
-- **Agent protocols**: Virtuals ACP · Gensyn AXL · MCP · x402 · MPP
+- **Runtime**: Bun
+- **Language**: TypeScript (strict, no `any`)
+- **Schema**: Zod
+- **EVM**: ethers v5 (required by 0G SDKs)
+- **Solidity**: 0.8.24 + Foundry + OpenZeppelin v5
+- **0G**: `@0glabs/0g-serving-broker@0.7.5` (TEE inference) + `@0glabs/0g-ts-sdk@0.3.3` (storage)
+- **x402**: `@x402/core` + `@x402/evm` (EIP-3009 USDC payments on Base Sepolia)
+- **MCP**: `@modelcontextprotocol/sdk` (KeeperHub HTTP transport)
+- **TUI**: `@opentui/core` (peer dep), with raw-ANSI live dashboard implementation
+- **OpenClaw**: `openclaw@2026.4.25` (consumer of our provider plugin)
 
-## Hackathon prize tracks
+No Python. No Redis. No OPA. No Macaroons. No paywall server.
 
-| Sponsor | Track | Relevance |
-|---------|-------|-----------|
-| Uniswap Foundation | Best Uniswap API Integration | Uniswap is the primary swap execution tool across Tier 1–4 intents |
-| Gensyn | Best Application of AXL | AXL is the peer-to-peer messaging layer for multi-agent coordination across compound intents |
-| ENS | Best ENS Integration for AI Agents | Agent principals are ENS-bound; ENS used for address resolution in send intents and access gating |
-| KeeperHub | Best Integration with KeeperHub | KeeperHub as the execution trigger layer for conditional and recurring intents |
-| 0G | Best Agent Framework & Tooling | zhgg SDK is the framework-level primitive — execution context, policy engine, tool wrapping |
+---
 
-## Getting started
+## Status
 
-```bash
-bun install
-bun --filter @zhgg/sdk dev
-```
-
-## Business model
-
-- **Execution fee** — small percentage of every action routed through the runtime
-- **Payment rail margin** — basis points on MPP flows and x402 micropayment aggregation
-- **Protocol distribution** — protocols pay to be the preferred route for relevant intent classes
-- **Virtuals / AXL agent rev share** — percentage of agent earnings as marketplace operator
-- **Enterprise** — hosted runtime with SLA, full audit trail, compliance story (SOC2 / fintech)
+- ✅ 319 router unit tests + 45 Solidity tests, all green
+- ✅ `bun run check-types` clean across 6 packages
+- ✅ Demo runs end-to-end with mock providers
+- ✅ Smart contracts compile + deploy via forge script
+- ⏳ Live testnet deploy + video record happen at submission time
