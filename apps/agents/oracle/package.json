@@ -10,9 +10,7 @@
     "check-types": "tsc --noEmit",
     "test": "bun test"
   },
-  "dependencies": {
-    "@zhgg/workflow": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/bun": "latest"
   },

@@ -31,9 +31,6 @@
     "apps/agents/oracle": {
       "name": "@zhgg/oracle-agent",
       "version": "0.0.1",
-      "dependencies": {
-        "@zhgg/workflow": "workspace:*",
-      },
       "devDependencies": {
         "@types/bun": "latest",
       },
@@ -187,6 +184,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.11.0",
+        "@zhgg/oracle-agent": "workspace:*",
         "server-only": "^0.0.1",
         "viem": "^2.21.0",
         "zod": "catalog:",
