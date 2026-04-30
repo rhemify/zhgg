@@ -115,6 +115,53 @@ contract AxiomCommitTest is Test {
         axiom.revealPlan(1, id, "", RESULT);
     }
 
+    function test_revealPlan_revertsOnOversizedPlan() public {
+        // Block-gas-limit defense. `bytes plan` is non-indexed in the
+        // emitted event so unbounded reveals can blow past the
+        // ~30M-gas-on-mainnet ceiling. Cap at MAX_PLAN_SIZE (8KB).
+        // Cache constant locally — public-constant getters are external
+        // calls and would consume `vm.prank` before `revealPlan` fires.
+        uint256 max = axiom.MAX_PLAN_SIZE();
+        bytes memory big = new bytes(max + 1);
+        bytes32 bigHash = keccak256(big);
+        vm.prank(alice);
+        bytes32 id = axiom.commitPlan(1, bigHash);
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(AxiomCommit.PlanTooLarge.selector, max + 1, max)
+        );
+        axiom.revealPlan(1, id, big, RESULT);
+    }
+
+    function test_revealPlan_revertsOnOversizedResult() public {
+        uint256 max = axiom.MAX_PLAN_SIZE();
+        vm.prank(alice);
+        bytes32 id = axiom.commitPlan(1, _planHash());
+        bytes memory bigResult = new bytes(max + 1);
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(AxiomCommit.ResultTooLarge.selector, max + 1, max)
+        );
+        axiom.revealPlan(1, id, PLAN, bigResult);
+    }
+
+    function test_revealPlan_acceptsExactlyMaxSize() public {
+        // Just under the cap must work; cap is inclusive of the limit.
+        uint256 max = axiom.MAX_PLAN_SIZE();
+        bytes memory atMax = new bytes(max);
+        // Set first byte non-zero so keccak doesn't accidentally collide
+        // across runs with another zero-bytes plan.
+        atMax[0] = 0x42;
+        bytes32 atMaxHash = keccak256(atMax);
+        vm.prank(alice);
+        bytes32 id = axiom.commitPlan(1, atMaxHash);
+        vm.prank(alice);
+        axiom.revealPlan(1, id, atMax, RESULT);
+
+        (, , bool revealed, ) = axiom.commitOf(id);
+        assertTrue(revealed);
+    }
+
     /// SOL↔TS parity: locks the on-chain commitId derivation against a
     /// fixture hardcoded in `apps/demo/test/loop-helpers.test.ts`. Any
     /// drift between the Solidity `abi.encodePacked` and viem's

@@ -18,6 +18,13 @@ pragma solidity ^0.8.24;
 ///         per commit (`committer` + `blockNumber` + `revealed` flag fit
 ///         in a single 256-bit slot; `planHash` is in a parallel mapping).
 contract AxiomCommit {
+    /// @notice Upper bound on `plan` and `result` bytes accepted by
+    ///         `revealPlan`. Each is non-indexed in `PlanRevealed`, so
+    ///         unbounded reveals can blow past block gas. 8 KB covers
+    ///         every realistic agent plan (typical canonical-JSON plan
+    ///         is ~1 KB) while keeping a single reveal under ~250k gas.
+    uint256 public constant MAX_PLAN_SIZE = 8192;
+
     struct Commit {
         address committer;   // 160 bits
         uint64  blockNumber; //  64 bits
@@ -50,6 +57,8 @@ contract AxiomCommit {
     error NotCommitter(bytes32 commitId, address caller);
     error PlanHashMismatch(bytes32 expected, bytes32 actual);
     error EmptyPlan();
+    error PlanTooLarge(uint256 size, uint256 max);
+    error ResultTooLarge(uint256 size, uint256 max);
 
     /// @notice Commit to a plan hash for `tokenId`.
     /// @param  tokenId   iNFT whose agent is about to act.
@@ -87,6 +96,8 @@ contract AxiomCommit {
         if (c.revealed) revert AlreadyRevealed(commitId);
         if (msg.sender != c.committer) revert NotCommitter(commitId, msg.sender);
         if (plan.length == 0) revert EmptyPlan();
+        if (plan.length > MAX_PLAN_SIZE) revert PlanTooLarge(plan.length, MAX_PLAN_SIZE);
+        if (result.length > MAX_PLAN_SIZE) revert ResultTooLarge(result.length, MAX_PLAN_SIZE);
 
         bytes32 actual = keccak256(plan);
         bytes32 expected = _planHashOf[commitId];

@@ -82,6 +82,35 @@ contract AgentReceiverWalletTest is Test {
         w.splitMyBalance(IERC20(address(usdc)));
     }
 
+    function test_splitBelowThreshold_isNoOp() public {
+        // Dust grief: an attacker airdrops less than MIN_SPLIT_AMOUNT to
+        // the wallet. Splitter would revert with AmountBelowMinimum,
+        // wedging the caller. The wallet must short-circuit so a bot
+        // gets a clear BelowSplitThreshold signal instead of a vague
+        // downstream revert.
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        usdc.mint(address(w), 9_999); // one below the 10_000 min
+
+        vm.expectEmit(true, false, false, true);
+        emit AgentReceiverWallet.BelowSplitThreshold(address(usdc), 9_999, 10_000);
+        vm.prank(stranger);
+        w.splitMyBalance(IERC20(address(usdc)));
+
+        // Funds remain untouched; nothing was split.
+        assertEq(usdc.balanceOf(address(w)), 9_999);
+        assertEq(usdc.balanceOf(agentOwner), 0);
+    }
+
+    function test_splitAtExactThreshold_succeeds() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        usdc.mint(address(w), 10_000); // exactly the min
+        vm.prank(stranger);
+        w.splitMyBalance(IERC20(address(usdc)));
+
+        assertEq(usdc.balanceOf(agentOwner), 8_500);
+        assertEq(usdc.balanceOf(address(w)),     0);
+    }
+
     function test_splitFollowsINFTOwnerOnTransfer() public {
         AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
         address newOwner = makeAddr("newOwner");
@@ -155,6 +184,25 @@ contract AgentReceiverWalletTest is Test {
         bytes32 hash = keccak256("kh-provision-challenge");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, hash);
         bytes memory sig = abi.encodePacked(r, s, v);
+        assertEq(w.isValidSignature(hash, sig), bytes4(0xffffffff));
+    }
+
+    function test_erc1271_unmintedTokenReturnsFail() public {
+        // Receiver wallets are CREATE2-addressable for any tokenId, so a
+        // wallet can be deployed BEFORE its iNFT is minted (or after the
+        // iNFT is burned). ERC-1271 contract-signature callers (Safe, AA
+        // wallets) tolerate `0xffffffff` but break on reverts. Confirm
+        // we return FAIL rather than reverting when `ownerOf` reverts.
+        uint256 phantomTokenId = 99_999;
+        AgentReceiverWallet w =
+            AgentReceiverWallet(payable(factory.deploy(phantomTokenId)));
+
+        uint256 pk = 0xA11CE;
+        bytes32 hash = keccak256("kh-provision-challenge");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        // Must return FAIL, not revert.
         assertEq(w.isValidSignature(hash, sig), bytes4(0xffffffff));
     }
 }

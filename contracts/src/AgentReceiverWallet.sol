@@ -12,6 +12,7 @@ interface IAgentNFT {
 
 interface IFeeSplitter {
     function splitERC20(IERC20 asset, uint256 totalAmount, address agentOwner) external;
+    function MIN_SPLIT_AMOUNT() external view returns (uint256);
 }
 
 /// @title  AgentReceiverWallet — public-trigger smart wallet for Turnkey-bridged payouts
@@ -38,9 +39,17 @@ contract AgentReceiverWallet is ReentrancyGuard {
     IAgentNFT     public immutable agentNft;
     IFeeSplitter public immutable feeSplitter;
     uint256       public immutable tokenId;
+    /// @notice Cached at deploy time from `feeSplitter.MIN_SPLIT_AMOUNT()`.
+    ///         Lets the hot path short-circuit on dust without making an
+    ///         external call to the splitter every `splitMyBalance`.
+    uint256       public immutable minSplitAmount;
 
     event BalanceSplit(address indexed asset, uint256 amount, address indexed ownerAtSplit, address indexed caller);
     event Withdrawn(address indexed asset, address indexed to, uint256 amount, address indexed owner);
+    /// @notice Emitted when `splitMyBalance` is a no-op because the
+    ///         current balance is below the splitter's minimum. Lets a
+    ///         keeper bot distinguish "wait for more" from "broken".
+    event BelowSplitThreshold(address indexed asset, uint256 balance, uint256 minSplitAmount);
 
     error NotOwner(address caller, address owner);
     error NothingToSplit(address asset);
@@ -48,9 +57,10 @@ contract AgentReceiverWallet is ReentrancyGuard {
     error NativeSweepFailed();
 
     constructor(address agentNft_, address feeSplitter_, uint256 tokenId_) {
-        agentNft     = IAgentNFT(agentNft_);
-        feeSplitter  = IFeeSplitter(feeSplitter_);
-        tokenId      = tokenId_;
+        agentNft       = IAgentNFT(agentNft_);
+        feeSplitter    = IFeeSplitter(feeSplitter_);
+        tokenId        = tokenId_;
+        minSplitAmount = IFeeSplitter(feeSplitter_).MIN_SPLIT_AMOUNT();
     }
 
     /// @notice Live owner of the iNFT this wallet serves. Reverts if burned.
@@ -71,6 +81,16 @@ contract AgentReceiverWallet is ReentrancyGuard {
     function splitMyBalance(IERC20 asset) external nonReentrant {
         uint256 bal = asset.balanceOf(address(this));
         if (bal == 0) revert NothingToSplit(address(asset));
+        // Dust grief defense: if a malicious party airdrops a tiny
+        // amount the splitter would reject as `AmountBelowMinimum`, the
+        // call would revert with a confusing downstream error. Emit a
+        // clear no-op signal instead so keepers can distinguish dust
+        // from a real malfunction. Funds remain in the wallet — a later
+        // legitimate top-up + retry consolidates them with the dust.
+        if (bal < minSplitAmount) {
+            emit BelowSplitThreshold(address(asset), bal, minSplitAmount);
+            return;
+        }
 
         address ownerNow = owner();
 
@@ -102,11 +122,23 @@ contract AgentReceiverWallet is ReentrancyGuard {
     ///         owner over `hash`. Lets KeeperHub register this contract
     ///         as a "smart creator wallet" by asking the owner to sign a
     ///         provisioning challenge.
+    /// @dev    Burn-tolerant: when the iNFT is unminted or burned,
+    ///         `agentNft.ownerOf` reverts with `ERC721NonexistentToken`.
+    ///         ERC-1271 callers (Safe, AA stacks) treat a revert from
+    ///         `isValidSignature` as a system error rather than a
+    ///         denied signature, which can brick the wallet's
+    ///         downstream consumers. Wrap the call so the failure
+    ///         surfaces as `ERC1271_FAIL` per the standard.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
         (address recovered, ECDSA.RecoverError err, ) = hash.tryRecover(signature);
         if (err != ECDSA.RecoverError.NoError) return ERC1271_FAIL;
         if (recovered == address(0)) return ERC1271_FAIL;
-        return recovered == owner() ? ERC1271_MAGIC : ERC1271_FAIL;
+        try agentNft.ownerOf(tokenId) returns (address ownerNow) {
+            if (ownerNow == address(0)) return ERC1271_FAIL;
+            return recovered == ownerNow ? ERC1271_MAGIC : ERC1271_FAIL;
+        } catch {
+            return ERC1271_FAIL;
+        }
     }
 
     receive() external payable {}
