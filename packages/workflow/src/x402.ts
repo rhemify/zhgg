@@ -108,8 +108,25 @@ export interface VerifyOptions {
   fetchImpl?: FetchLike;
 }
 
+/// Reason a verify failed. Operationally distinct so callers can route
+/// alerts and retries:
+/// - `no-header`: client didn't supply PAYMENT-SIGNATURE; canonical 402.
+/// - `invalid`: facilitator validated and rejected the payload; 402, do
+///   not retry — the user signed something wrong.
+/// - `facilitator-down`: transport or 5xx from facilitator; 503 +
+///   Retry-After so the client backs off and retries — operator pages.
+/// - `malformed`: facilitator returned an unparseable body; 502, treat
+///   as upstream bug.
+export type VerifyFailReason = 'no-header' | 'invalid' | 'facilitator-down' | 'malformed';
+
 export type VerifyOutcome =
-  | { ok: false; response: Response }
+  | {
+      ok: false;
+      reason: VerifyFailReason;
+      response: Response;
+      /// Operator-facing detail for `facilitator-down` and `malformed`.
+      detail?: string;
+    }
   | {
       ok: true;
       payer: string | null;
@@ -118,6 +135,26 @@ export type VerifyOutcome =
       /// concurrent requests to prevent verify→settle replay.
       fingerprint: string;
     };
+
+/// Build a 503 Service Unavailable response for facilitator-down cases.
+/// `Retry-After: 5` tells well-behaved clients to back off briefly rather
+/// than hot-loop on the 402 challenge.
+function facilitatorDown503(detail: string): Response {
+  return new Response(JSON.stringify({ error: 'facilitator unavailable', detail }), {
+    status: 503,
+    headers: {
+      'Content-Type': 'application/json',
+      'Retry-After': '5',
+    },
+  });
+}
+
+function upstreamMalformed502(detail: string): Response {
+  return new Response(JSON.stringify({ error: 'facilitator returned malformed response', detail }), {
+    status: 502,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
 export async function verifyPayment(
   request: Request,
@@ -129,7 +166,7 @@ export async function verifyPayment(
 
   const paymentPayload = request.headers.get(PAYMENT_HEADER);
   if (!paymentPayload) {
-    return { ok: false, response: payment402(requirements) };
+    return { ok: false, reason: 'no-header', response: payment402(requirements) };
   }
 
   let verifyResp: Response;
@@ -139,23 +176,26 @@ export async function verifyPayment(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paymentPayload, paymentRequirements: requirements }),
     });
-  } catch {
-    return { ok: false, response: payment402(requirements) };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return { ok: false, reason: 'facilitator-down', response: facilitatorDown503(detail), detail };
   }
 
   if (!verifyResp.ok) {
-    return { ok: false, response: payment402(requirements) };
+    const detail = `facilitator returned HTTP ${verifyResp.status}`;
+    return { ok: false, reason: 'facilitator-down', response: facilitatorDown503(detail), detail };
   }
 
   let body: { isValid?: unknown; payer?: unknown };
   try {
     body = (await verifyResp.json()) as { isValid?: unknown; payer?: unknown };
-  } catch {
-    return { ok: false, response: payment402(requirements) };
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return { ok: false, reason: 'malformed', response: upstreamMalformed502(detail), detail };
   }
 
   if (body.isValid !== true) {
-    return { ok: false, response: payment402(requirements) };
+    return { ok: false, reason: 'invalid', response: payment402(requirements) };
   }
 
   return {

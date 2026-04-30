@@ -82,6 +82,7 @@ describe('verifyPayment', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.response.status).toBe(402);
+    expect(result.reason).toBeDefined();
     const body = (await result.response.json()) as { x402Version: number; accepts: unknown };
     expect(body.x402Version).toBe(2);
     expect(body.accepts).toBeDefined();
@@ -134,6 +135,82 @@ describe('verifyPayment', () => {
     });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
+    expect(result.response.status).toBe(402);
+    expect(result.reason).toBeDefined();
+  });
+});
+
+describe('verifyPayment failure shapes', () => {
+  const baseRequirements = () =>
+    buildPaymentRequirements({
+      amount: '100000',
+      payTo: FEE_SPLITTER,
+      asset: USDC_BASE_SEPOLIA,
+      network: 'eip155:84532',
+      resource: { url: 'https://api/x', description: 'd' },
+    });
+
+  it('no header → reason=no-header, 402', async () => {
+    const req = new Request('https://api/x');
+    const result = await verifyPayment(req, baseRequirements(), {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => jsonResponse({ isValid: false })),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.reason).toBe('no-header');
+    expect(result.response.status).toBe(402);
+  });
+
+  it('facilitator throws → reason=facilitator-down, 503 + Retry-After', async () => {
+    const req = new Request('https://api/x', { headers: { 'PAYMENT-SIGNATURE': 'p' } });
+    const result = await verifyPayment(req, baseRequirements(), {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => {
+        throw new Error('ECONNREFUSED');
+      }),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.reason).toBe('facilitator-down');
+    expect(result.response.status).toBe(503);
+    expect(result.response.headers.get('Retry-After')).toBe('5');
+    expect(result.detail).toContain('ECONNREFUSED');
+  });
+
+  it('facilitator HTTP 500 → reason=facilitator-down, 503', async () => {
+    const req = new Request('https://api/x', { headers: { 'PAYMENT-SIGNATURE': 'p' } });
+    const result = await verifyPayment(req, baseRequirements(), {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => new Response('upstream down', { status: 500 })),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.reason).toBe('facilitator-down');
+    expect(result.response.status).toBe(503);
+  });
+
+  it('facilitator returns non-JSON → reason=malformed, 502', async () => {
+    const req = new Request('https://api/x', { headers: { 'PAYMENT-SIGNATURE': 'p' } });
+    const result = await verifyPayment(req, baseRequirements(), {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => new Response('not-json', { status: 200 })),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.reason).toBe('malformed');
+    expect(result.response.status).toBe(502);
+  });
+
+  it('facilitator says isValid=false → reason=invalid, 402', async () => {
+    const req = new Request('https://api/x', { headers: { 'PAYMENT-SIGNATURE': 'p' } });
+    const result = await verifyPayment(req, baseRequirements(), {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => jsonResponse({ isValid: false })),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.reason).toBe('invalid');
     expect(result.response.status).toBe(402);
   });
 });
