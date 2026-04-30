@@ -150,6 +150,48 @@ describe('runCrossAgentDemo', () => {
     expect(transcript.auditReport?.verdict).toBe('compliant');
   });
 
+  it('settle succeeded + audit threw → emits audit.failed and flags refundable', async () => {
+    const inferThrows: AuditDeps = {
+      infer: (async () => {
+        throw new Error('inference adapter exploded');
+      }) as never,
+      postReceipt: (async () => ({
+        ok: true,
+        value: '0x' as `0x${string}`,
+      })) as never,
+      erc8004Client: { giveFeedback: mock() } as unknown as Erc8004Client,
+    };
+
+    const transcript = await runCrossAgentDemo(
+      {
+        settleOraclePayment: async () => ({
+          txHash: '0xpaid',
+          network: 'eip155:84532',
+          payer: '0xp',
+        }),
+        auditDeps: inferThrows,
+      },
+      {
+        target: TARGET,
+        oracleTopic: 'eu-ai-act',
+        auditOptions: {
+          apiKey: 'sk-fake',
+          registryAddress: '0x1111111111111111111111111111111111111111',
+          agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
+          clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
+        },
+      }
+    );
+
+    const stepNames = transcript.steps.map((s) => s.name);
+    expect(stepNames).toContain('audit.failed');
+    expect(transcript.auditReport).toBeNull();
+    expect(transcript.auditReceiptTx).toBeNull();
+    expect(transcript.oraclePaymentTx).toBe('0xpaid'); // user paid
+    expect(transcript.refundable).toBe(true);
+    expect(transcript.auditError).toContain('exploded');
+  });
+
   it('non_compliant verdict propagates through transcript', async () => {
     const transcript = await runCrossAgentDemo(
       {

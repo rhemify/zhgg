@@ -22,6 +22,7 @@ export type TranscriptStepName =
   | 'oracle.query.complete'
   | 'audit.start'
   | 'audit.complete'
+  | 'audit.failed'
   | 'audit.receipt.post';
 
 export interface TranscriptStep {
@@ -39,6 +40,13 @@ export interface CrossAgentTranscript {
   auditReport: AuditReport | null;
   auditReceiptTx: string | null;
   totalCostUSD: number;
+  /// True when the oracle payment settled but the audit threw or the audit
+  /// report itself was unrecoverable. The user paid for work that didn't
+  /// complete — surface this loudly so the demo / TUI / refund tooling can
+  /// react. (No automated refund: x402 settlements are final on-chain.)
+  refundable: boolean;
+  /// Captured audit-stage error message when `refundable === true`.
+  auditError: string | null;
 }
 
 export interface CrossAgentDemoDeps {
@@ -132,27 +140,42 @@ export async function runCrossAgentDemo(
     manifest = `${opts.target.manifest}\n\nRegulatory context: ${ctx}`;
   }
 
-  // 5. Run the audit
+  // 5. Run the audit. If this throws after settle succeeded, the user paid
+  // for work that didn't complete — capture the error in the transcript
+  // and flag `refundable` so callers can react. We do NOT swallow the
+  // error: the transcript itself is the surface, and exit-code checks at
+  // the CLI layer can tell success from this state.
   emit('audit.start', { agentId: opts.target.agentId.toString() });
-  const auditReport = await runAudit(
-    { ...opts.target, manifest },
-    deps.auditDeps,
-    opts.auditOptions
-  );
-  emit('audit.complete', {
-    verdict: auditReport.verdict,
-    findingsCount: auditReport.findings.length,
-  });
-  emit('audit.receipt.post', { txHash: auditReport.receiptTxHash });
+  let auditReport: AuditReport | null = null;
+  let auditError: string | null = null;
+  try {
+    auditReport = await runAudit(
+      { ...opts.target, manifest },
+      deps.auditDeps,
+      opts.auditOptions
+    );
+    emit('audit.complete', {
+      verdict: auditReport.verdict,
+      findingsCount: auditReport.findings.length,
+    });
+    emit('audit.receipt.post', { txHash: auditReport.receiptTxHash });
+  } catch (e) {
+    auditError = e instanceof Error ? e.message : String(e);
+    emit('audit.failed', { reason: auditError, paid: settle !== null });
+  }
 
-  const totalCostUSD = 0.1 + auditReport.results.length * 0.0006; // oracle + 3 inferences
+  const probeCount = auditReport?.results.length ?? 0;
+  const totalCostUSD = 0.1 + probeCount * 0.0006;
+  const refundable = settle !== null && (auditReport === null || auditReport.verdict === 'unclear');
 
   return {
     steps,
     oraclePaymentTx: settle?.txHash ?? null,
     oracleResponse,
     auditReport,
-    auditReceiptTx: auditReport.receiptTxHash,
+    auditReceiptTx: auditReport?.receiptTxHash ?? null,
     totalCostUSD,
+    refundable,
+    auditError,
   };
 }
