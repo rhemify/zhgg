@@ -156,6 +156,18 @@
         "typescript": "catalog:",
       },
     },
+    "packages/workflow": {
+      "name": "@zhgg/workflow",
+      "version": "0.0.1",
+      "dependencies": {
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@my-better-t-app/config": "workspace:*",
+        "@types/bun": "latest",
+        "typescript": "catalog:",
+      },
+    },
   },
   "catalog": {
     "@types/react-dom": "^19.2.3",
@@ -662,6 +674,8 @@
     "@zhgg/sdk": ["@zhgg/sdk@workspace:packages/sdk"],
 
     "@zhgg/tools": ["@zhgg/tools@workspace:packages/tools"],
+
+    "@zhgg/workflow": ["@zhgg/workflow@workspace:packages/workflow"],
 
     "abitype": ["abitype@1.2.3", "", { "peerDependencies": { "typescript": ">=5.0.4", "zod": "^3.22.0 || ^4.0.0" }, "optionalPeers": ["typescript", "zod"] }, "sha512-Ofer5QUnuUdTFsBRwARMoWKOH1ND5ehwYhJ3OJ/BQO+StkwQjHw0XyVh4vDttzHB7QOFhPHa/o413PJ82gU/Tg=="],
 
