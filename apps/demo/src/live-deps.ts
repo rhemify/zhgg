@@ -18,7 +18,16 @@ import {
   type Hex,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { inferZG, postReceipt, type Erc8004Client, type GiveFeedbackArgs } from '@zhgg/workflow';
+import {
+  inferZG,
+  postReceipt,
+  writeAuditLog,
+  type AuditLogPayload,
+  type Erc8004Client,
+  type GiveFeedbackArgs,
+  type Storage0GClient,
+} from '@zhgg/workflow';
+import { createZGStorageClient } from '@zhgg/workflow/storage-log-zg';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type { CrossAgentDemoDeps } from './cross-agent.js';
 import { payViaKeeperHubMarketplace, type KeeperHubMarketplaceConfig } from './keeperhub-marketplace.js';
@@ -80,6 +89,14 @@ export interface LiveDepsConfig {
   /// Optional — when set, enables Step 3 (AXIOM commit) + Step 10
   /// (AXIOM reveal). Address of `AxiomCommit.sol` on 0G Galileo.
   axiomCommit?: Address;
+  /// Optional — when true, audit logs are persisted to 0G Storage Log
+  /// via the SDK adapter. Required for Step 8, which produces the
+  /// `rootHash` consumed by Step 9 (memoryRoot pin). When false, both
+  /// Step 8 and Step 9 silently no-op.
+  zgStorageEnabled?: boolean;
+  /// Optional — override for the 0G Storage indexer RPC. Defaults to
+  /// the Galileo Turbo indexer in the SDK adapter.
+  zgIndexerRpc?: string;
 }
 
 const ORACLE_PAYMENT_ATOMIC = 100_000n; // 0.1 USDC at 6 decimals
@@ -271,6 +288,44 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     return r.ok ? { ok: true, txHash: r.value.txHash } : { ok: false, error: r.error.kind };
   };
 
+  // Step 8 — write canonical audit JSON to 0G Storage Log. Constructed
+  // here (lazy: the SDK + ethers v6 only resolve when this dep fires)
+  // so mocked-mode runs never touch the storage adapter at all. When
+  // `zgStorageEnabled` is false, the dep is undefined and the
+  // orchestrator skips Step 8 (and Step 9, which depends on its rootHash).
+  let writeStorageLogDep: CrossAgentDemoDeps['writeStorageLog'] | undefined;
+  if (cfg.zgStorageEnabled) {
+    const zgStorageClient: Storage0GClient = createZGStorageClient({
+      privateKey: cfg.zgPrivateKey,
+      rpcUrl: cfg.zgRpc,
+      indexerUrl: cfg.zgIndexerRpc,
+    });
+    writeStorageLogDep = async (report) => {
+      const payload: AuditLogPayload = {
+        version: '1',
+        auditedAt: new Date().toISOString(),
+        agentId: report.target.agentId,
+        probe: {
+          verdict: report.verdict,
+          findings: report.findings,
+          resultCount: report.results.length,
+        },
+        attestationRoot: report.attestationRoot,
+        // The cross-agent transcript carries the on-chain payment + receipt
+        // tx hashes; the AuditReport itself only knows the receipt. Payment
+        // tx is logged separately on the transcript and not pinned to the
+        // audit log payload (Step 8 is about the audit's evidence chain,
+        // not the payment ledger).
+        paymentTxHash: null,
+        receiptTxHash: report.receiptTxHash as `0x${string}` | null,
+      };
+      const r = await writeAuditLog(zgStorageClient, payload);
+      return r.ok
+        ? { ok: true, rootHash: r.value.rootHash }
+        : { ok: false, error: r.error.kind };
+    };
+  }
+
   return {
     deps: {
       settleOraclePayment,
@@ -280,6 +335,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       axiomCommit: axiomCommitDep,
       axiomReveal: axiomRevealDep,
       pinMemoryRoot: pinMemoryRootDep,
+      writeStorageLog: writeStorageLogDep,
     },
     auditOptions: {
       apiKey: cfg.zgRouterKey,
@@ -342,5 +398,7 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
     axiomCommit: process.env.AXIOM_COMMIT_ADDRESS
       ? (needHex('AXIOM_COMMIT_ADDRESS', 40) as unknown as Address)
       : undefined,
+    zgStorageEnabled: process.env.ZG_STORAGE_ENABLED === '1',
+    zgIndexerRpc: process.env.ZG_INDEXER_RPC,
   };
 }
