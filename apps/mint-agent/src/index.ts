@@ -35,6 +35,7 @@ import {
   PUBLIC_RESOLVER_SEPOLIA,
   setAgentTextRecords,
 } from './ens-records.js';
+import { deployReceiverWallet } from './receiver-wallet.js';
 
 const ANSI_GREEN = '\x1b[32m';
 const ANSI_RED = '\x1b[31m';
@@ -326,7 +327,30 @@ async function main(): Promise<void> {
     );
   }
 
-  // All 5 steps succeeded — flush buffered output now.
+  // Step 6 (optional) — deploy the per-iNFT receiver wallet so KH can
+  // route the 70% leg of marketplace settlement through a public-trigger
+  // smart wallet. Gated on RECEIVER_FACTORY_ADDRESS so partial-deploy
+  // environments (no factory yet) skip cleanly.
+  const receiverFactory = process.env.RECEIVER_FACTORY_ADDRESS as Address | undefined;
+  if (receiverFactory) {
+    try {
+      const deployed = await deployReceiverWallet(zgExecutor, {
+        factory: receiverFactory,
+        tokenId: minted.value.tokenId,
+      });
+      completed.push({
+        label: `${ANSI_GREEN}✓${ANSI_RESET} receiver wallet at ${deployed.wallet}`,
+        txHash: deployed.txHash,
+      });
+    } catch (e) {
+      failPartial(
+        'deploy receiver wallet',
+        e instanceof Error ? e.message : String(e)
+      );
+    }
+  }
+
+  // All steps succeeded — flush buffered output now.
   for (const rec of completed) {
     console.log(`${rec.label} ${ANSI_DIM}(tx ${fmtHash(rec.txHash)})${ANSI_RESET}`);
   }

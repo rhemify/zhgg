@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AgentNFT} from "../src/AgentNFT.sol";
+import {FeeSplitter} from "../src/FeeSplitter.sol";
+import {AgentReceiverWallet} from "../src/AgentReceiverWallet.sol";
+import {AgentReceiverWalletFactory} from "../src/AgentReceiverWalletFactory.sol";
+import {IERC7857} from "../src/interfaces/IERC7857.sol";
+
+contract MockUSDC is ERC20 {
+    constructor() ERC20("Mock USDC", "USDC") {}
+    function mint(address to, uint256 amt) external { _mint(to, amt); }
+    function decimals() public pure override returns (uint8) { return 6; }
+}
+
+contract AgentReceiverWalletTest is Test {
+    AgentNFT                   nft;
+    FeeSplitter                splitter;
+    AgentReceiverWalletFactory factory;
+    MockUSDC                   usdc;
+
+    address constant KH      = address(0xBEEF);
+    address constant ZHGG    = address(0xCAFE);
+    address constant COMMONS = address(0xDADA);
+    address          agentOwner = makeAddr("agentOwner");
+    address          stranger   = makeAddr("stranger");
+
+    uint256 tokenId;
+
+    function setUp() public {
+        nft      = new AgentNFT();
+        splitter = new FeeSplitter(KH, ZHGG, COMMONS);
+        factory  = new AgentReceiverWalletFactory(address(nft), address(splitter));
+        usdc     = new MockUSDC();
+
+        tokenId = nft.mint(agentOwner, hex"");
+    }
+
+    // ----- CREATE2 determinism --------------------------------------
+
+    function test_predictMatchesDeployedAddress() public {
+        address predicted = factory.predict(tokenId);
+        address deployed  = factory.deploy(tokenId);
+        assertEq(predicted, deployed, "create2 mismatch");
+    }
+
+    function test_redeployReverts() public {
+        factory.deploy(tokenId);
+        vm.expectRevert();
+        factory.deploy(tokenId);
+    }
+
+    function test_differentTokenIdsDifferentAddresses() public {
+        uint256 t2 = nft.mint(agentOwner, hex"");
+        assertTrue(factory.predict(tokenId) != factory.predict(t2));
+    }
+
+    // ----- splitMyBalance -------------------------------------------
+
+    function test_anyoneCanSplit() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        usdc.mint(address(w), 100_000_000);
+
+        vm.prank(stranger);
+        w.splitMyBalance(IERC20(address(usdc)));
+
+        assertEq(usdc.balanceOf(agentOwner), 85_000_000);
+        assertEq(usdc.balanceOf(KH),          5_000_000);
+        assertEq(usdc.balanceOf(ZHGG),        5_000_000);
+        assertEq(usdc.balanceOf(COMMONS),     5_000_000);
+        assertEq(usdc.balanceOf(address(w)),  0);
+    }
+
+    function test_splitWithZeroBalanceReverts() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NothingToSplit.selector, address(usdc))
+        );
+        w.splitMyBalance(IERC20(address(usdc)));
+    }
+
+    function test_splitFollowsINFTOwnerOnTransfer() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        address newOwner = makeAddr("newOwner");
+
+        // ERC-7857 self-transfer: from must equal msg.sender, proofs must
+        // be non-empty (any commitment/signature passes in v1).
+        IERC7857.TransferValidityProof[] memory proofs = new IERC7857.TransferValidityProof[](1);
+        proofs[0] = IERC7857.TransferValidityProof({
+            commitment: bytes32(uint256(1)),
+            signature: hex"01"
+        });
+        vm.prank(agentOwner);
+        nft.iTransferFrom(agentOwner, newOwner, tokenId, proofs);
+
+        usdc.mint(address(w), 100_000_000);
+        vm.prank(stranger);
+        w.splitMyBalance(IERC20(address(usdc)));
+
+        assertEq(usdc.balanceOf(newOwner),    85_000_000);
+        assertEq(usdc.balanceOf(agentOwner),  0);
+    }
+
+    // ----- withdraw escape hatch ------------------------------------
+
+    function test_withdrawByOwnerSucceeds() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        usdc.mint(address(w), 50_000_000);
+
+        vm.prank(agentOwner);
+        w.withdraw(IERC20(address(usdc)), agentOwner);
+        assertEq(usdc.balanceOf(agentOwner), 50_000_000);
+    }
+
+    function test_withdrawByNonOwnerReverts() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        usdc.mint(address(w), 50_000_000);
+
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NotOwner.selector, stranger, agentOwner)
+        );
+        w.withdraw(IERC20(address(usdc)), stranger);
+    }
+
+    // ----- ERC-1271 ---------------------------------------------------
+
+    function test_erc1271_validOwnerSignature() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+
+        // Re-mint to a known signer so we can vm.sign with their pk.
+        uint256 pk = 0xA11CE;
+        address signer = vm.addr(pk);
+        IERC7857.TransferValidityProof[] memory proofs = new IERC7857.TransferValidityProof[](1);
+        proofs[0] = IERC7857.TransferValidityProof({
+            commitment: bytes32(uint256(1)),
+            signature: hex"01"
+        });
+        vm.prank(agentOwner);
+        nft.iTransferFrom(agentOwner, signer, tokenId, proofs);
+
+        bytes32 hash = keccak256("kh-provision-challenge");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        assertEq(w.isValidSignature(hash, sig), bytes4(0x1626ba7e));
+    }
+
+    function test_erc1271_wrongSignerFails() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        uint256 pk = 0xBADBAD;
+        bytes32 hash = keccak256("kh-provision-challenge");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+        assertEq(w.isValidSignature(hash, sig), bytes4(0xffffffff));
+    }
+}
