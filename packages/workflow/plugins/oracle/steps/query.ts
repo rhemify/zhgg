@@ -1,7 +1,7 @@
 import 'server-only';
 import { withPluginMetrics } from '@/lib/metrics/instrumentation/plugin';
 import { type StepInput, withStepLogging } from '@/lib/workflow/executor/step-handler';
-import { queryOracle, type OracleResponse, type OracleTopic } from '@zhgg/oracle-agent';
+import { queryOracle, type OracleResponse, type OracleTopic } from '@zhgg/oracle-data';
 
 export type QueryOracleStepInput = StepInput & {
   topic: OracleTopic;

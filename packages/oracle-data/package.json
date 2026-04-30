@@ -1,5 +1,5 @@
 {
-  "name": "@zhgg/oracle-agent",
+  "name": "@zhgg/oracle-data",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -10,13 +10,10 @@
     "check-types": "tsc --noEmit",
     "test": "bun test"
   },
-  "dependencies": {
-    "@zhgg/oracle-data": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "@my-better-t-app/config": "workspace:*",
+    "@types/bun": "latest",
+    "typescript": "catalog:"
   }
 }

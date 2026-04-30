@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "@zhgg/oracle-agent": "workspace:*",
+    "@zhgg/oracle-data": "workspace:*",
     "server-only": "^0.0.1",
     "viem": "^2.21.0",
     "zod": "catalog:"
