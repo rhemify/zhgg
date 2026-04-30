@@ -62,8 +62,12 @@ describe('keeperhub MCP smoke', () => {
       // Log the token's effective scope so the FEEDBACK.md draft can
       // record what tier we tested against. KeeperHub returns the
       // available tool count which proxies for scope (admin sees more).
-      // eslint-disable-next-line no-console
-      console.log(`[keeperhub-smoke] token sees ${tools.length} tool(s)`);
+      // Only log locally — admin-tier tokens may surface tenant-prefixed
+      // tool names that shouldn't end up in CI logs.
+      if (!process.env.CI) {
+        // eslint-disable-next-line no-console
+        console.log(`[keeperhub-smoke] token sees ${tools.length} tool(s)`);
+      }
     },
     20_000
   );
@@ -79,8 +83,10 @@ describe('keeperhub MCP smoke', () => {
         .filter((n): n is string => typeof n === 'string');
       // Prefer a list-style read tool if present; fall back to the first
       // available. KeeperHub's MCP exposes 18 tools per /docs/keeperhub.md;
-      // names follow `category.action` convention.
-      const readTool = tools.find((n) => n.includes('.list')) ?? tools[0];
+      // names follow `category.action` convention so we anchor on the
+      // suffix to avoid false matches against names like `subscribe-list`
+      // or `internal.allowlist`.
+      const readTool = tools.find((n) => n.endsWith('.list')) ?? tools[0];
       if (!readTool) {
         // Token has zero tools — nothing to call. Test is vacuously fine
         // for hackathon-tier read-only tokens; we already asserted >0
@@ -99,11 +105,13 @@ describe('keeperhub MCP smoke', () => {
       // args — we accept either a non-error result or a structured
       // error payload, but NOT an HTTP-level failure.
       if (typed.error) {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[keeperhub-smoke] tools/call ${readTool} returned structured error ` +
-            `code=${typed.error.code} (acceptable for empty-args read tool)`
-        );
+        if (!process.env.CI) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[keeperhub-smoke] tools/call ${readTool} returned structured error ` +
+              `code=${typed.error.code} (acceptable for empty-args read tool)`
+          );
+        }
         expect(typeof typed.error.code).toBe('number');
       } else {
         expect(typed.result).toBeDefined();
