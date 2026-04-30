@@ -125,12 +125,16 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       args: [baseAccount.address, cfg.feeSplitter],
     });
     if (allowance < ORACLE_PAYMENT_ATOMIC) {
+      // JIT approval: grant exactly the amount needed for THIS settlement.
+      // Trades one extra approve tx per call (~2s on Base Sepolia) for
+      // zero standing approval — if FeeSplitter is ever compromised, the
+      // attacker can drain at most one in-flight payment, not 10×.
       const sim = await basePub.simulateContract({
         account: baseAccount,
         address: cfg.usdc,
         abi: ERC20_ABI,
         functionName: 'approve',
-        args: [cfg.feeSplitter, ORACLE_PAYMENT_ATOMIC * 100n], // approve 100x for headroom
+        args: [cfg.feeSplitter, ORACLE_PAYMENT_ATOMIC],
       });
       const approveTx = await baseWallet.writeContract(sim.request);
       await basePub.waitForTransactionReceipt({ hash: approveTx });

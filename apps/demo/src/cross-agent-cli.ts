@@ -21,7 +21,6 @@ const ANSI_YELLOW = '\x1b[33m';
 const ANSI_RED = '\x1b[31m';
 const ANSI_DIM = '\x1b[2m';
 const ANSI_RESET = '\x1b[0m';
-void ANSI_GREEN;
 
 function fmtTime(ms: number): string {
   return `[T+${(ms / 1000).toFixed(1)}s]`;
