@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from 'bun:test';
-import { keccak256, toHex } from 'viem';
+import { keccak256, toHex, type Account, type Chain, type PublicClient, type Transport, type WalletClient } from 'viem';
 import {
   readAgentCapabilities,
   commitPlan,
@@ -12,18 +12,38 @@ import type { Address, Hex } from 'viem';
 const ADDR = '0x0000000000000000000000000000000000abcdef' as Address;
 const SIGNER = '0x000000000000000000000000000000000000beef' as Address;
 
-function mockPublic(read: unknown) {
-  return {
+// loop-helpers takes strict viem PublicClient/WalletClient types in
+// production. Tests cast minimal stubs through `unknown` so we don't
+// have to construct full viem clients — the helpers only invoke a
+// narrow slice (`readContract`, `simulateContract`,
+// `waitForTransactionReceipt`, `writeContract`) and the strict types
+// are satisfied at the runtime contract level.
+type LoopPublicClient = PublicClient<Transport, Chain | undefined>;
+type LoopWalletClient = WalletClient<Transport, Chain | undefined, Account>;
+type MockPublicStub = {
+  readContract: ReturnType<typeof mock>;
+  simulateContract: ReturnType<typeof mock>;
+  waitForTransactionReceipt: ReturnType<typeof mock>;
+};
+type MockWalletStub = {
+  account: { address: Address };
+  writeContract: ReturnType<typeof mock>;
+};
+
+function mockPublic(read: unknown): MockPublicStub & LoopPublicClient {
+  const stub: MockPublicStub = {
     readContract: mock(async () => read),
     simulateContract: mock(async () => ({ request: { foo: 'bar' } })),
     waitForTransactionReceipt: mock(async () => ({ blockNumber: 42n })),
   };
+  return stub as unknown as MockPublicStub & LoopPublicClient;
 }
-function mockWallet() {
-  return {
+function mockWallet(): MockWalletStub & LoopWalletClient {
+  const stub: MockWalletStub = {
     account: { address: SIGNER },
     writeContract: mock(async () => ('0x' + 'aa'.repeat(32)) as Hex),
   };
+  return stub as unknown as MockWalletStub & LoopWalletClient;
 }
 
 describe('readAgentCapabilities', () => {
@@ -52,7 +72,7 @@ describe('readAgentCapabilities', () => {
       readContract: mock(async () => {
         throw new Error('rpc died');
       }),
-    };
+    } as unknown as LoopPublicClient;
     const r = await readAgentCapabilities({
       agentNftAddress: ADDR,
       tokenId: 1n,
@@ -103,7 +123,7 @@ describe('commitPlan', () => {
       writeContract: mock(async () => {
         throw new Error('reverted');
       }),
-    };
+    } as unknown as LoopWalletClient;
     const r = await commitPlan({
       axiomAddress: ADDR,
       tokenId: 1n,

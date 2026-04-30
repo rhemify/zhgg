@@ -12,9 +12,31 @@
 /// demos run untouched. Errors are returned as `Result<T, E>` to mirror
 /// the pattern in `packages/workflow/src/storage-log.ts`.
 
-import { encodePacked, getAddress, keccak256, parseAbi, toHex, type Address, type Hex } from 'viem';
+import {
+  encodePacked,
+  getAddress,
+  keccak256,
+  parseAbi,
+  toHex,
+  type Account,
+  type Address,
+  type Chain,
+  type Hex,
+  type PublicClient,
+  type Transport,
+  type WalletClient,
+} from 'viem';
 
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
+
+/// viem client aliases — write-side helpers in this module need a
+/// wallet client with a resolved account (so `simulateContract` can
+/// pass `account` through and the orchestrator can derive `commitId`
+/// from `walletClient.account.address`). Read-side helpers only need
+/// the public client; we keep the chain generic open so the same
+/// helper works against Galileo, Base Sepolia, or any other EVM chain.
+type LoopPublicClient = PublicClient<Transport, Chain | undefined>;
+type LoopWalletClient = WalletClient<Transport, Chain | undefined, Account>;
 
 const AGENT_NFT_LOOP_ABI = parseAbi([
   'function capabilities(uint256 tokenId) view returns (bytes)',
@@ -37,8 +59,7 @@ export type CapabilitiesError =
 export interface ReadCapabilitiesArgs {
   agentNftAddress: Address | null;
   tokenId: bigint;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  publicClient: any;
+  publicClient: LoopPublicClient;
 }
 
 export async function readAgentCapabilities(
@@ -74,10 +95,8 @@ export interface AxiomCommitArgs {
   /// agent has decided to execute. Hashed locally; the chain only sees
   /// the hash until reveal.
   plan: Uint8Array | Hex;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  publicClient: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  walletClient: any;
+  publicClient: LoopPublicClient;
+  walletClient: LoopWalletClient;
 }
 
 export interface AxiomCommitResult {
@@ -128,10 +147,8 @@ export interface AxiomRevealArgs {
   commitId: Hex;
   plan: Uint8Array | Hex;
   result: Uint8Array | Hex;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  publicClient: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  walletClient: any;
+  publicClient: LoopPublicClient;
+  walletClient: LoopWalletClient;
 }
 
 export async function revealPlan(
@@ -168,10 +185,8 @@ export interface PinMemoryRootArgs {
   agentNftAddress: Address | null;
   tokenId: bigint;
   rootHash: Hex;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  publicClient: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  walletClient: any;
+  publicClient: LoopPublicClient;
+  walletClient: LoopWalletClient;
 }
 
 export async function pinMemoryRoot(

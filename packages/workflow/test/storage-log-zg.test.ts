@@ -123,4 +123,55 @@ describe('createZGStorageClient', () => {
     const client = createZGStorageClient({ privateKey: FAKE_KEY, __sdkOverride: sdk });
     await expect(client.upload(new Uint8Array([1]))).rejects.toThrow(/rootHash not 0x-hex/);
   });
+
+  it('rejects when SDK returns a non-array (drift defense)', async () => {
+    // Simulate an SDK upgrade that wraps the result in an object.
+    const driftedSdk: SdkOverride = {
+      Indexer: class {
+        constructor(public url: string) {}
+        upload = mock(async () => ({ wrapped: { hash: FAKE_TX } }));
+      } as unknown as SdkOverride['Indexer'],
+      ZgFile: {
+        fromFilePath: mock(async () => ({
+          close: mock(async () => {}),
+          merkleTree: async () => [{ rootHash: () => FAKE_ROOT }, null],
+        })),
+      } as unknown as SdkOverride['ZgFile'],
+      Wallet: class {
+        constructor(public k: string, public p: unknown) {}
+      } as unknown as SdkOverride['Wallet'],
+      JsonRpcProvider: class {
+        constructor(public u: string) {}
+      } as unknown as SdkOverride['JsonRpcProvider'],
+    };
+    const client = createZGStorageClient({ privateKey: FAKE_KEY, __sdkOverride: driftedSdk });
+    await expect(client.upload(new Uint8Array([1]))).rejects.toThrow(
+      /upload expected Go tuple/
+    );
+  });
+
+  it('rejects when SDK returns a 3-tuple (drift defense)', async () => {
+    const driftedSdk: SdkOverride = {
+      Indexer: class {
+        constructor(public url: string) {}
+        upload = mock(async () => [{ hash: FAKE_TX }, null, 'extra']);
+      } as unknown as SdkOverride['Indexer'],
+      ZgFile: {
+        fromFilePath: mock(async () => ({
+          close: mock(async () => {}),
+          merkleTree: async () => [{ rootHash: () => FAKE_ROOT }, null],
+        })),
+      } as unknown as SdkOverride['ZgFile'],
+      Wallet: class {
+        constructor(public k: string, public p: unknown) {}
+      } as unknown as SdkOverride['Wallet'],
+      JsonRpcProvider: class {
+        constructor(public u: string) {}
+      } as unknown as SdkOverride['JsonRpcProvider'],
+    };
+    const client = createZGStorageClient({ privateKey: FAKE_KEY, __sdkOverride: driftedSdk });
+    await expect(client.upload(new Uint8Array([1]))).rejects.toThrow(
+      /upload expected 2-tuple, got length 3/
+    );
+  });
 });

@@ -19,14 +19,16 @@ export const SCHEMA_ID = { CANONICAL: 0, CUSTOM_REGISTRY: 1, CBOR: 2 } as const;
 /// Encode a Schema 0 (canonical registry) suffix.
 ///
 ///   [ codesAscii N B ][ codesLength 1B ][ schemaId=0 1B ][ MAGIC 16B ]
+// Printable ASCII excluding the comma delimiter (0x2c). Single regex —
+// the delimiter check is encoded in the character class so we don't
+// need a follow-up `includes(',')` pass.
+const VALID_CODE = /^[\x20-\x2b\x2d-\x7e]+$/;
+
 export function encodeSchema0Suffix(codes: readonly string[]): Hex {
   if (codes.length === 0) throw new Error('erc8021: codes must be non-empty');
   for (const c of codes) {
-    if (!/^[\x20-\x7e]+$/.test(c)) {
-      throw new Error(`erc8021: code "${c}" must be printable ASCII`);
-    }
-    if (c.includes(',')) {
-      throw new Error(`erc8021: code "${c}" contains comma delimiter`);
+    if (!VALID_CODE.test(c)) {
+      throw new Error(`erc8021: code "${c}" must be printable ASCII without commas`);
     }
   }
 

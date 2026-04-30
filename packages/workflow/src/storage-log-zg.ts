@@ -86,25 +86,45 @@ export function createZGStorageClient(opts: ZGStorageClientOptions): Storage0GCl
         };
 
         // SDK returns Go-style `[value, err]` tuples; never throws on
-        // indexer-side failures. Forward both legs as Error throws.
+        // indexer-side failures. We runtime-guard the shape rather than
+        // structurally cast — if the SDK ever ships a 3-tuple, wraps the
+        // result, or returns null directly, the destructure would
+        // silently produce `undefined` and we'd surface a confusing
+        // "txHash not 0x-hex: undefined" instead of the real protocol
+        // drift.
         const merkle = (zgFile as unknown as {
-          merkleTree: () => Promise<[{ rootHash: () => string } | null, Error | null]>;
+          merkleTree: () => Promise<unknown>;
         }).merkleTree();
-        const [tree, treeErr] = await merkle;
-        if (treeErr !== null || tree === null) {
+        const merkleTuple = assertGoTuple(await merkle, 'merkleTree');
+        const [tree, treeErr] = merkleTuple;
+        if (treeErr !== null && treeErr !== undefined) {
           throw new Error(`merkleTree failed: ${errMsg(treeErr)}`);
         }
-        const rootHash = ensureHex(tree.rootHash(), 'rootHash');
+        if (tree === null || tree === undefined) {
+          throw new Error('merkleTree failed: SDK returned [null, null]');
+        }
+        const rootFn = (tree as { rootHash?: () => string }).rootHash;
+        if (typeof rootFn !== 'function') {
+          throw new Error('merkleTree result missing rootHash() method');
+        }
+        const rootHash = ensureHex(rootFn.call(tree), 'rootHash');
 
-        const uploadResult = (await indexer.upload(zgFile, rpcUrl, signer)) as [
-          { hash: string } | null,
-          Error | null,
-        ];
-        const [tx, uploadErr] = uploadResult;
-        if (uploadErr !== null || tx === null) {
+        const uploadTuple = assertGoTuple(
+          await indexer.upload(zgFile, rpcUrl, signer),
+          'upload'
+        );
+        const [tx, uploadErr] = uploadTuple;
+        if (uploadErr !== null && uploadErr !== undefined) {
           throw new Error(`upload failed: ${errMsg(uploadErr)}`);
         }
-        const txHash = ensureHex(tx.hash, 'txHash');
+        if (tx === null || tx === undefined) {
+          throw new Error('upload failed: SDK returned [null, null]');
+        }
+        const hash = (tx as { hash?: unknown }).hash;
+        if (typeof hash !== 'string') {
+          throw new Error('upload result missing string hash field');
+        }
+        const txHash = ensureHex(hash, 'txHash');
 
         return { rootHash, txHash };
       } finally {
@@ -143,6 +163,21 @@ async function loadSdk(): Promise<SdkOverride> {
 
 function normalizeKey(k: string): string {
   return k.startsWith('0x') ? k : `0x${k}`;
+}
+
+/// Runtime guard for the SDK's Go-style `[value, err]` tuples. The
+/// structural cast that lived here before silently turned a 3-tuple
+/// or wrapped result into `[undefined, undefined]`, which surfaced as
+/// a misleading "X not 0x-hex" later. This guard fails loudly with
+/// the actual shape so any SDK API drift is unmistakable.
+function assertGoTuple(v: unknown, label: string): readonly [unknown, unknown] {
+  if (!Array.isArray(v)) {
+    throw new Error(`${label} expected Go tuple [value, err], got ${typeof v}`);
+  }
+  if (v.length !== 2) {
+    throw new Error(`${label} expected 2-tuple, got length ${v.length}`);
+  }
+  return v as unknown as readonly [unknown, unknown];
 }
 
 function ensureHex(v: string, label: string): Hex {
