@@ -26,6 +26,12 @@ interface INameWrapper {
 
     /// @notice Approval check — registrar must be approved for the parent name.
     function isApprovedForAll(address account, address operator) external view returns (bool);
+
+    /// @notice Owner of a wrapped name. NameWrapper is ERC-1155, the id is
+    ///         `uint256(node)` where node is the namehash. Used by the
+    ///         registrar to look up the *actual* parent-name owner rather
+    ///         than guessing from the registrar's own `Ownable.owner()`.
+    function ownerOf(uint256 id) external view returns (address);
 }
 
 /// @title  ENSRegistrar — chainId-agnostic subname minter for zhgg.eth
@@ -115,10 +121,16 @@ contract ENSRegistrar is Ownable {
         bytes32 labelhash = keccak256(bytes(label));
         if (labelClaimedBy[labelhash] != address(0)) revert LabelAlreadyClaimed();
 
-        // Verify the parent name owner has approved us. This catches the
-        // common mis-configuration where the registrar is deployed but the
-        // parent name owner forgot to call setApprovalForAll.
-        if (!nameWrapper.isApprovedForAll(_parentOwnerProbe(), address(this))) {
+        // Look up the ACTUAL parent name owner from NameWrapper (the
+        // ERC-1155 owner of the wrapped node). Previous version probed
+        // `Ownable.owner()` of the registrar — silently wrong if registrar
+        // ownership ever diverged from the parent-name owner (e.g. owner
+        // rotated to a new multisig but parent name still held by old key,
+        // or registrar deployed under a hot key and transferred). The
+        // approval check now verifies the right account regardless of
+        // registrar ownership.
+        address parentOwner = nameWrapper.ownerOf(uint256(parentNode));
+        if (!nameWrapper.isApprovedForAll(parentOwner, address(this))) {
             revert NotApprovedForAll();
         }
 
@@ -128,13 +140,6 @@ contract ENSRegistrar is Ownable {
 
         labelClaimedBy[labelhash] = owner;
         emit SubnameMinted(label, labelhash, owner, node);
-    }
-
-    /// @dev The parent owner is queried indirectly via the owner of the
-    ///      registrar — for our deployment pattern, the same multisig owns
-    ///      both. If you split ownership, override this off-chain.
-    function _parentOwnerProbe() internal view returns (address) {
-        return owner();
     }
 
     // ---------------------------------------------------------------------

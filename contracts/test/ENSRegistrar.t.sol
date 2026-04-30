@@ -9,6 +9,9 @@ import {ENSRegistrar, INameWrapper} from "../src/ENSRegistrar.sol";
 contract MockNameWrapper is INameWrapper {
     mapping(address => mapping(address => bool)) public approvals;
     mapping(bytes32 => address) public subnodeOwners;
+    /// Per-node owner — what NameWrapper.ownerOf returns. The registrar
+    /// must read this and check approvals against the right account.
+    mapping(uint256 => address) public nodeOwners;
 
     function setApprovalForAll(address operator, bool approved) external {
         approvals[msg.sender][operator] = approved;
@@ -29,6 +32,14 @@ contract MockNameWrapper is INameWrapper {
         node = keccak256(abi.encodePacked(parentNode, labelhash));
         subnodeOwners[node] = owner;
     }
+
+    function ownerOf(uint256 id) external view returns (address) {
+        return nodeOwners[id];
+    }
+
+    function setOwner(uint256 id, address owner) external {
+        nodeOwners[id] = owner;
+    }
 }
 
 contract ENSRegistrarTest is Test {
@@ -45,7 +56,9 @@ contract ENSRegistrarTest is Test {
     function setUp() public {
         wrapper = new MockNameWrapper();
         reg = new ENSRegistrar(wrapper, ZHGG_PARENT);
-        // Approve the registrar from the deployer (== owner).
+        // The parent name's NameWrapper owner is the deployer (test contract).
+        wrapper.setOwner(uint256(ZHGG_PARENT), deployer);
+        // Approve the registrar from the parent-name owner (deployer).
         wrapper.setApprovalForAll(address(reg), true);
     }
 
@@ -73,6 +86,35 @@ contract ENSRegistrarTest is Test {
         wrapper.setApprovalForAll(address(reg), false);
         vm.expectRevert(ENSRegistrar.NotApprovedForAll.selector);
         reg.mintSubname("audit", alice);
+    }
+
+    function test_mintSubname_checksApprovalOfActualParentOwnerNotRegistrarOwner() public {
+        // Set parent-name owner to a different account; deployer (registrar
+        // owner) loses parent-name authority. Registrar's *own* owner has
+        // not approved anything for itself — but parent owner (alice)
+        // approves the registrar. Mint should succeed because the
+        // registrar reads the right account from NameWrapper.
+        address newParentOwner = alice;
+        wrapper.setOwner(uint256(ZHGG_PARENT), newParentOwner);
+        // Deployer's approval no longer counts.
+        wrapper.setApprovalForAll(address(reg), false);
+        // Parent owner approves the registrar.
+        vm.prank(newParentOwner);
+        wrapper.setApprovalForAll(address(reg), true);
+
+        bytes32 node = reg.mintSubname("audit", bob);
+        assertEq(wrapper.subnodeOwners(node), bob);
+    }
+
+    function test_mintSubname_revertsWhenParentOwnerHasNotApproved() public {
+        // Registrar's own owner (deployer) approves itself, but the actual
+        // parent-name owner (alice) has not. Mint must revert — the prior
+        // _parentOwnerProbe bug would silently let this through.
+        wrapper.setOwner(uint256(ZHGG_PARENT), alice);
+        // Deployer's leftover approval no longer applies to alice's
+        // approval ledger.
+        vm.expectRevert(ENSRegistrar.NotApprovedForAll.selector);
+        reg.mintSubname("audit", bob);
     }
 
     function test_mintSubname_emptyLabelReverts() public {
