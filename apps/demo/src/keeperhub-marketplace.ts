@@ -1,0 +1,122 @@
+/// KeeperHub marketplace x402 client — wraps `@keeperhub/wallet`.
+///
+/// `signer.fetch(url, init)` handles the canonical 402 round-trip:
+///   1. POST to `/api/mcp/workflows/<slug>/call`
+///   2. Receive 402 + paymentRequirements
+///   3. KH server signs EIP-3009 via Turnkey (the wallet's HMAC secret
+///      authenticates to KH's `/api/agentic-wallet/sign`)
+///   4. Caller retries with PAYMENT-SIGNATURE header
+///   5. Facilitator settles on Base USDC (30% to KH, 70% to author)
+///   6. Workflow runs, returns response
+///
+/// Reality check: `WalletConfig.hmacSecret` is NOT an EVM private key —
+/// it's an HMAC for KH's signing service. The actual ECDSA key lives in
+/// Turnkey's sub-org and never leaves their custody. This means the 70%
+/// arrives at `walletAddress` but we CANNOT sign FeeSplitter txs from
+/// that wallet without integrating `@turnkey/viem` and obtaining the
+/// sub-org's API key (which `@keeperhub/wallet` does not expose).
+///
+/// V1 hackathon design: this module returns the marketplace settlement
+/// tx hash. The 85/5/5/5 sub-split on the 70% is a separate, manual step
+/// — the iNFT owner triggers FeeSplitter from a normal viem wallet after
+/// the marketplace settles.
+///
+/// V2 path (post-hackathon): wrap the receiving wallet as a smart contract
+/// with a public `splitMyBalance()` function anyone can call to fan out
+/// via FeeSplitter — removes the Turnkey-signs-FeeSplitter problem.
+
+import { createPaymentSigner, type WalletConfig } from '@keeperhub/wallet';
+import type { Address, Hex } from 'viem';
+
+export interface KeeperHubMarketplaceConfig {
+  /// Turnkey sub-org id minted by `POST /api/agentic-wallet/provision`
+  /// or `npx @keeperhub/wallet add` on the CLI.
+  subOrgId: string;
+  /// Author wallet address (Turnkey-custodied) — receives the 70% leg.
+  walletAddress: Address;
+  /// 64-char lowercase hex HMAC secret minted at provision time. NOT an
+  /// EVM private key — only authenticates to KH's signing service.
+  hmacSecret: string;
+  /// Workflow slug (e.g. `mcp-test` for demo, `0g-tee-inference` for prod).
+  marketplaceSlug: string;
+  /// Override base URL — default `https://app.keeperhub.com`.
+  baseUrl?: string;
+}
+
+export interface MarketplaceSettlement {
+  /// Base Sepolia EIP-3009 settlement tx (KH-side, settled by facilitator).
+  paymentTxHash: Hex;
+  /// Wallet that signed the EIP-3009 (the caller, custodied by Turnkey).
+  payerAddress: Address;
+  /// CAIP-2 — `eip155:84532` for Base Sepolia.
+  network: string;
+  /// Raw workflow JSON body (the oracle response payload).
+  marketplaceResponse: unknown;
+}
+
+/// Run a `/api/mcp/workflows/<slug>/call` x402 round-trip via the
+/// official `@keeperhub/wallet` client. Returns the marketplace tx hash
+/// + the workflow's JSON body.
+export async function payViaKeeperHubMarketplace(
+  cfg: KeeperHubMarketplaceConfig,
+  requestBody: Record<string, unknown>
+): Promise<MarketplaceSettlement> {
+  const wallet: WalletConfig = {
+    subOrgId: cfg.subOrgId,
+    walletAddress: cfg.walletAddress,
+    hmacSecret: cfg.hmacSecret,
+  };
+
+  // Inject the wallet via `walletLoader` so we don't touch
+  // ~/.keeperhub/wallet.json on the host.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const signer: any = (createPaymentSigner as any)({
+    walletLoader: async () => wallet,
+  });
+
+  const baseUrl = cfg.baseUrl ?? 'https://app.keeperhub.com';
+  const resourceUrl = `${baseUrl.replace(/\/$/, '')}/api/mcp/workflows/${cfg.marketplaceSlug}/call`;
+
+  const res: Response = await signer.fetch(resourceUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '<no body>');
+    throw new Error(`KH marketplace call failed: HTTP ${res.status} — ${text}`);
+  }
+
+  const paymentTxHash = extractSettlementTx(res);
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const fallbackHash =
+    typeof body.paymentTxHash === 'string'
+      ? (body.paymentTxHash as Hex)
+      : ('0x0000000000000000000000000000000000000000000000000000000000000000' as Hex);
+
+  return {
+    paymentTxHash: paymentTxHash ?? fallbackHash,
+    payerAddress: cfg.walletAddress,
+    network: 'eip155:84532',
+    marketplaceResponse: body,
+  };
+}
+
+/// Extract the on-chain settlement tx hash from the `X-PAYMENT-RESPONSE`
+/// header (x402 v2 convention — base64-encoded JSON with `transaction`
+/// or `txHash` field). Returns `null` if header is absent or unparseable;
+/// caller should fall back to the response body's `paymentTxHash` field.
+function extractSettlementTx(res: Response): Hex | null {
+  const hdr = res.headers.get('X-PAYMENT-RESPONSE');
+  if (!hdr) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(hdr, 'base64').toString('utf-8')) as {
+      transaction?: Hex;
+      txHash?: Hex;
+    };
+    return decoded.transaction ?? decoded.txHash ?? null;
+  } catch {
+    return null;
+  }
+}

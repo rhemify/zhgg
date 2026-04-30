@@ -9,6 +9,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@keeperhub/wallet": "^0.1.8",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/router": "workspace:*",

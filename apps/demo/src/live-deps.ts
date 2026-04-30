@@ -21,6 +21,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { inferZG, postReceipt, type Erc8004Client, type GiveFeedbackArgs } from '@zhgg/workflow';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type { CrossAgentDemoDeps } from './cross-agent.js';
+import { payViaKeeperHubMarketplace, type KeeperHubMarketplaceConfig } from './keeperhub-marketplace.js';
 
 const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
@@ -56,6 +57,13 @@ export interface LiveDepsConfig {
   usdc: Address;
   /// Address that receives the 85% bulk of the oracle's fee.
   oracleOwner: Address;
+  /// Optional — when set, oracle settlement routes through KeeperHub's
+  /// marketplace (real x402, KH 30%, author 70%) instead of direct
+  /// FeeSplitter. Caller's USDC goes through KH's facilitator, the 70%
+  /// lands at `keeperhub.walletAddress`. The 85/5/5/5 sub-split is a
+  /// SEPARATE, MANUAL step (V1 — Turnkey custody on KH means we can't
+  /// auto-sign). See `keeperhub-marketplace.ts` for the design note.
+  keeperhub?: KeeperHubMarketplaceConfig;
 }
 
 const ORACLE_PAYMENT_ATOMIC = 100_000n; // 0.1 USDC at 6 decimals
@@ -115,11 +123,27 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     erc8004Client,
   };
 
-  // Real x402-style settlement: caller funds the split. FeeSplitter
-  // pulls USDC from baseAccount and distributes 85/5/5/5 atomically.
-  // Pre-condition: baseAccount has USDC + has approved the splitter
-  // for at least ORACLE_PAYMENT_ATOMIC. We auto-approve on first call.
+  // Settlement has two paths:
+  //  - cfg.keeperhub set → real KH marketplace (x402, 30/70 split)
+  //  - else → direct FeeSplitter via viem (caller-funds, full 85/5/5/5)
   const settleOraclePayment: CrossAgentDemoDeps['settleOraclePayment'] = async () => {
+    if (cfg.keeperhub) {
+      // Real marketplace path — KH facilitator settles EIP-3009 on Base,
+      // takes 30%, sends 70% to keeperhub.walletAddress (Turnkey custody).
+      // The 85/5/5/5 sub-split on the 70% is a documented manual step
+      // for V1 since the receiving wallet is server-custodied.
+      const settlement = await payViaKeeperHubMarketplace(cfg.keeperhub, {
+        topic: 'oracle.query',
+      });
+      return {
+        txHash: settlement.paymentTxHash,
+        network: settlement.network,
+        payer: settlement.payerAddress,
+      };
+    }
+
+    // Fallback path: caller-funds direct FeeSplitter call.
+    // Pre-condition: baseAccount has USDC + JIT-approves the splitter.
     // Ensure approval (idempotent — only writes if allowance is short).
     const allowance = await basePub.readContract({
       address: cfg.usdc,
@@ -205,5 +229,17 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
     usdc: (process.env.USDC_BASE_SEPOLIA_ADDRESS ??
       '0x036CbD53842c5426634e7929541eC2318f3dCF7e') as Address,
     oracleOwner: needHex('ORACLE_OWNER_ADDRESS', 40) as unknown as Address,
+    // KeeperHub marketplace config. When KH_MARKETPLACE_SLUG is set, all
+    // four KH_AUTHOR_* vars must be set too. Otherwise we fall back to
+    // the direct-FeeSplitter path.
+    keeperhub: process.env.KH_MARKETPLACE_SLUG
+      ? {
+          subOrgId: need('KH_AUTHOR_SUBORG_ID'),
+          walletAddress: needHex('KH_AUTHOR_WALLET', 40) as unknown as Address,
+          hmacSecret: need('KH_AUTHOR_HMAC_SECRET'),
+          marketplaceSlug: process.env.KH_MARKETPLACE_SLUG,
+          baseUrl: process.env.KEEPERHUB_API_URL,
+        }
+      : undefined,
   };
 }
