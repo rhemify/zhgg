@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'bun:test';
 import {
   buildPaymentRequirements,
-  verifyPayment,
+  paymentFingerprint,
   settlePayment,
+  verifyPayment,
   type FetchLike,
 } from '../src/x402.js';
 
@@ -91,6 +92,7 @@ describe('verifyPayment', () => {
     if (!result.ok) throw new Error('unreachable');
     expect(result.payer).toBe('0xpayer');
     expect(result.paymentPayload).toBe('base64-payload');
+    expect(result.fingerprint).toBe(paymentFingerprint('base64-payload'));
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe(`${FACILITATOR}/verify`);
     const sent = JSON.parse(captured!.body);
@@ -114,6 +116,16 @@ describe('verifyPayment', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.response.status).toBe(402);
+  });
+});
+
+describe('paymentFingerprint', () => {
+  it('returns identical hash for identical input (replay-detection key)', () => {
+    expect(paymentFingerprint('payload-A')).toBe(paymentFingerprint('payload-A'));
+  });
+
+  it('returns different hashes for different inputs', () => {
+    expect(paymentFingerprint('a')).not.toBe(paymentFingerprint('b'));
   });
 });
 

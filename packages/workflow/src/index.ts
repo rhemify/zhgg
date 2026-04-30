@@ -20,6 +20,7 @@ export {
   PAYMENT_HEADER,
   PAYMENT_RESPONSE_HEADER,
   buildPaymentRequirements,
+  paymentFingerprint,
   paymentResponseHeader,
   settlePayment,
   verifyPayment,

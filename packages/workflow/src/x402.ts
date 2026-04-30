@@ -16,9 +16,19 @@
 /// Settlement target on Base Sepolia is typically zhgg's FeeSplitter
 /// contract — incoming USDC gets distributed 85/5/5/5 atomically.
 
+import { keccak256, toBytes } from 'viem';
 import type { Result } from './adapters/zg-router.js';
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/// Returns a stable fingerprint of a payment payload. Callers MUST dedupe
+/// verified payloads on this value to prevent replay between verify and
+/// settle. The same EIP-3009 authorization signed once can pass `verify`
+/// twice if invoked concurrently — a malicious client could trigger paid
+/// work twice while only the second `transferWithAuthorization` reverts.
+export function paymentFingerprint(paymentPayload: string): string {
+  return keccak256(toBytes(paymentPayload));
+}
 
 // v1 used `X-Payment`; v2 renamed to `PAYMENT-SIGNATURE`. We declare v2 in
 // the requirements body so the header MUST match — otherwise facilitators
@@ -86,7 +96,14 @@ export interface VerifyOptions {
 
 export type VerifyOutcome =
   | { ok: false; response: Response }
-  | { ok: true; payer: string | null; paymentPayload: string };
+  | {
+      ok: true;
+      payer: string | null;
+      paymentPayload: string;
+      /// keccak256 fingerprint of the payload. Caller MUST dedupe across
+      /// concurrent requests to prevent verify→settle replay.
+      fingerprint: string;
+    };
 
 export async function verifyPayment(
   request: Request,
@@ -146,6 +163,7 @@ export async function verifyPayment(
     ok: true,
     payer: typeof body.payer === 'string' ? body.payer : null,
     paymentPayload,
+    fingerprint: paymentFingerprint(paymentPayload),
   };
 }
 
