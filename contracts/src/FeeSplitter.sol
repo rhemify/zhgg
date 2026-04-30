@@ -163,6 +163,15 @@ contract FeeSplitter is ReentrancyGuard {
 
         bytes32 tag = ERC8021Suffix.suffixTag(msg.data);
 
+        // Run the split FIRST so the amount-below-minimum check fires
+        // before any attribution emit. Otherwise an attacker can spam
+        // ERC8021Attribution events for any agentOwner just by calling
+        // with sub-minimum amounts (the splitter reverts but Foundry-
+        // style indexers can still capture the log). On real EVM the
+        // revert rolls everything back, but emit-on-success is the
+        // honest invariant: no attribution without value moved.
+        _splitERC20(asset, totalAmount, agentOwner, tag);
+
         if (schemaId == 0) {
             string[] memory codes = ERC8021Suffix.decodeSchema0(body);
             emit ERC8021Attribution(tag, codes, 0);
@@ -171,8 +180,6 @@ contract FeeSplitter is ReentrancyGuard {
             // is left to off-chain indexers per spec.
             emit ERC8021Attribution(tag, new string[](0), schemaId);
         }
-
-        _splitERC20(asset, totalAmount, agentOwner, tag);
     }
 
     function _splitERC20(IERC20 asset, uint256 totalAmount, address agentOwner, bytes32 attributionTag)

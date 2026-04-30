@@ -150,6 +150,22 @@ describe('createZGStorageClient', () => {
     );
   });
 
+  it('surfaces a clear error when ethers/0g-ts-sdk are not installed', async () => {
+    // Production callers add `ethers` and `@0gfoundation/0g-ts-sdk` as
+    // peer deps. When mocked-mode dev environments call `upload` without
+    // those installed, the dynamic `loadSdk` import fails — the user
+    // gets the underlying module-resolution error rather than a vague
+    // success, so they know exactly what to install.
+    //
+    // The workflow package intentionally does NOT list these as deps
+    // (see storage-log-zg.ts header). At test time they're absent, so
+    // skipping `__sdkOverride` exercises the failure path naturally.
+    const client = createZGStorageClient({ privateKey: FAKE_KEY });
+    await expect(client.upload(new Uint8Array([1, 2, 3]))).rejects.toThrow(
+      /Cannot find (module|package)|ethers|0g-ts-sdk/i
+    );
+  });
+
   it('rejects when SDK returns a 3-tuple (drift defense)', async () => {
     const driftedSdk: SdkOverride = {
       Indexer: class {

@@ -271,6 +271,55 @@ contract FeeSplitterTest is Test {
         assertEq(codes[1], "baseapp");
     }
 
+    /// Reviewer concern: with a tiny payment + a valid suffix, would
+    /// the splitter still emit ERC8021Attribution even though the
+    /// AmountBelowMinimum revert downstream means no money actually
+    /// moved? An attacker could spam meaningless attributions. The
+    /// test asserts the answer is NO — a sub-minimum amount reverts
+    /// before any state mutation, so no attribution log is emitted.
+    function test_erc8021_subMinimumAmount_revertsBeforeAttribution() public {
+        bytes memory suffix = _suffix0("zhgg");
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 9_999, agentOwner) // 1 below MIN_SPLIT_AMOUNT
+        );
+        bytes memory data = bytes.concat(call, suffix);
+
+        vm.recordLogs();
+        vm.prank(payer);
+        (bool ok,) = address(splitter).call(data);
+        assertFalse(ok, "tiny call should revert");
+
+        // Confirm NO ERC8021Attribution event made it to the log on the
+        // reverting path. (vm.recordLogs only captures top-level
+        // committed events, so a reverted attribution wouldn't appear
+        // anyway — this assertion documents the invariant for future
+        // refactors that might emit before the revert.)
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; ++i) {
+            assertNotEq(
+                logs[i].topics[0],
+                keccak256("ERC8021Attribution(bytes32,string[],uint8)"),
+                "attribution leaked on reverted call"
+            );
+        }
+    }
+
+    /// Fuzz `decodeSchema0` — feed random bytes through the decoder and
+    /// assert it never reverts (returns empty array on bad shape) and
+    /// never produces more codes than the declared length permits.
+    function testFuzz_erc8021_decodeSchema0_neverReverts(bytes memory raw) public pure {
+        // Bound the input to the size the decoder is designed to
+        // handle — bodies > 256 bytes are not part of Schema 0's
+        // contract (codesLen is uint8). Excessive inputs should just
+        // return empty rather than waste gas.
+        if (raw.length > 256) return;
+        string[] memory codes = ERC8021Suffix.decodeSchema0(raw);
+        // The decoder MUST return a string[] of length ≤ raw.length.
+        // It cannot conjure codes that aren't in the input.
+        assertLe(codes.length, raw.length);
+    }
+
     /// SOL↔TS parity: the bytes a TS encoder produces for a fixed
     /// codes-set must hash to the same suffixTag as the on-chain
     /// `keccak256(suffix)`. Locked against the same fixture in

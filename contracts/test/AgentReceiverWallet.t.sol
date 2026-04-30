@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Create2} from "@openzeppelin/contracts/utils/Create2.sol";
 import {AgentNFT} from "../src/AgentNFT.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {AgentReceiverWallet} from "../src/AgentReceiverWallet.sol";
@@ -111,6 +112,24 @@ contract AgentReceiverWalletTest is Test {
         assertEq(usdc.balanceOf(address(w)),     0);
     }
 
+    function test_splitMyBalance_revertsAfterTokenBurn() public {
+        // We don't have a public burn on AgentNFT, but a wallet can be
+        // CREATE2-deployed for a token that was never minted — semantic
+        // equivalent of a burn from the wallet's perspective. The
+        // wallet's `splitMyBalance` MUST fail loudly via owner() rather
+        // than sending USDC to address(0). This guards against the
+        // catastrophic case where dust + a burned iNFT could otherwise
+        // route the 85% leg to the zero address.
+        uint256 unmintedId = 99_998;
+        AgentReceiverWallet w =
+            AgentReceiverWallet(payable(factory.deploy(unmintedId)));
+        usdc.mint(address(w), 100_000_000); // above min so we exercise owner()
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        w.splitMyBalance(IERC20(address(usdc)));
+    }
+
     function test_splitFollowsINFTOwnerOnTransfer() public {
         AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
         address newOwner = makeAddr("newOwner");
@@ -185,6 +204,23 @@ contract AgentReceiverWalletTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, hash);
         bytes memory sig = abi.encodePacked(r, s, v);
         assertEq(w.isValidSignature(hash, sig), bytes4(0xffffffff));
+    }
+
+    /// SOL↔TS parity: GIVEN the same factory address, salt, and
+    /// init-code hash, Solidity's `Create2.computeAddress` and viem's
+    /// `getCreate2Address` must produce the same address. This locks
+    /// the cross-language CREATE2 derivation independent of any
+    /// specific contract bytecode — bytecode changes don't break this
+    /// test. Same fixture asserted in
+    /// `apps/mint-agent/test/receiver-wallet.test.ts`.
+    function test_create2_address_derivation_parity() public pure {
+        address factory = 0xfaC0101010101010101010101010101010101010;
+        bytes32 salt = bytes32(uint256(42));
+        bytes32 initCodeHash = 0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef;
+
+        address solAddr = Create2.computeAddress(salt, initCodeHash, factory);
+        address expected = 0x8946c09566121DC373d2C1640396296Ec11865Ef;
+        assertEq(solAddr, expected, "SOL Create2 drift from TS fixture");
     }
 
     function test_erc1271_unmintedTokenReturnsFail() public {
