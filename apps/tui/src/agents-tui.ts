@@ -1,13 +1,15 @@
 /// agents-tui — live demo visualization of the cross-agent loop.
 ///
-/// Self-contained: fires a hardcoded mock event sequence so the panels
-/// animate during the demo recording without depending on the orchestrator
-/// in apps/demo. Real-data wiring (subscribing to a live orchestrator) is
-/// D4 work — for the hackathon recording, this gives a deterministic
-/// 8-second clip showing both panels updating in realistic timing.
+/// Two execution modes via the runner seam:
+/// - `runFromScript` (default): fires a hardcoded SCRIPT array. Used for
+///   the demo recording — deterministic timing matters more than realism.
+/// - `runFromEvents` (D4): subscribes to a live cross-agent orchestrator's
+///   EventEmitter. Drop in by passing an emitter from
+///   `runCrossAgentDemo({ events })`.
 ///
 /// Run: `bun run apps/tui:agents`
 
+import { EventEmitter } from 'node:events';
 import { renderAgentsPanel, type AgentRow, type AgentStatus } from './panels/agents.js';
 import { pushSplit, renderSplitsPanel, type SplitEvent } from './panels/splits.js';
 
@@ -149,6 +151,53 @@ const SCRIPT: ScriptStep[] = [
   },
 ];
 
+/// Script-driven runner: replays a hardcoded SCRIPT for the recording.
+async function runFromScript(state: State, script: readonly ScriptStep[]): Promise<void> {
+  for (const step of script) {
+    await new Promise((r) => setTimeout(r, step.delay));
+    step.apply(state);
+  }
+}
+
+/// Events-driven runner: subscribes to a cross-agent orchestrator's
+/// EventEmitter and translates `TranscriptStep` events into agent/split
+/// state updates. D4 wires this up against a live `runCrossAgentDemo`
+/// run; for now it only registers handlers and returns an unsubscribe fn.
+type StepLike = { tMs: number; name: string; detail?: Record<string, unknown> };
+export function runFromEvents(state: State, emitter: EventEmitter): () => void {
+  const handlers: Array<[string, (s: StepLike) => void]> = [
+    ['oracle.payment.request', () => {
+      setAgent(state, 'audit.zhgg.eth', { role: 'auditor', status: 'running', lastAction: 'requesting oracle payment' });
+      setAgent(state, 'oracle.zhgg.eth', { role: 'oracle', status: 'running', lastAction: 'awaiting payment' });
+    }],
+    ['oracle.payment.settle', (s) => {
+      const tx = typeof s.detail?.txHash === 'string' ? s.detail.txHash : '0xunknown';
+      state.splits = pushSplit(state.splits, {
+        tMs: s.tMs,
+        totalAtomic: '100000',
+        asset: 'USDC',
+        ownerAddress: '0x000000000000000000000000000000000000beef',
+        context: 'audit → oracle',
+      });
+      setAgent(state, 'oracle.zhgg.eth', { lastAction: `payment settled ${tx.slice(0, 10)}…` });
+    }],
+    ['oracle.query.complete', () => {
+      setAgent(state, 'oracle.zhgg.eth', { status: 'done', lastAction: 'returned regulatory deltas' });
+    }],
+    ['audit.complete', (s) => {
+      const verdict = String(s.detail?.verdict ?? 'unknown');
+      setAgent(state, 'audit.zhgg.eth', { lastAction: `verdict: ${verdict}` });
+    }],
+    ['audit.receipt.post', () => {
+      setAgent(state, 'audit.zhgg.eth', { status: 'done', lastAction: 'erc-8004 receipt posted' });
+    }],
+  ];
+  for (const [name, fn] of handlers) emitter.on(name, fn);
+  return () => {
+    for (const [name, fn] of handlers) emitter.off(name, fn);
+  };
+}
+
 async function main(): Promise<void> {
   const state: State = {
     agents: new Map(),
@@ -169,10 +218,7 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', () => cleanup(0));
 
-  for (const step of SCRIPT) {
-    await new Promise((r) => setTimeout(r, step.delay));
-    step.apply(state);
-  }
+  await runFromScript(state, SCRIPT);
 
   // Hold final frame so the recording captures the end state.
   await new Promise((r) => setTimeout(r, 2000));
