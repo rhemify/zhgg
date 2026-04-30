@@ -28,6 +28,15 @@ contract FeeSplitter is ReentrancyGuard {
     uint16 public constant COMMONS_BPS  = 500;  // 5% to reputation commons
     uint16 public constant BPS_DENOM    = 10000;
 
+    /// @notice Minimum splittable amount. Below this, integer division
+    ///         floors the 5%-cut legs to zero — dust splits would let an
+    ///         attacker spam `splitERC20(token, 1, victimAgentOwner)` to
+    ///         flood off-chain indexers with attributed volume to a victim
+    ///         agent owner. Reverting on tiny totals keeps every Split
+    ///         event meaningful (each leg ≥ 1 unit). Equals BPS_DENOM so
+    ///         a 5% cut is at least 1 atomic unit.
+    uint256 public constant MIN_SPLIT_AMOUNT = BPS_DENOM;
+
     /// @notice ERC-8021 magic marker (16 bytes) — appended to calldata when
     ///         the caller wants on-chain attribution that off-chain indexers
     ///         can read. Spec: https://www.erc8021.com/
@@ -72,6 +81,7 @@ contract FeeSplitter is ReentrancyGuard {
 
     error ZeroAddress();
     error ZeroAmount();
+    error AmountBelowMinimum(uint256 amount, uint256 minimum);
     error InvalidSplitConfig();
     error NativeTransferFailed(address to, uint256 amount);
     error NoPendingNative();
@@ -127,6 +137,7 @@ contract FeeSplitter is ReentrancyGuard {
     {
         if (agentOwner == address(0)) revert ZeroAddress();
         if (totalAmount == 0) revert ZeroAmount();
+        if (totalAmount < MIN_SPLIT_AMOUNT) revert AmountBelowMinimum(totalAmount, MIN_SPLIT_AMOUNT);
 
         asset.safeTransferFrom(msg.sender, address(this), totalAmount);
 
@@ -164,6 +175,7 @@ contract FeeSplitter is ReentrancyGuard {
         if (agentOwner == address(0)) revert ZeroAddress();
         uint256 totalAmount = msg.value;
         if (totalAmount == 0) revert ZeroAmount();
+        if (totalAmount < MIN_SPLIT_AMOUNT) revert AmountBelowMinimum(totalAmount, MIN_SPLIT_AMOUNT);
 
         uint256 keeperCut  = (totalAmount * KEEPER_BPS)  / BPS_DENOM;
         uint256 zhggCut    = (totalAmount * ZHGG_BPS)    / BPS_DENOM;

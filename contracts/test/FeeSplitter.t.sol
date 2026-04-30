@@ -68,17 +68,25 @@ contract FeeSplitterTest is Test {
         assertEq(usdc.balanceOf(address(splitter)),  0);
     }
 
-    function test_splitERC20_dustGoesToOwner() public {
-        // 7 wei: 0.35 → keeper, 0.35 → zhgg, 0.35 → commons (all floored to 0).
-        // Owner should get the full 7.
-        uint256 total = 7;
+    function test_splitERC20_revertsBelowMinimum() public {
+        // Below MIN_SPLIT_AMOUNT (10000) the 5% cuts floor to zero, which
+        // would let a spammer attribute volume to a victim agent owner.
+        // Reverting keeps every Split event meaningful.
         vm.prank(payer);
-        splitter.splitERC20(usdc, total, agentOwner);
+        vm.expectRevert(
+            abi.encodeWithSelector(FeeSplitter.AmountBelowMinimum.selector, uint256(7), uint256(10000))
+        );
+        splitter.splitERC20(usdc, 7, agentOwner);
+    }
 
-        assertEq(usdc.balanceOf(agentOwner), 7);
-        assertEq(usdc.balanceOf(keeper),     0);
-        assertEq(usdc.balanceOf(zhgg),       0);
-        assertEq(usdc.balanceOf(commons),    0);
+    function test_splitERC20_minimumExactlyAcceptable() public {
+        // At exactly MIN_SPLIT_AMOUNT, every leg gets at least 1 atomic unit.
+        vm.prank(payer);
+        splitter.splitERC20(usdc, 10000, agentOwner);
+        assertEq(usdc.balanceOf(agentOwner), 8500);
+        assertEq(usdc.balanceOf(keeper),     500);
+        assertEq(usdc.balanceOf(zhgg),       500);
+        assertEq(usdc.balanceOf(commons),    500);
     }
 
     function test_splitERC20_emitsEventWithTag() public {
