@@ -97,14 +97,35 @@ export function parseProbeResponse(raw: string): { compliant: boolean; finding: 
   return null;
 }
 
-/// Verdict aggregation: any non_compliant probe → non_compliant overall;
-/// any unclear probe (parse failure) when others are compliant → unclear;
-/// all clean → compliant; empty results → unclear.
-export function aggregateVerdict(results: readonly ProbeResult[]): Verdict {
+/// Quorum policy. Default `'all'` — any single probe failure drags the
+/// verdict. `'majority'` is more demo-robust against one flaky LLM
+/// response.
+export type Quorum = 'all' | 'majority';
+
+/// Verdict aggregation.
+/// - `'all'`: any non_compliant → non_compliant; any unclear → unclear.
+/// - `'majority'`: strict majority (`> n/2`) of one bucket determines verdict.
+/// - empty results → unclear.
+export function aggregateVerdict(
+  results: readonly ProbeResult[],
+  opts: { quorum?: Quorum } = {}
+): Verdict {
   if (results.length === 0) return 'unclear';
-  if (results.some((r) => r.compliant === false)) return 'non_compliant';
-  if (results.some((r) => r.compliant === null)) return 'unclear';
-  return 'compliant';
+  const quorum = opts.quorum ?? 'all';
+
+  if (quorum === 'all') {
+    if (results.some((r) => r.compliant === false)) return 'non_compliant';
+    if (results.some((r) => r.compliant === null)) return 'unclear';
+    return 'compliant';
+  }
+
+  // majority — strict (> n/2)
+  const half = results.length / 2;
+  const compliant = results.filter((r) => r.compliant === true).length;
+  const nonCompliant = results.filter((r) => r.compliant === false).length;
+  if (compliant > half) return 'compliant';
+  if (nonCompliant > half) return 'non_compliant';
+  return 'unclear';
 }
 
 export function aggregateFindings(results: readonly ProbeResult[]): string[] {

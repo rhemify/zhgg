@@ -113,6 +113,34 @@ describe('aggregateVerdict', () => {
   it('empty → unclear', () => {
     expect(aggregateVerdict([])).toBe('unclear');
   });
+
+  it('majority quorum: 2/3 compliant → compliant', () => {
+    const r = [
+      { id: 'a', articleRef: 'A', compliant: true, finding: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
+      { id: 'c', articleRef: 'C', compliant: true, finding: '' },
+    ];
+    expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('compliant');
+    expect(aggregateVerdict(r, { quorum: 'all' })).toBe('non_compliant');
+  });
+
+  it('majority quorum: 2/3 non_compliant → non_compliant', () => {
+    const r = [
+      { id: 'a', articleRef: 'A', compliant: false, finding: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
+      { id: 'c', articleRef: 'C', compliant: true, finding: '' },
+    ];
+    expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('non_compliant');
+  });
+
+  it('majority quorum: 1/3 each way + 1 unclear → unclear (no majority)', () => {
+    const r = [
+      { id: 'a', articleRef: 'A', compliant: true, finding: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
+      { id: 'c', articleRef: 'C', compliant: null, finding: '' },
+    ];
+    expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('unclear');
+  });
 });
 
 describe('runAudit', () => {

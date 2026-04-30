@@ -21,12 +21,14 @@ import {
   renderProbe,
   type AuditReport,
   type ProbeResult,
+  type Quorum,
   type Verdict,
 } from './audit-core.js';
 
 export type {
   AuditReport,
   ProbeResult,
+  Quorum,
   Verdict,
   ProbePrompt,
 } from './audit-core.js';
@@ -61,6 +63,9 @@ export interface AuditOptions {
   /// `new Date().toISOString()` — accept an override for deterministic
   /// tests.
   now?: string;
+  /// Verdict aggregation policy. `'all'` is strict (default); `'majority'`
+  /// is demo-robust — one flaky probe doesn't drag the whole verdict.
+  quorum?: Quorum;
 }
 
 export async function runAudit(
@@ -108,7 +113,7 @@ export async function runAudit(
     });
   }
 
-  const verdict: Verdict = aggregateVerdict(results);
+  const verdict: Verdict = aggregateVerdict(results, { quorum: opts.quorum });
   const findings = aggregateFindings(results);
 
   // Post the audit receipt regardless of verdict — even non-compliant or

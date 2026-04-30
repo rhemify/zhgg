@@ -126,6 +126,8 @@ export async function runAuditCli(target: string): Promise<number> {
         agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
         clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
         now: new Date().toISOString(),
+        // 2/3 majority — one flaky probe can't tank the whole demo
+        quorum: 'majority',
       },
     }
   );
