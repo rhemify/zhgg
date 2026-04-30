@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "module": "src/index.tsx",
+  "exports": {
+    "./events-runner": "./src/events-runner.ts",
+    "./panels/agents": "./src/panels/agents.ts",
+    "./panels/splits": "./src/panels/splits.ts"
+  },
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "flow": "bun run src/payment-flow.ts",

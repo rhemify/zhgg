@@ -13,7 +13,8 @@
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/router": "workspace:*",
-    "@zhgg/workflow": "workspace:*"
+    "@zhgg/workflow": "workspace:*",
+    "tui": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"
