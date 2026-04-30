@@ -59,6 +59,15 @@ CLAUDE.local.md
 # Local docs (never push)
 docs/
 
+# Per-phase planning scratch (current work only)
+/tasks/
+
+# Playwright MCP recordings
+/.playwright-mcp/
+
+# Local prize tracking notes
+/prizes-full.txt
+
 # Foundry build artifacts
 contracts/cache/
 contracts/out/
