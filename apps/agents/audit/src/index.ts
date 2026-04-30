@@ -73,13 +73,23 @@ export async function runAudit(
   deps: AuditDeps,
   opts: AuditOptions
 ): Promise<AuditReport> {
+  // Probes are independent — fire them all in parallel and process the
+  // results in deterministic PROBE_PROMPTS order. `Promise.all` preserves
+  // input order in its output array, so `lastAttestation` stays stable
+  // across runs and the receipt's attestation root is reproducible.
+  const inferences = await Promise.all(
+    PROBE_PROMPTS.map((probe) => {
+      const prompt = renderProbe(probe, target.manifest);
+      return deps
+        .infer(prompt, { apiKey: opts.apiKey })
+        .then((inference) => ({ probe, inference } as const));
+    })
+  );
+
   const results: ProbeResult[] = [];
   let lastAttestation: string | null = null;
 
-  for (const probe of PROBE_PROMPTS) {
-    const prompt = renderProbe(probe, target.manifest);
-    const inference = await deps.infer(prompt, { apiKey: opts.apiKey });
-
+  for (const { probe, inference } of inferences) {
     if (!inference.ok) {
       results.push({
         id: probe.id,
