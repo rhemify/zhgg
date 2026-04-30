@@ -8,6 +8,9 @@
 ///
 /// Source of truth: `KeeperHub/keeperhub/lib/workflow/executor/step-handler.ts`
 /// (private). Surface inferred from `plugins/CLAUDE.md` example code.
+///
+/// Surface inferred from KeeperHub/keeperhub@9b53eff46c479e9e15d3dbf12bf68ba69228e5cc/plugins/CLAUDE.md
+/// TODO: re-verify against staging before drop-in merge.
 
 export interface StepContext {
   executionId?: string;
