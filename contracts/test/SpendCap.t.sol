@@ -78,7 +78,7 @@ contract SpendCapTest is Test {
         vm.prank(grantor);
         cap.grant(account, asset, 100, 1 days, 0);
         vm.prank(address(0xDEAD));
-        vm.expectRevert(SpendCap.NotCapOwner.selector);
+        vm.expectRevert(SpendCap.NotAuthorizedSpender.selector);
         cap.spend(account, asset, 1);
     }
 

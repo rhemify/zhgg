@@ -158,6 +158,33 @@ contract AgentRegistryTest is Test {
         reg.revokeFeedback(id, 1);
     }
 
+    function test_paginatedClients_returnsWindow() public {
+        AgentRegistry.MetadataEntry[] memory empty = new AgentRegistry.MetadataEntry[](0);
+        vm.prank(alice);
+        uint256 id = reg.register("ipfs://", empty);
+
+        // 5 distinct clients
+        for (uint160 i = 0; i < 5; i++) {
+            address c = address(uint160(0xC000 + i));
+            vm.prank(c);
+            reg.giveFeedback(id, 1, 0, "x", "y", "", "", bytes32(0));
+        }
+        assertEq(reg.getClientCount(id), 5);
+
+        address[] memory page = reg.getClientsPaginated(id, 1, 2);
+        assertEq(page.length, 2);
+        assertEq(page[0], address(uint160(0xC001)));
+        assertEq(page[1], address(uint160(0xC002)));
+
+        // Page past end → empty
+        address[] memory tail = reg.getClientsPaginated(id, 10, 5);
+        assertEq(tail.length, 0);
+
+        // Limit clipped to available
+        address[] memory big = reg.getClientsPaginated(id, 3, 100);
+        assertEq(big.length, 2);
+    }
+
     function test_clients_listsUniqueFeedbackGivers() public {
         AgentRegistry.MetadataEntry[] memory empty = new AgentRegistry.MetadataEntry[](0);
         vm.prank(alice);

@@ -70,6 +70,7 @@ contract SpendCap {
     error CapExpired();
     error CapExceeded(uint128 requested, uint128 remaining);
     error NotCapOwner();
+    error NotAuthorizedSpender();
     error InvalidPeriod();
     error InvalidMax();
 
@@ -127,15 +128,16 @@ contract SpendCap {
     // ---------------------------------------------------------------------
 
     /// @notice Atomically debit `amount` against the cap for (account, asset).
-    /// @dev    Reverts closed on any failure. Called by the account itself
-    ///         (or its delegate) immediately before the actual transfer.
-    ///         Period rollover happens automatically on the first spend
-    ///         after a period boundary.
+    /// @dev    Reverts closed on any failure. Caller MUST be `account`
+    ///         itself — there is no delegate path in V1. Period rollover
+    ///         happens automatically on the first spend after a period
+    ///         boundary. (Future: ERC-7710-style delegation could land
+    ///         here behind a separate authorized-delegate mapping.)
     /// @param  account  The capped account (must equal `msg.sender`).
     /// @param  asset    The asset being spent.
     /// @param  amount   Amount to debit.
     function spend(address account, address asset, uint128 amount) external {
-        if (msg.sender != account) revert NotCapOwner();
+        if (msg.sender != account) revert NotAuthorizedSpender();
 
         bytes32 key = _key(account, asset);
         Cap storage cap = _caps[key];

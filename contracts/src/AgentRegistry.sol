@@ -288,7 +288,40 @@ contract AgentRegistry is ERC721URIStorage {
     }
 
     /// @notice List all clients who have ever given feedback for an agent.
+    /// @dev    UNSAFE for on-chain consumers — the array is unbounded and
+    ///         can exceed block gas as feedback accumulates. Off-chain
+    ///         indexers can use this safely; on-chain callers MUST use
+    ///         `getClientsPaginated` + `getClientCount`.
     function getClients(uint256 agentId) external view returns (address[] memory) {
         return _clients[agentId];
+    }
+
+    /// @notice Number of distinct clients that have given feedback for `agentId`.
+    function getClientCount(uint256 agentId) external view returns (uint256) {
+        return _clients[agentId].length;
+    }
+
+    /// @notice Bounded view into the clients list. Always safe for on-chain
+    ///         callers regardless of how much feedback the agent has
+    ///         accumulated. Returns up to `limit` clients starting at
+    ///         `offset`. Past-the-end returns an empty array; over-large
+    ///         `limit` is clipped to what's available.
+    function getClientsPaginated(uint256 agentId, uint256 offset, uint256 limit)
+        external
+        view
+        returns (address[] memory page)
+    {
+        address[] storage clients = _clients[agentId];
+        uint256 total = clients.length;
+        if (offset >= total) {
+            return new address[](0);
+        }
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+        uint256 size = end - offset;
+        page = new address[](size);
+        for (uint256 i = 0; i < size; i++) {
+            page[i] = clients[offset + i];
+        }
     }
 }
