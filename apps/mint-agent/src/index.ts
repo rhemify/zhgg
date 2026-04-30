@@ -232,7 +232,10 @@ async function main(): Promise<void> {
   });
 
   // Step 2 — register in 8004
-  const agentURI = `ipfs://placeholder/${args.name}`;
+  // Custom `zhgg://` scheme makes it explicit that this is NOT a real
+  // IPFS-pinned URI — D5 work pins the agent registration JSON to IPFS
+  // and writes the real CID here.
+  const agentURI = `zhgg://placeholder/agent/${args.name}`;
   const registered = await registerAgent(zgExecutor, {
     agentRegistry,
     agentURI,

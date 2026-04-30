@@ -143,7 +143,11 @@ export async function runAudit(
     tag1,
     tag2,
     endpoint: 'https://audit.zhgg.eth/v1',
-    feedbackURI: `ipfs://placeholder/${target.agentName}`,
+    // Custom `zhgg://` scheme makes it explicit that this is NOT a real
+    // IPFS-pinned URI — D5 work pins the audit report to IPFS and writes
+    // the real CID here. Anyone indexing 8004 receipts can grep for
+    // `zhgg://placeholder/` to find unpinned audits.
+    feedbackURI: `zhgg://placeholder/audit/${target.agentName}`,
     attestationRoot: lastAttestation,
     paymentTxHash: null,
     createdAt: opts.now ?? new Date().toISOString(),
