@@ -82,6 +82,112 @@ describe('createHttpHandler', () => {
   });
 });
 
+describe('createHttpHandler /call auth', () => {
+  /// Builds a handler bound to a single fake plugin so we can assert
+  /// /call routes correctly when authorized — without standing up the real
+  /// 0g-tee-inference plugin (which would try to call the live 0G router).
+  const makeAuthedHandler = async () => {
+    const { buildRegistry } = await loadDeps();
+    const { createHttpHandler } = await import('../src/mcp-server.js');
+    const stepFn = mock(async (input: { ping: string }) => ({ pong: input.ping }));
+    Object.assign(stepFn, { maxRetries: 0 });
+    const fakePlugin = {
+      name: 'fake',
+      displayName: 'Fake',
+      description: 'fake',
+      version: '0.0.1',
+      actions: [
+        {
+          slug: 'echo',
+          label: 'Echo',
+          description: 'echoes ping',
+          category: 'Test',
+          stepFunction: stepFn as never,
+          stepImportPath: './steps/echo',
+          configFields: [{ key: 'ping', label: 'Ping', type: 'string' as const, required: true }],
+          outputFields: [{ key: 'pong', label: 'Pong', type: 'string' as const }],
+        },
+      ],
+    };
+    const registry = buildRegistry([fakePlugin]);
+    return { handler: createHttpHandler({ registry, authToken: 'secret' }) };
+  };
+
+  it('returns 401 when Authorization header missing', async () => {
+    const { handler } = await makeAuthedHandler();
+    const res = await handler(
+      new Request('http://x/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'fake.echo', arguments: { ping: 'hi' } }),
+      })
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when bearer token is wrong', async () => {
+    const { handler } = await makeAuthedHandler();
+    const res = await handler(
+      new Request('http://x/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer wrong-token',
+        },
+        body: JSON.stringify({ name: 'fake.echo', arguments: { ping: 'hi' } }),
+      })
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 200 + tool result when bearer token matches', async () => {
+    const { handler } = await makeAuthedHandler();
+    const res = await handler(
+      new Request('http://x/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer secret',
+        },
+        body: JSON.stringify({ name: 'fake.echo', arguments: { ping: 'hi' } }),
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result: { pong: string } };
+    expect(body.result.pong).toBe('hi');
+  });
+
+  it('returns 400 on invalid JSON body even with correct auth', async () => {
+    const { handler } = await makeAuthedHandler();
+    const res = await handler(
+      new Request('http://x/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer secret',
+        },
+        body: 'not-json',
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 on body missing name field', async () => {
+    const { handler } = await makeAuthedHandler();
+    const res = await handler(
+      new Request('http://x/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer secret',
+        },
+        body: JSON.stringify({ arguments: { ping: 'hi' } }),
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('callTool', () => {
   it('routes call to the action.stepFunction with the supplied args', async () => {
     const { buildRegistry, callTool } = await loadDeps();
