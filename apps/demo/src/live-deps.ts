@@ -22,6 +22,7 @@ import { inferZG, postReceipt, type Erc8004Client, type GiveFeedbackArgs } from 
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type { CrossAgentDemoDeps } from './cross-agent.js';
 import { payViaKeeperHubMarketplace, type KeeperHubMarketplaceConfig } from './keeperhub-marketplace.js';
+import { checkSpendCap } from './spend-cap.js';
 
 const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
@@ -64,6 +65,9 @@ export interface LiveDepsConfig {
   /// SEPARATE, MANUAL step (V1 — Turnkey custody on KH means we can't
   /// auto-sign). See `keeperhub-marketplace.ts` for the design note.
   keeperhub?: KeeperHubMarketplaceConfig;
+  /// Optional — when set, the orchestrator gates the oracle payment on
+  /// an ERC-7715 spend-cap check. Skipped (fail-open) if absent.
+  spendCap?: Address;
 }
 
 const ORACLE_PAYMENT_ATOMIC = 100_000n; // 0.1 USDC at 6 decimals
@@ -184,10 +188,26 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     };
   };
 
+  // Spend-cap pre-flight gate. Closure captures `baseAccount.address` as
+  // the capped account so the orchestrator stays wallet-agnostic. When
+  // the live config has no spendCap address, this is a no-op fail-open
+  // check (matches the mocked-mode default).
+  const checkSpendCapDep: CrossAgentDemoDeps['checkSpendCap'] = async ({ amount, enforce }) =>
+    checkSpendCap({
+      spendCapAddress: cfg.spendCap ?? null,
+      account: baseAccount.address,
+      asset: cfg.usdc,
+      amount,
+      publicClient: basePub,
+      walletClient: baseWallet,
+      enforce,
+    });
+
   return {
     deps: {
       settleOraclePayment,
       auditDeps,
+      checkSpendCap: checkSpendCapDep,
     },
     auditOptions: {
       apiKey: cfg.zgRouterKey,
@@ -240,6 +260,9 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
           marketplaceSlug: process.env.KH_MARKETPLACE_SLUG,
           baseUrl: process.env.KEEPERHUB_API_URL,
         }
+      : undefined,
+    spendCap: process.env.SPEND_CAP_ADDRESS
+      ? (needHex('SPEND_CAP_ADDRESS', 40) as unknown as Address)
       : undefined,
   };
 }

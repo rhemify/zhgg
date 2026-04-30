@@ -16,6 +16,8 @@ import {
 } from '@zhgg/workflow';
 
 export type TranscriptStepName =
+  | 'oracle.spend_cap.check'
+  | 'oracle.spend_cap.exceeded'
   | 'oracle.payment.request'
   | 'oracle.payment.settle'
   | 'oracle.query.start'
@@ -50,6 +52,15 @@ export interface CrossAgentTranscript {
   auditError: string | null;
 }
 
+export interface SpendCapCheckResult {
+  ok: boolean;
+  reason?: string;
+  remaining?: bigint;
+  requested?: bigint;
+  enforced?: boolean;
+  spendTx?: `0x${string}`;
+}
+
 export interface CrossAgentDemoDeps {
   /// Settle a payment for the oracle leg. Returns null if settlement is
   /// disabled in this run (e.g. dry-run mode).
@@ -57,6 +68,10 @@ export interface CrossAgentDemoDeps {
   /// audit's runtime — injected so the orchestrator never imports inferZG /
   /// postReceipt directly.
   auditDeps: AuditDeps;
+  /// Optional ERC-7715 spend-cap pre-flight gate. When provided, called
+  /// BEFORE `settleOraclePayment` to fail-closed if the caller's daily
+  /// USDC budget is exhausted. Step 2 of the always-active loop.
+  checkSpendCap?: (args: { amount: bigint; enforce: boolean }) => Promise<SpendCapCheckResult>;
 }
 
 export interface CrossAgentDemoOpts {
@@ -113,6 +128,40 @@ export async function runCrossAgentDemo(
     },
   });
   emit('oracle.payment.request', { amount: requirements.accepts[0]?.amount ?? null });
+
+  // 1.5 Pre-flight ERC-7715 spend-cap gate (Step 2 of the always-active
+  //     loop). Read-only by default; live mode can flip enforce=true to
+  //     atomically debit the cap so two concurrent runs can't both pass
+  //     the read and double-spend. Fail-closed BEFORE money moves.
+  if (deps.checkSpendCap) {
+    const amountAtomic = BigInt(opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC);
+    const enforce =
+      (opts.auditOptions as Parameters<typeof runAudit>[2] & { enforceSpendCap?: boolean })
+        .enforceSpendCap === true;
+    const capResult = await deps.checkSpendCap({ amount: amountAtomic, enforce });
+    if (!capResult.ok) {
+      emit('oracle.spend_cap.exceeded', {
+        reason: capResult.reason ?? 'unknown',
+        remaining: capResult.remaining?.toString() ?? null,
+        requested: capResult.requested?.toString() ?? null,
+      });
+      return {
+        steps,
+        oraclePaymentTx: null,
+        oracleResponse: { ok: false, error: { kind: 'unknown_topic', topic: opts.oracleTopic } },
+        auditReport: null,
+        auditReceiptTx: null,
+        totalCostUSD: 0,
+        refundable: false,
+        auditError: `spend cap blocked: ${capResult.reason ?? 'unknown'}`,
+      };
+    }
+    emit('oracle.spend_cap.check', {
+      enforced: capResult.enforced ?? false,
+      remaining: capResult.remaining?.toString() ?? null,
+      spendTx: capResult.spendTx ?? null,
+    });
+  }
 
   // 2. Settle oracle payment via injected dep. Replay protection lives one
   // layer down (the verifier-side caller wraps `verifyPayment` with the
