@@ -8,6 +8,14 @@ export type {
 } from './adapters/zg-router.js';
 
 export { buildFeedbackJson, postReceipt } from './erc8004.js';
+export { canonicalizeAuditPayload, writeAuditLog } from './storage-log.js';
+export type {
+  AuditLogPayload,
+  Storage0GClient,
+  StorageError,
+  WriteAuditLogOptions,
+  WriteAuditLogSuccess,
+} from './storage-log.js';
 export type {
   Erc8004Client,
   FeedbackJsonInput,
