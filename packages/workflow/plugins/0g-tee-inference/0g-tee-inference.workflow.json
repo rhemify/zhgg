@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "exportedAt": "2026-04-30T00:00:00.000Z",
+  "workflow": {
+    "name": "0G TEE Inference",
+    "description": "Run an LLM prompt inside a 0G Compute TEE and receive the response together with a TEE attestation root for on-chain verification. Powered by zhgg's 0g-tee-inference plugin. Returns response text, attestation root, USD cost estimate, latency, and provider receipt id."
+  },
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger",
+      "position": { "x": 100, "y": 250 },
+      "data": {
+        "type": "trigger",
+        "label": "Manual",
+        "config": {
+          "triggerType": "Manual",
+          "inputSchema": {
+            "prompt": {
+              "type": "string",
+              "description": "Prompt text to send to the TEE-hosted model."
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional model id. Defaults to qwen3.6-plus. Allowed: qwen3.6-plus, glm-5-fp8."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "run-inference",
+      "type": "action",
+      "position": { "x": 400, "y": 250 },
+      "data": {
+        "type": "action",
+        "label": "Run TEE Inference",
+        "config": {
+          "actionType": "0g-tee-inference/run-inference",
+          "stepImportPath": "./steps/run-inference",
+          "prompt": "{{@trigger:Manual.prompt}}",
+          "model": "{{@trigger:Manual.model}}"
+        }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "trigger", "target": "run-inference" }
+  ],
+  "integrationBindings": [
+    {
+      "integrationType": "0g-tee-inference",
+      "credentialName": "0g-router",
+      "nodeIds": ["run-inference"]
+    }
+  ],
+  "marketplace": {
+    "slug": "0g-tee-inference",
+    "active": false,
+    "priceUsdc": "0.05",
+    "category": "ai",
+    "protocols": ["0g"],
+    "description": "Verifiable LLM inference inside a 0G TEE. Caller sends a prompt, receives the model response plus an attestation root anchoring the run on-chain. Useful for agents that need provable, tamper-evident model outputs (audits, on-chain governance memos, regulated workflows).",
+    "inputSchema": {
+      "prompt": {
+        "type": "string",
+        "description": "Prompt text to send to the TEE-hosted model."
+      },
+      "model": {
+        "type": "string",
+        "description": "Optional. qwen3.6-plus (default) or glm-5-fp8."
+      }
+    },
+    "outputSchema": {
+      "response": {
+        "source": "run-inference.response",
+        "type": "string",
+        "description": "Model response text."
+      },
+      "attestation_root": {
+        "source": "run-inference.attestation_root",
+        "type": "string",
+        "description": "TEE attestation root for on-chain verification."
+      },
+      "cost_usd": {
+        "source": "run-inference.cost_usd",
+        "type": "number",
+        "description": "Estimated USD cost of the call."
+      },
+      "latency_ms": {
+        "source": "run-inference.latency_ms",
+        "type": "number",
+        "description": "End-to-end latency in milliseconds."
+      }
+    }
+  }
+}
