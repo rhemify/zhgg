@@ -104,6 +104,20 @@ const SPEND_CAP_ABI = [
     ],
     outputs: [],
   },
+  {
+    type: 'function',
+    name: 'grantPermission',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'account', type: 'address' },
+      { name: 'asset', type: 'address' },
+      { name: 'permissionId', type: 'bytes32' },
+      { name: 'maxPerPeriod', type: 'uint128' },
+      { name: 'periodLength', type: 'uint64' },
+      { name: 'expiresAt', type: 'uint64' },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 // ─── Step inputs ────────────────────────────────────────────────────────
@@ -142,6 +156,12 @@ export interface GrantSpendCapArgs {
   periodLength: bigint;
   /// Expiry as unix seconds; 0 = never.
   expiresAt: bigint;
+  /// Optional ERC-7715 permission scope. When omitted, falls back to
+  /// the legacy default bucket (`bytes32(0)`). Use a content-derived
+  /// id (e.g. `keccak256("zhgg.audit.v1")`) to scope this cap to a
+  /// single workflow so a high-volume oracle workflow can't drain
+  /// caps reserved for low-stakes audits.
+  permissionId?: Hex;
   chainId?: number;
 }
 
@@ -209,17 +229,32 @@ export async function grantSpendCap(
   args: GrantSpendCapArgs
 ): Promise<Result<{ txHash: Hex }, MintError>> {
   try {
+    // When the caller specifies a permissionId, route through the
+    // ERC-7715-aligned `grantPermission` function so the cap is scoped
+    // to that workflow. Omitting the field keeps the legacy
+    // single-bucket behavior — the contract treats `permissionId == 0`
+    // as the default bucket so old `grant` callers don't drift.
+    const useScoped = args.permissionId !== undefined;
     const { txHash } = await executor.call<void>({
       address: args.spendCap,
       abi: SPEND_CAP_ABI,
-      functionName: 'grant',
-      args: [
-        args.account,
-        args.asset,
-        args.maxPerPeriod,
-        args.periodLength,
-        args.expiresAt,
-      ],
+      functionName: useScoped ? 'grantPermission' : 'grant',
+      args: useScoped
+        ? [
+            args.account,
+            args.asset,
+            args.permissionId!,
+            args.maxPerPeriod,
+            args.periodLength,
+            args.expiresAt,
+          ]
+        : [
+            args.account,
+            args.asset,
+            args.maxPerPeriod,
+            args.periodLength,
+            args.expiresAt,
+          ],
       chainId: args.chainId,
     });
     return { ok: true, value: { txHash } };

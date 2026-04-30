@@ -14,6 +14,7 @@ import {
   type SettleOutput,
   type PaymentRequirements,
 } from '@zhgg/workflow';
+import { keccak256, toHex } from 'viem';
 
 export type TranscriptStepName =
   | 'oracle.spend_cap.check'
@@ -74,8 +75,14 @@ export interface CrossAgentDemoDeps {
   auditDeps: AuditDeps;
   /// Optional ERC-7715 spend-cap pre-flight gate. When provided, called
   /// BEFORE `settleOraclePayment` to fail-closed if the caller's daily
-  /// USDC budget is exhausted. Step 2 of the always-active loop.
-  checkSpendCap?: (args: { amount: bigint; enforce: boolean }) => Promise<SpendCapCheckResult>;
+  /// USDC budget is exhausted. Step 2 of the always-active loop. The
+  /// orchestrator passes a `permissionId` derived from the oracle topic
+  /// so each workflow scopes against an independent cap.
+  checkSpendCap?: (args: {
+    amount: bigint;
+    enforce: boolean;
+    permissionId: `0x${string}`;
+  }) => Promise<SpendCapCheckResult>;
   /// Step 1 — read iNFT capability manifest before any external call.
   readCapabilities?: (
     tokenId: bigint
@@ -169,7 +176,16 @@ export async function runCrossAgentDemo(
     const enforce =
       (opts.auditOptions as Parameters<typeof runAudit>[2] & { enforceSpendCap?: boolean })
         .enforceSpendCap === true;
-    const capResult = await deps.checkSpendCap({ amount: amountAtomic, enforce });
+    // Per-workflow ERC-7715 scope. Hashing the oracle topic gives every
+    // workflow a stable, content-derived `permissionId` so the user
+    // can grant separate budgets per workflow without orchestrator-side
+    // bookkeeping.
+    const permissionId = keccak256(toHex(`zhgg.oracle.${opts.oracleTopic}.v1`));
+    const capResult = await deps.checkSpendCap({
+      amount: amountAtomic,
+      enforce,
+      permissionId,
+    });
     if (!capResult.ok) {
       emit('oracle.spend_cap.exceeded', {
         reason: capResult.reason ?? 'unknown',

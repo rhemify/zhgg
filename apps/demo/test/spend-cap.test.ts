@@ -161,4 +161,88 @@ describe('checkSpendCap', () => {
       })
     ).rejects.toThrow(/walletClient.account === account/);
   });
+
+  // ----- ERC-7715 per-workflow scoping -----
+
+  const PERM_AUDIT =
+    '0x1111111111111111111111111111111111111111111111111111111111111111' as const;
+
+  it('routes to permissionOf when permissionId is supplied', async () => {
+    const publicClient = mockPublicClient({
+      maxPerPeriod: 100n,
+      remaining: 50n,
+      revoked: false,
+    });
+    const result = await checkSpendCap({
+      spendCapAddress: SPEND_CAP,
+      account: ACCOUNT,
+      asset: ASSET,
+      amount: 25n,
+      publicClient,
+      permissionId: PERM_AUDIT,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.remaining).toBe(25n);
+
+    // Verify the call went through `permissionOf` with the 3rd arg being
+    // the permissionId — proving the scoped path was taken.
+    const readCall = (publicClient.readContract.mock.calls as unknown as unknown[][])[0]![0] as {
+      functionName: string;
+      args: readonly unknown[];
+    };
+    expect(readCall.functionName).toBe('permissionOf');
+    expect(readCall.args[2]).toBe(PERM_AUDIT);
+  });
+
+  it('routes to capOf when permissionId is omitted (legacy path)', async () => {
+    const publicClient = mockPublicClient({
+      maxPerPeriod: 100n,
+      remaining: 50n,
+      revoked: false,
+    });
+    await checkSpendCap({
+      spendCapAddress: SPEND_CAP,
+      account: ACCOUNT,
+      asset: ASSET,
+      amount: 25n,
+      publicClient,
+      // no permissionId
+    });
+    const readCall = (publicClient.readContract.mock.calls as unknown as unknown[][])[0]![0] as {
+      functionName: string;
+      args: readonly unknown[];
+    };
+    expect(readCall.functionName).toBe('capOf');
+    expect(readCall.args.length).toBe(2); // (account, asset) only
+  });
+
+  it('enforce=true with permissionId calls spendPermission', async () => {
+    const publicClient = mockPublicClient({
+      maxPerPeriod: 100n,
+      remaining: 100n,
+      revoked: false,
+    });
+    const walletClient = mockWalletClient();
+    const result = await checkSpendCap({
+      spendCapAddress: SPEND_CAP,
+      account: ACCOUNT,
+      asset: ASSET,
+      amount: 30n,
+      publicClient,
+      walletClient,
+      enforce: true,
+      permissionId: PERM_AUDIT,
+    });
+    expect(result.ok).toBe(true);
+
+    // Two simulateContract calls would happen if the legacy path were
+    // taken; with scoping we expect exactly one (the spendPermission
+    // simulation) — and its functionName must be `spendPermission`.
+    const simCall = (publicClient.simulateContract.mock.calls as unknown as unknown[][])[0]![0] as {
+      functionName: string;
+      args: readonly unknown[];
+    };
+    expect(simCall.functionName).toBe('spendPermission');
+    expect(simCall.args[2]).toBe(PERM_AUDIT);
+  });
 });

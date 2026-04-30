@@ -221,7 +221,11 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
   // the capped account so the orchestrator stays wallet-agnostic. When
   // the live config has no spendCap address, this is a no-op fail-open
   // check (matches the mocked-mode default).
-  const checkSpendCapDep: CrossAgentDemoDeps['checkSpendCap'] = async ({ amount, enforce }) =>
+  const checkSpendCapDep: CrossAgentDemoDeps['checkSpendCap'] = async ({
+    amount,
+    enforce,
+    permissionId,
+  }) =>
     checkSpendCap({
       spendCapAddress: cfg.spendCap ?? null,
       account: baseAccount.address,
@@ -230,6 +234,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       publicClient: basePub,
       walletClient: baseWallet,
       enforce,
+      permissionId,
     });
 
   // Loop helpers — Steps 1, 3, 9, 10. Each fails-open (returns

@@ -14,7 +14,17 @@ import { parseAbi, type Address, type Hex } from 'viem';
 const SPEND_CAP_ABI = parseAbi([
   'function capOf(address account, address asset) view returns (uint128 maxPerPeriod, uint128 remaining, uint64 periodLength, uint64 currentPeriodStart, uint64 expiresAt, bool revoked, address owner)',
   'function spend(address account, address asset, uint128 amount)',
+  'function permissionOf(address account, address asset, bytes32 permissionId) view returns (uint128 maxPerPeriod, uint128 remaining, uint64 periodLength, uint64 currentPeriodStart, uint64 expiresAt, bool revoked, address owner)',
+  'function spendPermission(address account, address asset, bytes32 permissionId, uint128 amount)',
 ]);
+
+/// Default ERC-7715 bucket — when no `permissionId` is supplied to the
+/// check, the call routes through the legacy `capOf` / `spend` API
+/// which the contract treats as `permissionId == bytes32(0)`. New
+/// callers should use a content-derived id (e.g.
+/// `keccak256("zhgg.audit.v1")`) for per-workflow isolation.
+const DEFAULT_PERMISSION_ID: Hex =
+  '0x0000000000000000000000000000000000000000000000000000000000000000';
 
 export type SpendCapCheckReason =
   | 'cap_not_found'
@@ -54,6 +64,11 @@ export interface CheckSpendCapArgs {
   /// spend. When false (default), only reads `capOf()` — racy but safe
   /// for offline / mock runs.
   enforce?: boolean;
+  /// Optional ERC-7715 permission scope. When omitted, falls back to
+  /// the legacy default bucket. Pass a content-derived id (e.g.
+  /// `keccak256("zhgg.audit.v1")`) to scope this check to a specific
+  /// workflow so spends in one workflow don't drain caps in another.
+  permissionId?: Hex;
 }
 
 export async function checkSpendCap(
@@ -67,6 +82,7 @@ export async function checkSpendCap(
     publicClient,
     walletClient,
     enforce = false,
+    permissionId,
   } = args;
 
   // No SpendCap configured → fail-open. Mock-mode default.
@@ -74,12 +90,27 @@ export async function checkSpendCap(
     return { ok: true, remaining: 0n, enforced: false };
   }
 
-  const capState = (await publicClient.readContract({
-    address: spendCapAddress,
-    abi: SPEND_CAP_ABI,
-    functionName: 'capOf',
-    args: [account, asset],
-  })) as readonly [bigint, bigint, bigint, bigint, bigint, boolean, Address];
+  // Branch on whether the caller scoped to a specific permission. When
+  // they did, route through the ERC-7715-aligned `permissionOf` /
+  // `spendPermission` pair so concurrent workflows on the same
+  // (account, asset) pair stay isolated. Default-bucket callers keep
+  // hitting the legacy `capOf` / `spend` for storage continuity.
+  const useScoped = permissionId !== undefined;
+  const effectivePermissionId = permissionId ?? DEFAULT_PERMISSION_ID;
+
+  const capState = (useScoped
+    ? await publicClient.readContract({
+        address: spendCapAddress,
+        abi: SPEND_CAP_ABI,
+        functionName: 'permissionOf',
+        args: [account, asset, effectivePermissionId],
+      })
+    : await publicClient.readContract({
+        address: spendCapAddress,
+        abi: SPEND_CAP_ABI,
+        functionName: 'capOf',
+        args: [account, asset],
+      })) as readonly [bigint, bigint, bigint, bigint, bigint, boolean, Address];
 
   const [maxPerPeriod, remaining, , , , revoked] = capState;
 
@@ -108,13 +139,21 @@ export async function checkSpendCap(
   }
 
   try {
-    const sim = await publicClient.simulateContract({
-      account: walletClient.account,
-      address: spendCapAddress,
-      abi: SPEND_CAP_ABI,
-      functionName: 'spend',
-      args: [account, asset, amount],
-    });
+    const sim = useScoped
+      ? await publicClient.simulateContract({
+          account: walletClient.account,
+          address: spendCapAddress,
+          abi: SPEND_CAP_ABI,
+          functionName: 'spendPermission',
+          args: [account, asset, effectivePermissionId, amount],
+        })
+      : await publicClient.simulateContract({
+          account: walletClient.account,
+          address: spendCapAddress,
+          abi: SPEND_CAP_ABI,
+          functionName: 'spend',
+          args: [account, asset, amount],
+        });
     const spendTx = (await walletClient.writeContract(sim.request)) as Hex;
     await publicClient.waitForTransactionReceipt({ hash: spendTx });
     return { ok: true, remaining: remaining - amount, enforced: true, spendTx };
