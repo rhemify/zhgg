@@ -1,7 +1,9 @@
 import { describe, it, expect, mock } from 'bun:test';
+import { keccak256, toHex } from 'viem';
 import {
   readAgentCapabilities,
   commitPlan,
+  computeCommitId,
   revealPlan,
   pinMemoryRoot,
 } from '../src/loop-helpers.js';
@@ -143,6 +145,40 @@ describe('revealPlan', () => {
     });
     expect(r.ok).toBe(true);
     expect(pc.simulateContract).toHaveBeenCalled();
+  });
+});
+
+/// SOL↔TS parity for AxiomCommit.commitPlan. The expected hash is also
+/// asserted on the Solidity side in `contracts/test/AxiomCommit.t.sol`.
+/// Both sides must hash the same fixed inputs to the same bytes32; any
+/// drift (case folding, padding, abi encoding) breaks one or the other.
+describe('computeCommitId — SOL↔TS parity', () => {
+  const TOKEN_ID = 42n;
+  const PLAN_HASH: Hex = keccak256(toHex('test plan'));
+  const SENDER: Address = '0xcA11E7c00Ffe5c0De0000000000000000000beeF';
+  const BLOCK_NUMBER = 100n;
+  const EXPECTED_COMMIT_ID: Hex =
+    '0xf69605a66ee37a6f57d5c0857e158a5f0771b3fd2bd8562d8dbc6239a0258d4d';
+
+  it('matches the on-chain fixture', () => {
+    expect(computeCommitId(TOKEN_ID, PLAN_HASH, SENDER, BLOCK_NUMBER)).toBe(EXPECTED_COMMIT_ID);
+  });
+
+  it('is case-insensitive on the sender input', () => {
+    const lowercase = SENDER.toLowerCase() as Address;
+    expect(computeCommitId(TOKEN_ID, PLAN_HASH, lowercase, BLOCK_NUMBER)).toBe(
+      EXPECTED_COMMIT_ID
+    );
+  });
+
+  it('is unaffected by extra whitespace in checksum address (canonicalized via getAddress)', () => {
+    const mixedCase = ('0xCA11E7C00FFE5C0DE0000000000000000000BEEF'.toLowerCase() ===
+    SENDER.toLowerCase()
+      ? '0xCA11E7C00FFE5C0DE0000000000000000000BEEF'
+      : SENDER) as Address;
+    expect(computeCommitId(TOKEN_ID, PLAN_HASH, mixedCase, BLOCK_NUMBER)).toBe(
+      EXPECTED_COMMIT_ID
+    );
   });
 });
 

@@ -114,4 +114,32 @@ contract AxiomCommitTest is Test {
         vm.expectRevert(AxiomCommit.EmptyPlan.selector);
         axiom.revealPlan(1, id, "", RESULT);
     }
+
+    /// SOL↔TS parity: locks the on-chain commitId derivation against a
+    /// fixture hardcoded in `apps/demo/test/loop-helpers.test.ts`. Any
+    /// drift between the Solidity `abi.encodePacked` and viem's
+    /// `encodePacked` (case folding, length padding, type widths) flips
+    /// this assertion.
+    function test_commitId_matches_ts_parity_fixture() public {
+        bytes memory parityPlan = bytes("test plan");
+        bytes32 parityPlanHash = keccak256(parityPlan);
+        address paritySender = 0xcA11E7c00Ffe5c0De0000000000000000000beeF;
+        uint256 parityBlock = 100;
+
+        // Fixture target — must equal the AXIOM_COMMIT_ID constant in the
+        // TS test. If you change inputs here, update both sides.
+        bytes32 expected = 0xf69605a66ee37a6f57d5c0857e158a5f0771b3fd2bd8562d8dbc6239a0258d4d;
+
+        bytes32 actual = keccak256(
+            abi.encodePacked(uint256(42), parityPlanHash, paritySender, parityBlock)
+        );
+        assertEq(actual, expected, "SOL commitId drift from TS fixture");
+
+        // Also verify the contract produces the same hash from the same
+        // inputs by rolling block + prank to match.
+        vm.roll(parityBlock);
+        vm.prank(paritySender);
+        bytes32 contractId = axiom.commitPlan(42, parityPlanHash);
+        assertEq(contractId, expected, "AxiomCommit.commitPlan drift");
+    }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { encodeFunctionData, parseAbi } from 'viem';
+import { encodeFunctionData, keccak256, parseAbi } from 'viem';
 import {
   ERC8021_MAGIC,
   appendSuffix,
@@ -70,6 +70,23 @@ describe('detectSuffix', () => {
       expect(det.codes).toEqual(['zhgg']);
       expect(det.schemaId).toBe(0);
     }
+  });
+});
+
+/// SOL↔TS parity: the bytes the TS encoder produces and the keccak of
+/// those bytes must match the same fixture asserted in
+/// `contracts/test/FeeSplitter.t.sol::test_erc8021_suffixTag_ts_parity_fixture`.
+describe('encodeSchema0Suffix — SOL↔TS parity', () => {
+  it('produces the same raw suffix bytes as the on-chain library', () => {
+    const expectedSuffix =
+      '0x7a6867672c626173656170700c0080218021802180218021802180218021';
+    expect(encodeSchema0Suffix(['zhgg', 'baseapp'])).toBe(expectedSuffix);
+  });
+
+  it('hashes to the on-chain suffixTag fixture', () => {
+    const expectedTag =
+      '0x93f18506612d8338d72a3ca6bef0482ea7f37bcddb5c4e4fb708cd0d99da7504';
+    expect(keccak256(encodeSchema0Suffix(['zhgg', 'baseapp']))).toBe(expectedTag);
   });
 });
 

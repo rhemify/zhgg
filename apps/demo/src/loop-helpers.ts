@@ -12,7 +12,7 @@
 /// demos run untouched. Errors are returned as `Result<T, E>` to mirror
 /// the pattern in `packages/workflow/src/storage-log.ts`.
 
-import { keccak256, parseAbi, toHex, type Address, type Hex } from 'viem';
+import { encodePacked, getAddress, keccak256, parseAbi, toHex, type Address, type Hex } from 'viem';
 
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
@@ -198,18 +198,23 @@ export async function pinMemoryRoot(
 // helpers
 // ---------------------------------------------------------------------
 
-function computeCommitId(
+/// Mirror of `AxiomCommit.commitPlan`'s on-chain commitId derivation:
+/// `keccak256(abi.encodePacked(uint256 tokenId, bytes32 planHash, address sender, uint256 blockNumber))`.
+/// `getAddress` canonicalizes the input to a checksum-checked 20-byte
+/// hex string so non-canonical inputs (lowercase, padded, etc.) all
+/// hash to the same value as the on-chain encoding.
+export function computeCommitId(
   tokenId: bigint,
   planHash: Hex,
   sender: Address,
   blockNumber: bigint
 ): Hex {
-  // keccak256(abi.encodePacked(uint256, bytes32, address, uint256))
-  const tid = tokenId.toString(16).padStart(64, '0');
-  const ph = planHash.slice(2);
-  const addr = sender.slice(2).toLowerCase();
-  const bn = blockNumber.toString(16).padStart(64, '0');
-  return keccak256(`0x${tid}${ph}${addr}${bn}` as Hex);
+  return keccak256(
+    encodePacked(
+      ['uint256', 'bytes32', 'address', 'uint256'],
+      [tokenId, planHash, getAddress(sender), blockNumber]
+    )
+  );
 }
 
 function errMsg(e: unknown): string {

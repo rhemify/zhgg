@@ -270,6 +270,51 @@ contract FeeSplitterTest is Test {
         assertEq(codes[0], "zhgg");
         assertEq(codes[1], "baseapp");
     }
+
+    /// SOL↔TS parity: the bytes a TS encoder produces for a fixed
+    /// codes-set must hash to the same suffixTag as the on-chain
+    /// `keccak256(suffix)`. Locked against the same fixture in
+    /// `apps/demo/test/erc8021-suffix.test.ts`.
+    function test_erc8021_suffixTag_ts_parity_fixture() public {
+        // Fixture: codes = ["zhgg","baseapp"], schemaId = 0.
+        // Expected raw suffix (29 bytes):
+        //   "zhgg,baseapp" (12) || 0x0c (codesLen) || 0x00 (schemaId) || MAGIC (16)
+        bytes memory expectedSuffix = hex"7a6867672c626173656170700c0080218021802180218021802180218021";
+        bytes32 expectedTag = 0x93f18506612d8338d72a3ca6bef0482ea7f37bcddb5c4e4fb708cd0d99da7504;
+
+        assertEq(keccak256(expectedSuffix), expectedTag, "raw suffix hash drift");
+
+        // Build a calldata buffer that ends with this suffix and verify
+        // the library extracts the same tag from it.
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 100e6, agentOwner)
+        );
+        bytes memory data = bytes.concat(call, expectedSuffix);
+
+        vm.recordLogs();
+        vm.prank(payer);
+        (bool ok,) = address(splitter).call(data);
+        assertTrue(ok, "split call failed");
+
+        // Walk the logs for the Split event and read its attributionTag.
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 emittedTag;
+        for (uint256 i = 0; i < logs.length; ++i) {
+            // Split(address,address,uint256,uint256,uint256,uint256,uint256,bytes32)
+            if (
+                logs[i].topics[0]
+                    == keccak256(
+                        "Split(address,address,uint256,uint256,uint256,uint256,uint256,bytes32)"
+                    )
+            ) {
+                (,,,,, emittedTag) =
+                    abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, bytes32));
+                break;
+            }
+        }
+        assertEq(emittedTag, expectedTag, "splitter emitted wrong attributionTag");
+    }
 }
 
 /// Minimal contract that rejects ETH unless explicitly enabled.
