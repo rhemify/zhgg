@@ -16,6 +16,14 @@ export type {
   WriteAuditLogOptions,
   WriteAuditLogSuccess,
 } from './storage-log.js';
+
+export { verifyTeeAttestation } from './tee-attestation.js';
+export type {
+  AttestError,
+  TeeAttestationEnvelope,
+  VerifiedAttestation,
+  VerifyOptions as TeeVerifyOptions,
+} from './tee-attestation.js';
 export type {
   Erc8004Client,
   FeedbackJsonInput,
