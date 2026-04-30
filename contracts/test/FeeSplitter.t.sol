@@ -2,7 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
+import {ERC8021Suffix} from "../src/lib/ERC8021Suffix.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockUSDC is ERC20 {
@@ -174,6 +176,99 @@ contract FeeSplitterTest is Test {
         assertEq(zhgg.balance,    0.05 ether);
         assertEq(commons.balance, 0.05 ether);
         assertEq(splitter.pendingNative(address(badOwner)), 0.85 ether);
+    }
+
+    // ----- ERC-8021 calldata-suffix path -----
+
+    bytes16 internal constant MAGIC = 0x80218021802180218021802180218021;
+
+    /// @dev Build a Schema 0 suffix for `codesCsv` (comma-joined ASCII).
+    function _suffix0(string memory codesCsv) internal pure returns (bytes memory) {
+        bytes memory codes = bytes(codesCsv);
+        require(codes.length <= 255, "codes too long");
+        return abi.encodePacked(codes, uint8(codes.length), uint8(0), MAGIC);
+    }
+
+    function test_erc8021_detectsSuffixAndSplits() public {
+        bytes memory suffix = _suffix0("zhgg,baseapp");
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 100e6, agentOwner)
+        );
+        bytes memory data = bytes.concat(call, suffix);
+
+        vm.prank(payer);
+        (bool ok,) = address(splitter).call(data);
+        assertTrue(ok, "call failed");
+
+        assertEq(usdc.balanceOf(agentOwner), 85e6);
+        assertEq(usdc.balanceOf(keeper),     5e6);
+        assertEq(usdc.balanceOf(zhgg),       5e6);
+        assertEq(usdc.balanceOf(commons),    5e6);
+    }
+
+    function test_erc8021_revertsWhenSuffixMissing() public {
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 100e6, agentOwner)
+        );
+        vm.prank(payer);
+        (bool ok, bytes memory ret) = address(splitter).call(call);
+        assertFalse(ok);
+        assertEq(bytes4(ret), FeeSplitter.MissingERC8021Suffix.selector);
+    }
+
+    function test_erc8021_revertsWhenMagicCorrupted() public {
+        bytes memory bad = _suffix0("zhgg");
+        bad[bad.length - 1] = 0x00; // flip last byte of magic
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 100e6, agentOwner)
+        );
+        vm.prank(payer);
+        (bool ok,) = address(splitter).call(bytes.concat(call, bad));
+        assertFalse(ok);
+    }
+
+    function test_erc8021_emitsAttributionEvent() public {
+        bytes memory suffix = _suffix0("zhgg");
+        bytes memory call = abi.encodeCall(
+            FeeSplitter.splitERC20Erc8021,
+            (usdc, 100e6, agentOwner)
+        );
+        bytes memory data = bytes.concat(call, suffix);
+
+        vm.recordLogs();
+        vm.prank(payer);
+        (bool ok,) = address(splitter).call(data);
+        assertTrue(ok);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool sawAttribution;
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] == keccak256("ERC8021Attribution(bytes32,string[],uint8)")) {
+                sawAttribution = true;
+                break;
+            }
+        }
+        assertTrue(sawAttribution, "no attribution event");
+    }
+
+    function test_erc8021_legacyTagPathStillWorks() public {
+        // Back-compat: splitERC20WithTag must still work when caller has not
+        // migrated to the suffix flow.
+        bytes32 tag = bytes32("legacy-app-code");
+        vm.prank(payer);
+        splitter.splitERC20WithTag(usdc, 100e6, agentOwner, tag);
+        assertEq(usdc.balanceOf(agentOwner), 85e6);
+    }
+
+    function test_erc8021_libraryDecodesCodes() public pure {
+        bytes memory body = abi.encodePacked(bytes("zhgg,baseapp"), uint8(12));
+        string[] memory codes = ERC8021Suffix.decodeSchema0(body);
+        assertEq(codes.length, 2);
+        assertEq(codes[0], "zhgg");
+        assertEq(codes[1], "baseapp");
     }
 }
 

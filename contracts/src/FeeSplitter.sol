@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC8021Suffix} from "./lib/ERC8021Suffix.sol";
 
 /// @title  FeeSplitter — 4-way fee distribution for zhgg agents
 /// @notice Routes every payment received by an agent to four recipients in a
@@ -79,12 +80,21 @@ contract FeeSplitter is ReentrancyGuard {
     /// @notice Emitted when a recipient pulls a previously-escrowed leg.
     event NativeLegClaimed(address indexed recipient, uint256 amount);
 
+    /// @notice Emitted when an ERC-8021 calldata suffix is detected on a
+    ///         split call. `suffixTag` is keccak256 of the raw suffix
+    ///         bytes (body ‖ schemaId ‖ magic) — content-addressable, so
+    ///         off-chain indexers can re-derive it from `tx.input` without
+    ///         decoding the body. `codes` is the decoded Schema 0 list,
+    ///         empty for non-zero schemaIds we don't decode on-chain.
+    event ERC8021Attribution(bytes32 indexed suffixTag, string[] codes, uint8 schemaId);
+
     error ZeroAddress();
     error ZeroAmount();
     error AmountBelowMinimum(uint256 amount, uint256 minimum);
     error InvalidSplitConfig();
     error NativeTransferFailed(address to, uint256 amount);
     error NoPendingNative();
+    error MissingERC8021Suffix();
 
     /// @param keeperhubRecipient_ KeeperHub treasury address
     /// @param zhggRecipient_      zhgg treasury address
@@ -130,6 +140,39 @@ contract FeeSplitter is ReentrancyGuard {
         nonReentrant
     {
         _splitERC20(asset, totalAmount, agentOwner, attributionTag);
+    }
+
+    /// @notice Split with ERC-8021 attribution read DIRECTLY from msg.data.
+    /// @dev    Caller must append the canonical 8021 suffix to the calldata
+    ///         AFTER the abi-encoded args (use the TS encoder in
+    ///         apps/demo/src/erc8021-suffix.ts via `walletClient.sendTransaction`
+    ///         — viem's `writeContract` strips trailing bytes). The
+    ///         function reverts if the marker is absent so callers don't
+    ///         silently lose attribution. The legacy `splitERC20WithTag`
+    ///         is preserved for the tag-as-arg flow.
+    ///         The 85/5/5/5 distribution is identical to `splitERC20`;
+    ///         the only difference is `attributionTag` becomes
+    ///         `keccak256(suffix)` so off-chain indexers can verify it
+    ///         against the raw tx input.
+    function splitERC20Erc8021(IERC20 asset, uint256 totalAmount, address agentOwner)
+        external
+        nonReentrant
+    {
+        (bool found, uint8 schemaId, bytes memory body) = ERC8021Suffix.detect(msg.data);
+        if (!found) revert MissingERC8021Suffix();
+
+        bytes32 tag = ERC8021Suffix.suffixTag(msg.data);
+
+        if (schemaId == 0) {
+            string[] memory codes = ERC8021Suffix.decodeSchema0(body);
+            emit ERC8021Attribution(tag, codes, 0);
+        } else {
+            // Other schemas are emitted with empty codes — full decoding
+            // is left to off-chain indexers per spec.
+            emit ERC8021Attribution(tag, new string[](0), schemaId);
+        }
+
+        _splitERC20(asset, totalAmount, agentOwner, tag);
     }
 
     function _splitERC20(IERC20 asset, uint256 totalAmount, address agentOwner, bytes32 attributionTag)
