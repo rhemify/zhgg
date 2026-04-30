@@ -13,17 +13,21 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { plugin as zgPlugin } from '../plugins/0g-tee-inference/index.js';
-import { buildRegistry, callTool, listTools, type PluginRegistry } from './registry.js';
+import { callTool, listTools, type PluginRegistry } from './registry.js';
 
 export interface CreateMcpServerOptions {
-  registry?: PluginRegistry;
+  /// Required. Caller decides which plugins to register — the workflow
+  /// package no longer eagerly imports any plugin folder, so consumers
+  /// don't pay for plugin tsconfig path mappings (`@/lib/*`) they don't
+  /// use. Standalone mode in this same file dynamically loads the
+  /// 0g-tee-inference plugin only when invoked directly.
+  registry: PluginRegistry;
   serverName?: string;
   serverVersion?: string;
 }
 
-export function createMcpServer(opts: CreateMcpServerOptions = {}): Server {
-  const registry = opts.registry ?? buildRegistry([zgPlugin]);
+export function createMcpServer(opts: CreateMcpServerOptions): Server {
+  const { registry } = opts;
   const server = new Server(
     {
       name: opts.serverName ?? 'zhgg-workflow',
@@ -133,24 +137,8 @@ export function createHttpHandler(opts: HttpHandlerOptions): (req: Request) => P
   };
 }
 
-// Standalone mode — start an HTTP server when invoked directly.
-// Bun's `import.meta.main` is true when this file is the entry point.
-if (import.meta.main) {
-  const port = Number(process.env.MCP_PORT ?? 7743);
-  // Auth: require a bearer token on /call so a process bound to localhost
-  // can't be exploited by other processes on the same box. /health and
-  // /tools are read-only and OK to leave open for liveness probes.
-  const authToken = process.env.MCP_AUTH_TOKEN;
-  if (!authToken) {
-    console.error('MCP_AUTH_TOKEN env var is required for /call');
-    process.exit(1);
-  }
-
-  const registry = buildRegistry([zgPlugin]);
-  const tools = listTools(registry);
-  const handler = createHttpHandler({ registry, authToken });
-
-  Bun.serve({ port, fetch: handler });
-  console.log(`zhgg-workflow MCP server listening on :${port}`);
-  console.log(`  tools: ${tools.map((t) => t.name).join(', ')}`);
-}
+// Standalone-mode entrypoint lives at `./standalone.ts` so library
+// consumers (`import { createMcpServer } from '@zhgg/workflow'`) never
+// transitively type-check the plugin folder, which uses path-mapped
+// `@/lib/*` imports that exist only in this package's tsconfig.
+// Run: `bun run packages/workflow/src/standalone.ts`

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
-    "dev": "bun run src/mcp-server.ts",
+    "dev": "bun run src/standalone.ts",
     "test": "bun test"
   },
   "dependencies": {
