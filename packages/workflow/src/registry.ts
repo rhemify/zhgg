@@ -6,7 +6,7 @@
 /// JSON schema generation: configFields[] is converted directly (no zod
 /// dependency). The structural shape is small enough to map cheaply.
 
-import type { Action, ConfigField, IntegrationPlugin } from '../plugins/0g-tee-inference/index.js';
+import type { Action, ConfigField, IntegrationPlugin } from './plugin-types.js';
 
 export interface RegisteredTool {
   pluginName: string;

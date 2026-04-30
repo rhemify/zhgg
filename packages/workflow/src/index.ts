@@ -43,5 +43,6 @@ export type {
   RegisteredTool,
   ToolDescriptor,
 } from './registry.js';
+export type { Action, ConfigField, IntegrationPlugin, OutputField } from './plugin-types.js';
 export { createMcpServer } from './mcp-server.js';
 export type { CreateMcpServerOptions } from './mcp-server.js';

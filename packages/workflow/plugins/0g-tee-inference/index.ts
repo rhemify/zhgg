@@ -3,45 +3,15 @@
 /// Drop-in mergeable into `KeeperHub/keeperhub/plugins/0g-tee-inference/`.
 /// Action steps live under `./steps/`; helpers live in `*-core.ts` files.
 /// Step files MUST NOT export helpers per KeeperHub plugin spec.
+///
+/// Plugin types live at `packages/workflow/src/plugin-types.ts`. When this
+/// folder is copied into KeeperHub via `cp -r`, swap the import to their
+/// real type module — structural typing makes the shape compatible.
 
 import { runInferenceStep } from './steps/run-inference.js';
+import type { Action, IntegrationPlugin } from '../../src/plugin-types.js';
 
-/// Minimal structural shape of `IntegrationPlugin` from KeeperHub. Their
-/// real type adds runtime metadata; structural typing makes our shape
-/// compatible when this folder is copied into their repo.
-export interface ConfigField {
-  key: string;
-  label: string;
-  type: 'string' | 'number' | 'secret' | 'boolean';
-  required?: boolean;
-  default?: string | number | boolean;
-  helpText?: string;
-}
-
-export interface OutputField {
-  key: string;
-  label: string;
-  type: 'string' | 'number' | 'boolean' | 'object';
-}
-
-export interface Action {
-  slug: string;
-  label: string;
-  description: string;
-  category: string;
-  stepFunction: ((input: unknown) => unknown) & { maxRetries?: number };
-  stepImportPath: string;
-  configFields: ConfigField[];
-  outputFields: OutputField[];
-}
-
-export interface IntegrationPlugin {
-  name: string;
-  displayName: string;
-  description: string;
-  version: string;
-  actions: Action[];
-}
+export type { Action, ConfigField, IntegrationPlugin, OutputField } from '../../src/plugin-types.js';
 
 // Security rule: re-running an inference call double-charges the user.
 // KeeperHub default retry is 3; we MUST set 0.
