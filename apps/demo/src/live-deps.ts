@@ -23,6 +23,12 @@ import type { AuditDeps } from '@zhgg/audit-agent';
 import type { CrossAgentDemoDeps } from './cross-agent.js';
 import { payViaKeeperHubMarketplace, type KeeperHubMarketplaceConfig } from './keeperhub-marketplace.js';
 import { checkSpendCap } from './spend-cap.js';
+import {
+  readAgentCapabilities,
+  commitPlan as axiomCommitFn,
+  revealPlan as axiomRevealFn,
+  pinMemoryRoot as pinMemoryRootFn,
+} from './loop-helpers.js';
 
 const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
@@ -68,6 +74,12 @@ export interface LiveDepsConfig {
   /// Optional — when set, the orchestrator gates the oracle payment on
   /// an ERC-7715 spend-cap check. Skipped (fail-open) if absent.
   spendCap?: Address;
+  /// Optional — when set, enables Step 1 (read capabilities) + Step 9
+  /// (memoryRoot pin). Address of the AgentNFT (ERC-7857) on 0G Galileo.
+  agentNft?: Address;
+  /// Optional — when set, enables Step 3 (AXIOM commit) + Step 10
+  /// (AXIOM reveal). Address of `AxiomCommit.sol` on 0G Galileo.
+  axiomCommit?: Address;
 }
 
 const ORACLE_PAYMENT_ATOMIC = 100_000n; // 0.1 USDC at 6 decimals
@@ -203,11 +215,71 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       enforce,
     });
 
+  // Loop helpers — Steps 1, 3, 9, 10. Each fails-open (returns
+  // `not_configured`) when its address env var is unset, so partial-live
+  // demos run without these without changing orchestrator behavior.
+  const readCapabilitiesDep: CrossAgentDemoDeps['readCapabilities'] = async (tokenId) => {
+    const r = await readAgentCapabilities({
+      agentNftAddress: cfg.agentNft ?? null,
+      tokenId,
+      publicClient: zgPub,
+    });
+    return r.ok
+      ? { ok: true, manifest: r.value }
+      : { ok: false, error: r.error.kind };
+  };
+
+  const axiomCommitDep: CrossAgentDemoDeps['axiomCommit'] = async ({ tokenId, plan }) => {
+    const r = await axiomCommitFn({
+      axiomAddress: cfg.axiomCommit ?? null,
+      tokenId,
+      plan,
+      publicClient: zgPub,
+      walletClient: zgWallet,
+    });
+    return r.ok
+      ? { ok: true, commitId: r.value.commitId, txHash: r.value.txHash }
+      : { ok: false, error: r.error.kind };
+  };
+
+  const axiomRevealDep: CrossAgentDemoDeps['axiomReveal'] = async ({
+    tokenId,
+    commitId,
+    plan,
+    result,
+  }) => {
+    const r = await axiomRevealFn({
+      axiomAddress: cfg.axiomCommit ?? null,
+      tokenId,
+      commitId,
+      plan,
+      result,
+      publicClient: zgPub,
+      walletClient: zgWallet,
+    });
+    return r.ok ? { ok: true, txHash: r.value.txHash } : { ok: false, error: r.error.kind };
+  };
+
+  const pinMemoryRootDep: CrossAgentDemoDeps['pinMemoryRoot'] = async ({ tokenId, rootHash }) => {
+    const r = await pinMemoryRootFn({
+      agentNftAddress: cfg.agentNft ?? null,
+      tokenId,
+      rootHash,
+      publicClient: zgPub,
+      walletClient: zgWallet,
+    });
+    return r.ok ? { ok: true, txHash: r.value.txHash } : { ok: false, error: r.error.kind };
+  };
+
   return {
     deps: {
       settleOraclePayment,
       auditDeps,
       checkSpendCap: checkSpendCapDep,
+      readCapabilities: readCapabilitiesDep,
+      axiomCommit: axiomCommitDep,
+      axiomReveal: axiomRevealDep,
+      pinMemoryRoot: pinMemoryRootDep,
     },
     auditOptions: {
       apiKey: cfg.zgRouterKey,
@@ -263,6 +335,12 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
       : undefined,
     spendCap: process.env.SPEND_CAP_ADDRESS
       ? (needHex('SPEND_CAP_ADDRESS', 40) as unknown as Address)
+      : undefined,
+    agentNft: process.env.AGENT_NFT_ADDRESS
+      ? (needHex('AGENT_NFT_ADDRESS', 40) as unknown as Address)
+      : undefined,
+    axiomCommit: process.env.AXIOM_COMMIT_ADDRESS
+      ? (needHex('AXIOM_COMMIT_ADDRESS', 40) as unknown as Address)
       : undefined,
   };
 }

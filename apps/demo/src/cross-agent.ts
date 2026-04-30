@@ -22,6 +22,10 @@ export type TranscriptStepName =
   | 'oracle.payment.settle'
   | 'oracle.query.start'
   | 'oracle.query.complete'
+  | 'audit.capabilities.read'
+  | 'audit.axiom.commit'
+  | 'audit.axiom.reveal'
+  | 'audit.memory_root.pin'
   | 'audit.start'
   | 'audit.complete'
   | 'audit.failed'
@@ -72,6 +76,33 @@ export interface CrossAgentDemoDeps {
   /// BEFORE `settleOraclePayment` to fail-closed if the caller's daily
   /// USDC budget is exhausted. Step 2 of the always-active loop.
   checkSpendCap?: (args: { amount: bigint; enforce: boolean }) => Promise<SpendCapCheckResult>;
+  /// Step 1 — read iNFT capability manifest before any external call.
+  readCapabilities?: (
+    tokenId: bigint
+  ) => Promise<{ ok: boolean; manifest?: `0x${string}`; error?: string }>;
+  /// Step 3 — pre-commit `keccak256(plan)` before runAudit. Hash-only
+  /// on-chain; the bytes are revealed at Step 10.
+  axiomCommit?: (args: {
+    tokenId: bigint;
+    plan: Uint8Array;
+  }) => Promise<{ ok: boolean; commitId?: `0x${string}`; txHash?: `0x${string}`; error?: string }>;
+  /// Step 10 — reveal plan + result after receipt post.
+  axiomReveal?: (args: {
+    tokenId: bigint;
+    commitId: `0x${string}`;
+    plan: Uint8Array;
+    result: Uint8Array;
+  }) => Promise<{ ok: boolean; txHash?: `0x${string}`; error?: string }>;
+  /// Step 9 — pin storage rootHash to iNFT memoryRoot.
+  pinMemoryRoot?: (args: {
+    tokenId: bigint;
+    rootHash: `0x${string}`;
+  }) => Promise<{ ok: boolean; txHash?: `0x${string}`; error?: string }>;
+  /// Step 8 — write canonical audit JSON to 0G Storage Log; returns
+  /// `rootHash` consumed by Step 9.
+  writeStorageLog?: (
+    report: AuditReport
+  ) => Promise<{ ok: boolean; rootHash?: `0x${string}`; error?: string }>;
 }
 
 export interface CrossAgentDemoOpts {
@@ -190,6 +221,38 @@ export async function runCrossAgentDemo(
     manifest = `${opts.target.manifest}\n\nRegulatory context: ${ctx}`;
   }
 
+  // 4.5 Step 1 — read iNFT capability manifest. Read-only, idempotent.
+  if (deps.readCapabilities) {
+    const cap = await deps.readCapabilities(opts.target.agentId);
+    emit('audit.capabilities.read', {
+      ok: cap.ok,
+      manifestLen: cap.manifest ? (cap.manifest.length - 2) / 2 : 0,
+      error: cap.error,
+    });
+  }
+
+  // 4.6 Step 3 — AXIOM pre-commit. The plan is the canonical intent the
+  //     agent has decided to execute, derived from the enriched manifest +
+  //     oracle context. Hash-only on chain; bytes revealed at Step 10.
+  let axiomCommitId: `0x${string}` | null = null;
+  let axiomPlanBytes: Uint8Array | null = null;
+  if (deps.axiomCommit) {
+    axiomPlanBytes = new TextEncoder().encode(
+      JSON.stringify({
+        agentId: opts.target.agentId.toString(),
+        manifest,
+        oracleTopic: opts.oracleTopic,
+      })
+    );
+    const c = await deps.axiomCommit({ tokenId: opts.target.agentId, plan: axiomPlanBytes });
+    if (c.ok && c.commitId) {
+      axiomCommitId = c.commitId;
+      emit('audit.axiom.commit', { commitId: c.commitId, txHash: c.txHash });
+    } else {
+      emit('audit.axiom.commit', { ok: false, error: c.error });
+    }
+  }
+
   // 5. Run the audit. If this throws after settle succeeded, the user paid
   // for work that didn't complete — capture the error in the transcript
   // and flag `refundable` so callers can react. We do NOT swallow the
@@ -220,6 +283,47 @@ export async function runCrossAgentDemo(
   } catch (e) {
     auditError = e instanceof Error ? e.message : String(e);
     emit('audit.failed', { reason: auditError, paid: settle !== null });
+  }
+
+  // 6. Steps 8/9/10 — only fire when the audit posted a real receipt.
+  //    Failed audits don't get a memory pin or a reveal: we want the
+  //    on-chain trail to encode "this agent did NOT successfully act".
+  if (auditReport && auditReport.receiptTxHash !== null) {
+    let storageRootHash: `0x${string}` | null = null;
+    if (deps.writeStorageLog) {
+      const wr = await deps.writeStorageLog(auditReport);
+      if (wr.ok && wr.rootHash) storageRootHash = wr.rootHash;
+    }
+
+    if (deps.pinMemoryRoot && storageRootHash) {
+      const pin = await deps.pinMemoryRoot({
+        tokenId: opts.target.agentId,
+        rootHash: storageRootHash,
+      });
+      emit('audit.memory_root.pin', {
+        ok: pin.ok,
+        rootHash: storageRootHash,
+        txHash: pin.txHash ?? null,
+        error: pin.error,
+      });
+    }
+
+    if (deps.axiomReveal && axiomCommitId && axiomPlanBytes) {
+      const resultBytes = new TextEncoder().encode(
+        JSON.stringify({
+          verdict: auditReport.verdict,
+          findingsCount: auditReport.findings.length,
+          receiptTxHash: auditReport.receiptTxHash,
+        })
+      );
+      const r = await deps.axiomReveal({
+        tokenId: opts.target.agentId,
+        commitId: axiomCommitId,
+        plan: axiomPlanBytes,
+        result: resultBytes,
+      });
+      emit('audit.axiom.reveal', { ok: r.ok, txHash: r.txHash ?? null, error: r.error });
+    }
   }
 
   const probeCount = auditReport?.results.length ?? 0;
