@@ -48,10 +48,46 @@ export function createMcpServer(opts: CreateMcpServerOptions = {}): Server {
   return server;
 }
 
+/// Maximum request body the standalone server accepts (1 MiB). Larger
+/// bodies are rejected with 413 — caps DOS surface and signals to clients
+/// that this is not a generic uploads endpoint.
+const MAX_BODY_BYTES = 1024 * 1024;
+
+interface CallBody {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+function isCallBody(value: unknown): value is CallBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== 'string') return false;
+  if (v.arguments !== undefined && (typeof v.arguments !== 'object' || v.arguments === null)) {
+    return false;
+  }
+  return true;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 // Standalone mode — start an HTTP server when invoked directly.
 // Bun's `import.meta.main` is true when this file is the entry point.
 if (import.meta.main) {
   const port = Number(process.env.MCP_PORT ?? 7743);
+  // Auth: require a bearer token on /call so a process bound to localhost
+  // can't be exploited by other processes on the same box. /health and
+  // /tools are read-only and OK to leave open for liveness probes.
+  const authToken = process.env.MCP_AUTH_TOKEN;
+  if (!authToken) {
+    console.error('MCP_AUTH_TOKEN env var is required for /call');
+    process.exit(1);
+  }
+
   const registry = buildRegistry([zgPlugin]);
   const tools = listTools(registry);
 
@@ -59,28 +95,40 @@ if (import.meta.main) {
     port,
     fetch: async (req) => {
       const url = new URL(req.url);
+
       if (url.pathname === '/health') {
-        return new Response(
-          JSON.stringify({ status: 'ok', tools: tools.map((t) => t.name) }),
-          { headers: { 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ status: 'ok', tools: tools.map((t) => t.name) });
       }
       if (url.pathname === '/tools' && req.method === 'GET') {
-        return new Response(JSON.stringify({ tools }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return jsonResponse({ tools });
       }
       if (url.pathname === '/call' && req.method === 'POST') {
-        const body = (await req.json()) as { name: string; arguments?: Record<string, unknown> };
+        const auth = req.headers.get('Authorization');
+        if (auth !== `Bearer ${authToken}`) {
+          return jsonResponse({ error: 'unauthorized' }, 401);
+        }
+        const contentLength = Number(req.headers.get('Content-Length') ?? 0);
+        if (contentLength > MAX_BODY_BYTES) {
+          return jsonResponse({ error: 'body too large' }, 413);
+        }
+
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return jsonResponse({ error: 'invalid JSON' }, 400);
+        }
+        if (!isCallBody(body)) {
+          return jsonResponse({ error: 'invalid body shape: expected { name, arguments? }' }, 400);
+        }
+
         try {
           const result = await callTool(registry, body.name, body.arguments ?? {});
-          return new Response(JSON.stringify({ result }), {
-            headers: { 'Content-Type': 'application/json' },
-          });
+          return jsonResponse({ result });
         } catch (e) {
-          return new Response(
-            JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } }
+          return jsonResponse(
+            { error: e instanceof Error ? e.message : String(e) },
+            400
           );
         }
       }
