@@ -6,7 +6,7 @@ import type { Router } from '../router.js';
  * zhgg ↔ OpenClaw integration adapter.
  *
  * Drop into an OpenClaw runtime via a thin `ProviderPlugin` wrapper (NOT
- * shipped here — see `docs/openclaw-integration.md` post-hackathon). Models
+ * shipped here — that's post-hackathon work). Models
  * `zhgg/fast`, `zhgg/verified`, `zhgg/consensus`, `zhgg/pipeline` flow
  * through the supplied router, which orchestrates 0G + Bazaar adapters,
  * KeeperHub settlement, and 0G Storage audit log.
