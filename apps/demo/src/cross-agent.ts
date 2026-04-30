@@ -11,7 +11,6 @@ import { runAudit, type AuditDeps, type AuditReport, type AuditTarget } from '@z
 import { queryOracle, type OracleQuery, type OracleResponse } from '@zhgg/oracle-agent';
 import {
   buildPaymentRequirements,
-  paymentFingerprint,
   type SettleOutput,
   type PaymentRequirements,
 } from '@zhgg/workflow';
@@ -106,13 +105,16 @@ export async function runCrossAgentDemo(
   });
   emit('oracle.payment.request', { amount: requirements.accepts[0]?.amount ?? null });
 
-  // 2. Settle oracle payment via injected dep
+  // 2. Settle oracle payment via injected dep. Replay protection lives one
+  // layer down (the verifier-side caller wraps `verifyPayment` with the
+  // payment payload's `fingerprint` before calling settle). The
+  // orchestrator only knows about the result, not the signed payload, so
+  // there's no honest fingerprint to compute here.
   const settle = await deps.settleOraclePayment(requirements);
   emit('oracle.payment.settle', {
     txHash: settle?.txHash ?? null,
     network: settle?.network ?? null,
     payer: settle?.payer ?? null,
-    fingerprint: paymentFingerprint('orchestrator-' + opts.oracleTopic),
   });
 
   // 3. Query oracle (called directly — payment already settled)
