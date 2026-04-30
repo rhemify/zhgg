@@ -1,15 +1,11 @@
 /// agents-tui — live demo visualization of the cross-agent loop.
 ///
-/// Two execution modes via the runner seam:
-/// - `runFromScript` (default): fires a hardcoded SCRIPT array. Used for
-///   the demo recording — deterministic timing matters more than realism.
-/// - `runFromEvents` (D4): subscribes to a live cross-agent orchestrator's
-///   EventEmitter. Drop in by passing an emitter from
-///   `runCrossAgentDemo({ events })`.
+/// Script-driven: fires a hardcoded SCRIPT array. Used for the demo
+/// recording where deterministic timing matters more than realism.
+/// Events-driven runner subscribing to a real orchestrator is D5 work.
 ///
 /// Run: `bun run apps/tui:agents`
 
-import { EventEmitter } from 'node:events';
 import { renderAgentsPanel, type AgentRow, type AgentStatus } from './panels/agents.js';
 import { pushSplit, renderSplitsPanel, type SplitEvent } from './panels/splits.js';
 
@@ -159,44 +155,11 @@ async function runFromScript(state: State, script: readonly ScriptStep[]): Promi
   }
 }
 
-/// Events-driven runner: subscribes to a cross-agent orchestrator's
-/// EventEmitter and translates `TranscriptStep` events into agent/split
-/// state updates. D4 wires this up against a live `runCrossAgentDemo`
-/// run; for now it only registers handlers and returns an unsubscribe fn.
-type StepLike = { tMs: number; name: string; detail?: Record<string, unknown> };
-export function runFromEvents(state: State, emitter: EventEmitter): () => void {
-  const handlers: Array<[string, (s: StepLike) => void]> = [
-    ['oracle.payment.request', () => {
-      setAgent(state, 'audit.zhgg.eth', { role: 'auditor', status: 'running', lastAction: 'requesting oracle payment' });
-      setAgent(state, 'oracle.zhgg.eth', { role: 'oracle', status: 'running', lastAction: 'awaiting payment' });
-    }],
-    ['oracle.payment.settle', (s) => {
-      const tx = typeof s.detail?.txHash === 'string' ? s.detail.txHash : '0xunknown';
-      state.splits = pushSplit(state.splits, {
-        tMs: s.tMs,
-        totalAtomic: '100000',
-        asset: 'USDC',
-        ownerAddress: '0x000000000000000000000000000000000000beef',
-        context: 'audit → oracle',
-      });
-      setAgent(state, 'oracle.zhgg.eth', { lastAction: `payment settled ${tx.slice(0, 10)}…` });
-    }],
-    ['oracle.query.complete', () => {
-      setAgent(state, 'oracle.zhgg.eth', { status: 'done', lastAction: 'returned regulatory deltas' });
-    }],
-    ['audit.complete', (s) => {
-      const verdict = String(s.detail?.verdict ?? 'unknown');
-      setAgent(state, 'audit.zhgg.eth', { lastAction: `verdict: ${verdict}` });
-    }],
-    ['audit.receipt.post', () => {
-      setAgent(state, 'audit.zhgg.eth', { status: 'done', lastAction: 'erc-8004 receipt posted' });
-    }],
-  ];
-  for (const [name, fn] of handlers) emitter.on(name, fn);
-  return () => {
-    for (const [name, fn] of handlers) emitter.off(name, fn);
-  };
-}
+// `runFromEvents` (events-driven runner subscribing to a real
+// orchestrator's EventEmitter) was removed — it had zero importers and
+// the script-driven path is what the demo recording uses. When D5 wires
+// the TUI to a live `runCrossAgentDemo({ events })` run, the events
+// runner can be reintroduced from git history (commit 4e02a8b).
 
 async function main(): Promise<void> {
   const state: State = {
