@@ -81,7 +81,7 @@ describe('verifyPayment', () => {
       resource: { url: 'https://api/x', description: 'd' },
     });
     const req = new Request('https://api/x', {
-      headers: { 'X-Payment': 'base64-payload' },
+      headers: { 'PAYMENT-SIGNATURE': 'base64-payload' },
     });
     const result = await verifyPayment(req, requirements, {
       facilitatorUrl: FACILITATOR,
@@ -106,7 +106,7 @@ describe('verifyPayment', () => {
       network: 'eip155:84532',
       resource: { url: 'https://api/x', description: 'd' },
     });
-    const req = new Request('https://api/x', { headers: { 'X-Payment': 'bad' } });
+    const req = new Request('https://api/x', { headers: { 'PAYMENT-SIGNATURE': 'bad' } });
     const result = await verifyPayment(req, requirements, {
       facilitatorUrl: FACILITATOR,
       fetchImpl: mockFetch(() => jsonResponse({ isValid: false })),

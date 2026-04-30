@@ -20,7 +20,10 @@ import type { Result } from './adapters/zg-router.js';
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-const PAYMENT_HEADER = 'X-Payment';
+// v1 used `X-Payment`; v2 renamed to `PAYMENT-SIGNATURE`. We declare v2 in
+// the requirements body so the header MUST match — otherwise facilitators
+// reject the request and clients get 402-loop with no progress.
+const PAYMENT_HEADER = 'PAYMENT-SIGNATURE';
 const PAYMENT_RESPONSE_HEADER = 'PAYMENT-RESPONSE';
 const DEFAULT_FACILITATOR = 'https://x402.org/facilitator';
 const DEFAULT_TIMEOUT_SECONDS = 60;
