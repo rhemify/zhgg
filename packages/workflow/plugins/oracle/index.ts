@@ -1,8 +1,8 @@
 /// oracle.zhgg.eth — KeeperHub plugin manifest.
 ///
 /// Exposes a single `query` action that returns regulatory deltas for a
-/// supported topic. Data lives in `@zhgg/oracle-agent`; this folder is the
-/// drop-in mergeable KeeperHub plugin shape.
+/// supported topic. Data lives in `@zhgg/oracle-data` (the leaf package);
+/// this folder is the drop-in mergeable KeeperHub plugin shape.
 
 import { queryOracleStep } from './steps/query.js';
 import type { Action, IntegrationPlugin } from '../../src/plugin-types.js';

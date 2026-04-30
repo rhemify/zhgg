@@ -11,7 +11,7 @@
 
 import type { Address, Hex } from 'viem';
 
-export type Result<T, E = string> =
+type Result<T, E = string> =
   | { ok: true; value: T }
   | { ok: false; error: E };
 
@@ -37,7 +37,7 @@ export interface MintExecutor {
 
 // ─── ABIs (minimal — only the functions we call) ────────────────────────
 
-export const AGENT_NFT_ABI = [
+const AGENT_NFT_ABI = [
   {
     type: 'function',
     name: 'mint',
@@ -50,7 +50,7 @@ export const AGENT_NFT_ABI = [
   },
 ] as const;
 
-export const AGENT_REGISTRY_ABI = [
+const AGENT_REGISTRY_ABI = [
   {
     type: 'function',
     name: 'register',
@@ -70,7 +70,7 @@ export const AGENT_REGISTRY_ABI = [
   },
 ] as const;
 
-export const ENS_REGISTRAR_ABI = [
+const ENS_REGISTRAR_ABI = [
   {
     type: 'function',
     name: 'mintSubname',
@@ -90,7 +90,7 @@ export const ENS_REGISTRAR_ABI = [
   },
 ] as const;
 
-export const SPEND_CAP_ABI = [
+const SPEND_CAP_ABI = [
   {
     type: 'function',
     name: 'grant',

@@ -26,7 +26,10 @@ const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
 ]);
 
-const AGENT_REGISTRY_ABI = parseAbi([
+// Slice of AgentRegistry ABI containing only `giveFeedback`. The mint
+// flow's `register` ABI lives in `apps/mint-agent/src/steps.ts` — they
+// don't overlap functions, just the contract.
+const AGENT_REGISTRY_GIVE_FEEDBACK_ABI = parseAbi([
   'function giveFeedback(uint256 agentId, int128 value, uint8 valueDecimals, string tag1, string tag2, string endpoint, string feedbackURI, bytes32 feedbackHash)',
 ]);
 
@@ -86,7 +89,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       const sim = await zgPub.simulateContract({
         account: zgAccount,
         address: args.registry,
-        abi: AGENT_REGISTRY_ABI,
+        abi: AGENT_REGISTRY_GIVE_FEEDBACK_ABI,
         functionName: 'giveFeedback',
         args: [
           args.agentId,

@@ -145,6 +145,8 @@ export function aggregateVerdict(
   return 'unclear';
 }
 
+/// Internal helper used only by `runAudit`. Not exported externally —
+/// callers consume `AuditReport.findings` directly.
 export function aggregateFindings(results: readonly ProbeResult[]): string[] {
   return results.map((r) => `[${r.articleRef}] ${r.finding}`);
 }
