@@ -33,18 +33,15 @@ export interface FeedbackJsonInput {
 }
 
 /// Build the canonical feedback JSON. Stable key order so keccak256 hashes
-/// match across runs. BigInt agentId is encoded as a string when it would
-/// overflow safe-integer (>= 2^53), otherwise as a number.
+/// match across runs. agentId is ALWAYS encoded as a string. The EIP-8004
+/// spec example uses a number, but JS encodes `1` and Rust encodes `"1"`
+/// as different bytes — leading to silent feedbackHash mismatches between
+/// JS and Rust/Go clients. Cross-language reproducibility wins.
 export function buildFeedbackJson(input: FeedbackJsonInput): string {
-  const agentIdSafe =
-    input.agentId <= BigInt(Number.MAX_SAFE_INTEGER)
-      ? Number(input.agentId)
-      : input.agentId.toString();
-
   const payload: Record<string, unknown> = {
     type: 'https://eips.ethereum.org/EIPS/eip-8004#feedback-v1',
     agentRegistry: input.agentRegistry,
-    agentId: agentIdSafe,
+    agentId: input.agentId.toString(),
     clientAddress: input.clientAddress,
     createdAt: input.createdAt,
     value: input.value,

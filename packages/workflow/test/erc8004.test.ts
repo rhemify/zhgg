@@ -32,13 +32,13 @@ describe('buildFeedbackJson', () => {
       createdAt: '2026-04-30T00:00:00Z',
     });
     const parsed = JSON.parse(json);
-    expect(parsed.agentId).toBe(1);
+    expect(parsed.agentId).toBe('1');
     expect(parsed.tag1).toBe('audit');
     expect(parsed.attestation.root).toBe('0x9a');
     expect(parsed.proofOfPayment.txHash).toBe('0xpay');
   });
 
-  it('encodes BigInt agentId as string for JSON safety', () => {
+  it('encodes BigInt agentId as string for cross-language determinism', () => {
     const json = buildFeedbackJson({
       agentRegistry: `eip155:16602:${REGISTRY}`,
       agentId: 999_999_999_999_999_999n,
