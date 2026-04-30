@@ -33,3 +33,14 @@ export type {
   VerifyOptions,
   VerifyOutcome,
 } from './x402.js';
+
+export { buildRegistry, callTool, listTools } from './registry.js';
+export type {
+  JsonSchema,
+  JsonSchemaField,
+  PluginRegistry,
+  RegisteredTool,
+  ToolDescriptor,
+} from './registry.js';
+export { createMcpServer } from './mcp-server.js';
+export type { CreateMcpServerOptions } from './mcp-server.js';
