@@ -152,6 +152,18 @@ function buildCapabilityManifest(name: string, tier: 'oracle' | 'audit'): Hex {
   return toHex(JSON.stringify(manifest));
 }
 
+/// Successful step output is BUFFERED rather than printed eagerly. We
+/// only flush once every step succeeds — otherwise a partial run shows
+/// "✓ minted iNFT" in green and then "error" in red, leaving the user
+/// uncertain whether the mint already landed on-chain. With buffering
+/// the failure path prints a clear "PARTIAL ON-CHAIN" block listing
+/// every tx that DID land so the user can inspect / clean up manually.
+interface StepRecord {
+  label: string;
+  txHash: Hex;
+  detail?: string;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const ruler = '━'.repeat(60);
@@ -180,6 +192,32 @@ async function main(): Promise<void> {
   const ensExecutor = buildExecutor(ensRpc, privateKey);
 
   const manifest = buildCapabilityManifest(args.name, args.tier);
+  const completed: StepRecord[] = [];
+
+  function failPartial(failingStep: string, reason: string): never {
+    console.error('');
+    console.error(`${ANSI_RED}FAILED at step:${ANSI_RESET} ${failingStep}`);
+    console.error(`  reason: ${reason}`);
+    if (completed.length > 0) {
+      console.error('');
+      console.error(`${ANSI_RED}PARTIAL ON-CHAIN STATE (${completed.length}/4 steps committed):${ANSI_RESET}`);
+      for (const rec of completed) {
+        console.error(`  ${rec.label} ${ANSI_DIM}(tx ${fmtHash(rec.txHash)})${ANSI_RESET}`);
+      }
+      console.error('');
+      console.error(`${ANSI_DIM}These transactions are mined and cannot be rolled back. Inspect each${ANSI_RESET}`);
+      console.error(`${ANSI_DIM}tx hash on the relevant explorer; the orphaned iNFT/registry entry${ANSI_RESET}`);
+      console.error(`${ANSI_DIM}can be transferred or burned manually if desired.${ANSI_RESET}`);
+    }
+    process.exit(1);
+  }
+
+  function ensureOk<T>(
+    r: { ok: true; value: T } | { ok: false; error: { kind: string; reason: string } },
+    step: string
+  ): asserts r is { ok: true; value: T } {
+    if (!r.ok) failPartial(step, r.error.reason);
+  }
 
   // Step 1 — mint iNFT
   const minted = await mintAgentNFT(zgExecutor, {
@@ -187,10 +225,11 @@ async function main(): Promise<void> {
     owner: args.owner,
     capabilityManifest: manifest,
   });
-  if (!minted.ok) die(`step ${minted.error.kind}: ${minted.error.reason}`);
-  console.log(
-    `${ANSI_GREEN}✓${ANSI_RESET} minted iNFT #${minted.value.tokenId.toString()} ${ANSI_DIM}(tx ${fmtHash(minted.value.txHash)})${ANSI_RESET}`
-  );
+  ensureOk(minted, 'mint iNFT (0G)');
+  completed.push({
+    label: `${ANSI_GREEN}✓${ANSI_RESET} minted iNFT #${minted.value.tokenId.toString()}`,
+    txHash: minted.value.txHash,
+  });
 
   // Step 2 — register in 8004
   const agentURI = `ipfs://placeholder/${args.name}`;
@@ -203,37 +242,48 @@ async function main(): Promise<void> {
       { metadataKey: 'tier', metadataValue: toHex(args.tier) },
     ],
   });
-  if (!registered.ok) die(`step ${registered.error.kind}: ${registered.error.reason}`);
-  console.log(
-    `${ANSI_GREEN}✓${ANSI_RESET} registered agentId #${registered.value.agentId.toString()} ${ANSI_DIM}(tx ${fmtHash(registered.value.txHash)})${ANSI_RESET}`
-  );
-
-  // Step 3 — mint ENS subname (public-mint path so anyone can use this CLI)
-  const subnameMinted = await mintSubname(ensExecutor, {
-    ensRegistrar,
-    label: args.name,
-    owner: args.owner,
-    publicMint: true,
+  ensureOk(registered, 'register agent (8004)');
+  completed.push({
+    label: `${ANSI_GREEN}✓${ANSI_RESET} registered agentId #${registered.value.agentId.toString()}`,
+    txHash: registered.value.txHash,
   });
-  if (!subnameMinted.ok) die(`step ${subnameMinted.error.kind}: ${subnameMinted.error.reason}`);
-  console.log(
-    `${ANSI_GREEN}✓${ANSI_RESET} minted ${args.name}.zhgg.eth ${ANSI_DIM}(tx ${fmtHash(subnameMinted.value.txHash)})${ANSI_RESET}`
-  );
 
-  // Step 4 — grant 50 USDC/day SpendCap
-  const capped = await grantSpendCap(baseExecutor, {
-    spendCap,
-    account: args.owner,
-    asset: USDC_BASE_SEPOLIA,
-    maxPerPeriod: DEFAULT_DAILY_CAP_USDC,
-    periodLength: DEFAULT_PERIOD_SECONDS,
-    expiresAt: 0n,
+  // Steps 3 + 4 — ENS subname (Sepolia/mainnet) and SpendCap (Base Sepolia)
+  // are independent and live on different chains. Parallelize to halve
+  // the back-half wall-clock for the live stage demo.
+  const [subnameMinted, capped] = await Promise.all([
+    mintSubname(ensExecutor, {
+      ensRegistrar,
+      label: args.name,
+      owner: args.owner,
+      publicMint: true,
+    }),
+    grantSpendCap(baseExecutor, {
+      spendCap,
+      account: args.owner,
+      asset: USDC_BASE_SEPOLIA,
+      maxPerPeriod: DEFAULT_DAILY_CAP_USDC,
+      periodLength: DEFAULT_PERIOD_SECONDS,
+      expiresAt: 0n,
+    }),
+  ]);
+
+  ensureOk(subnameMinted, 'mint ENS subname');
+  completed.push({
+    label: `${ANSI_GREEN}✓${ANSI_RESET} minted ${args.name}.zhgg.eth`,
+    txHash: subnameMinted.value.txHash,
   });
-  if (!capped.ok) die(`step ${capped.error.kind}: ${capped.error.reason}`);
-  console.log(
-    `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day ${ANSI_DIM}(tx ${fmtHash(capped.value.txHash)})${ANSI_RESET}`
-  );
 
+  ensureOk(capped, 'grant SpendCap (Base)');
+  completed.push({
+    label: `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day`,
+    txHash: capped.value.txHash,
+  });
+
+  // All 4 steps succeeded — flush buffered output now.
+  for (const rec of completed) {
+    console.log(`${rec.label} ${ANSI_DIM}(tx ${fmtHash(rec.txHash)})${ANSI_RESET}`);
+  }
   console.log('');
   console.log(ruler);
   console.log(`  ${args.name}.zhgg.eth is live.`);
