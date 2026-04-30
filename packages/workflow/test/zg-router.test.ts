@@ -63,8 +63,8 @@ describe('inferZG', () => {
     expect(parsed.messages).toEqual([{ role: 'user', content: 'hello' }]);
   });
 
-  it('returns Err config when no API key available', async () => {
-    const result = await inferZG('p', { fetchImpl: mockFetch(() => okBody('x')) });
+  it('returns Err config when API key is empty', async () => {
+    const result = await inferZG('p', { apiKey: '', fetchImpl: mockFetch(() => okBody('x')) });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.error.kind).toBe('config');

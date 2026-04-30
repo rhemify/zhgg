@@ -35,7 +35,13 @@ export type ZGRouterError =
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface ZGRouterOptions {
-  apiKey?: string;
+  /// REQUIRED. The 0G Compute Router `sk-` API key. Must come from the
+  /// caller's credential store (e.g. KeeperHub credentials), NEVER from
+  /// `process.env` inside the library — silent env fallback in a
+  /// multi-tenant host bleeds the host's key into a tenant whose
+  /// credentials weren't loaded. Standalone runners read env explicitly
+  /// at the entrypoint and pass the value in.
+  apiKey: string;
   baseUrl?: string;
   model?: string;
   fetchImpl?: FetchLike;
@@ -54,15 +60,15 @@ interface OpenAIResponse {
 
 export async function inferZG(
   prompt: string,
-  opts: ZGRouterOptions = {}
+  opts: ZGRouterOptions
 ): Promise<Result<ZGInferenceResult, ZGRouterError>> {
-  const apiKey = opts.apiKey ?? process.env.ZG_ROUTER_KEY;
-  const baseUrl = opts.baseUrl ?? process.env.ZG_ROUTER_BASE_URL ?? DEFAULT_BASE_URL;
+  const apiKey = opts.apiKey;
+  const baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL;
   const model = opts.model ?? DEFAULT_MODEL;
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   if (!apiKey) {
-    return { ok: false, error: { kind: 'config', reason: 'ZG_ROUTER_KEY not set' } };
+    return { ok: false, error: { kind: 'config', reason: 'apiKey is empty' } };
   }
 
   const start = Date.now();
