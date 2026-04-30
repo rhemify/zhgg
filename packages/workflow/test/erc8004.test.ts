@@ -164,6 +164,50 @@ describe('postReceipt', () => {
     expect(result.error.reason).toBe('chain stalled');
   });
 
+  it('rejects NaN value with invalid_value error', async () => {
+    const { client } = makeClient();
+    const result = await postReceipt(client, {
+      registryAddress: REGISTRY as `0x${string}`,
+      agentRegistryCaip: `eip155:16602:${REGISTRY}`,
+      agentId: 1n,
+      clientAddress: 'eip155:84532:0xabc',
+      value: NaN,
+      valueDecimals: 0,
+      tag1: 'x',
+      tag2: 'y',
+      endpoint: '',
+      feedbackURI: 'ipfs://x',
+      attestationRoot: null,
+      paymentTxHash: null,
+      createdAt: '2026-04-30T00:00:00Z',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('invalid_value');
+  });
+
+  it('rejects non-integer float value', async () => {
+    const { client } = makeClient();
+    const result = await postReceipt(client, {
+      registryAddress: REGISTRY as `0x${string}`,
+      agentRegistryCaip: `eip155:16602:${REGISTRY}`,
+      agentId: 1n,
+      clientAddress: 'eip155:84532:0xabc',
+      value: 0.5,
+      valueDecimals: 0,
+      tag1: 'x',
+      tag2: 'y',
+      endpoint: '',
+      feedbackURI: 'ipfs://x',
+      attestationRoot: null,
+      paymentTxHash: null,
+      createdAt: '2026-04-30T00:00:00Z',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('invalid_value');
+  });
+
   it('rejects empty registry address (config error)', async () => {
     const { client } = makeClient();
     const result = await postReceipt(client, {

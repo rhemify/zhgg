@@ -97,7 +97,15 @@ export interface ReceiptContext {
 
 export type PostError =
   | { kind: 'config'; reason: string }
+  | { kind: 'invalid_value'; reason: string }
   | { kind: 'post_failed'; reason: string };
+
+/// int128 bounds for ERC-8004's `value` field. Validated at the boundary
+/// because downstream `BigInt(value)` throws on NaN / Infinity / non-
+/// integer floats with a cryptic RPC error rather than a structured
+/// PostError. Range: -(2^127) ... 2^127-1.
+const INT128_MAX = (1n << 127n) - 1n;
+const INT128_MIN = -(1n << 127n);
 
 export async function postReceipt(
   client: Erc8004Client,
@@ -105,6 +113,23 @@ export async function postReceipt(
 ): Promise<Result<Hex, PostError>> {
   if (ctx.registryAddress.toLowerCase() === ZERO_ADDRESS) {
     return { ok: false, error: { kind: 'config', reason: 'registryAddress is zero' } };
+  }
+  // Validate the int128-bound `value` BEFORE BigInt conversion downstream.
+  // NaN, Infinity, non-integer floats, and out-of-range integers all throw
+  // cryptic errors at the RPC layer; surface them as structured PostError
+  // here so callers can react.
+  if (!Number.isFinite(ctx.value) || !Number.isInteger(ctx.value)) {
+    return {
+      ok: false,
+      error: { kind: 'invalid_value', reason: `value must be a finite integer, got ${ctx.value}` },
+    };
+  }
+  const valueBig = BigInt(ctx.value);
+  if (valueBig > INT128_MAX || valueBig < INT128_MIN) {
+    return {
+      ok: false,
+      error: { kind: 'invalid_value', reason: `value ${ctx.value} out of int128 range` },
+    };
   }
 
   const json = buildFeedbackJson({
