@@ -97,6 +97,7 @@ contract AgentRegistry is ERC721URIStorage {
     error SelfFeedbackForbidden();
     error InvalidFeedbackIndex();
     error AlreadyRevoked();
+    error SignedSetAgentWalletNotImplemented();
 
     constructor() ERC721("zhgg AgentRegistry (ERC-8004)", "ZHGG-8004") {}
 
@@ -150,13 +151,33 @@ contract AgentRegistry is ERC721URIStorage {
     }
 
     /// @notice Set the agent wallet — an address authorized to sign on
-    ///         behalf of the agent off-chain. NOTE: spec requires EIP-712
-    ///         signature with deadline; we accept it as a parameter but
-    ///         skip verification in this minimal adapter (verification
-    ///         lands when we couple with the canonical 8004 deployment).
-    function setAgentWallet(uint256 agentId, address newWallet) external {
-        if (_ownerOf(agentId) != msg.sender) revert NotAgentOwner();
-        _agentWallet[agentId] = newWallet;
+    ///         behalf of the agent off-chain.
+    /// @dev    ABI-compatible with the canonical ERC-8004 Identity
+    ///         Registry: accepts `(agentId, newWallet, deadline, signature)`.
+    ///         The owner-only path (`signature.length == 0`) is the V1
+    ///         minimal adapter — when the canonical 8004 deployment lands
+    ///         on 0G Galileo we'll switch the SDK rail and the off-chain
+    ///         signed-deadline path activates without an ABI change.
+    ///         Off-chain signing path is intentionally NOT verified yet —
+    ///         the function reverts so callers can't accidentally rely on
+    ///         a signature that isn't checked.
+    function setAgentWallet(
+        uint256 agentId,
+        address newWallet,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
+        if (signature.length == 0) {
+            // V1 minimal adapter: owner-only direct set, no signature.
+            // `deadline` is unused on this path.
+            deadline; // silence unused-warning
+            if (_ownerOf(agentId) != msg.sender) revert NotAgentOwner();
+            _agentWallet[agentId] = newWallet;
+            return;
+        }
+        // Off-chain-signed path: not implemented in V1. Revert loudly so
+        // production callers know to wait for canonical 8004.
+        revert SignedSetAgentWalletNotImplemented();
     }
 
     function getAgentWallet(uint256 agentId) external view returns (address) {

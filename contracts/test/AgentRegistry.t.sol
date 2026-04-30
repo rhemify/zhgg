@@ -75,12 +75,31 @@ contract AgentRegistryTest is Test {
         vm.prank(alice);
         uint256 id = reg.register("ipfs://", empty);
         vm.prank(alice);
-        reg.setAgentWallet(id, carol);
+        reg.setAgentWallet(id, carol, 0, "");
         assertEq(reg.getAgentWallet(id), carol);
 
         vm.prank(alice);
         reg.transferFrom(alice, bob, id);
         assertEq(reg.getAgentWallet(id), address(0));
+    }
+
+    function test_setAgentWallet_revertsOnSignedPathV1() public {
+        AgentRegistry.MetadataEntry[] memory empty = new AgentRegistry.MetadataEntry[](0);
+        vm.prank(alice);
+        uint256 id = reg.register("ipfs://", empty);
+        // Non-empty signature → off-chain-signed path. V1 must revert
+        // loudly so production callers don't rely on unverified sigs.
+        vm.expectRevert(AgentRegistry.SignedSetAgentWalletNotImplemented.selector);
+        reg.setAgentWallet(id, carol, block.timestamp + 1 days, hex"deadbeef");
+    }
+
+    function test_setAgentWallet_ownerOnlyOnEmptySignaturePath() public {
+        AgentRegistry.MetadataEntry[] memory empty = new AgentRegistry.MetadataEntry[](0);
+        vm.prank(alice);
+        uint256 id = reg.register("ipfs://", empty);
+        vm.prank(bob);
+        vm.expectRevert(AgentRegistry.NotAgentOwner.selector);
+        reg.setAgentWallet(id, carol, 0, "");
     }
 
     // ----- feedback -----
