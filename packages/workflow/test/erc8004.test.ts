@@ -38,6 +38,41 @@ describe('buildFeedbackJson', () => {
     expect(parsed.proofOfPayment.txHash).toBe('0xpay');
   });
 
+  /// Cross-language determinism golden vector. Any change to the canonical
+  /// JSON encoding (key order, agentId stringification, attestation/proof
+  /// nesting) breaks this assertion loudly. Rust and Go implementers MUST
+  /// produce the same hash for the same input or the cross-platform receipt
+  /// audit-trail breaks. If you change the encoder, update both the JSON
+  /// snapshot and the hash, then notify any non-JS consumers.
+  it('produces a stable golden hash for a fixed input (cross-language vector)', () => {
+    const GOLDEN_INPUT = {
+      agentRegistry: 'eip155:16602:0x1111111111111111111111111111111111111111',
+      agentId: 42n,
+      clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
+      createdAt: '2026-04-30T00:00:00Z',
+      value: 100,
+      valueDecimals: 0,
+      tag1: 'audit',
+      tag2: 'eu-ai-act',
+      endpoint: 'https://audit.zhgg.eth/v1',
+      attestationRoot: '0xdeadbeef',
+      paymentTxHash: '0xfeedface',
+    };
+    const GOLDEN_JSON =
+      '{"type":"https://eips.ethereum.org/EIPS/eip-8004#feedback-v1",' +
+      '"agentRegistry":"eip155:16602:0x1111111111111111111111111111111111111111",' +
+      '"agentId":"42",' +
+      '"clientAddress":"eip155:84532:0x2222222222222222222222222222222222222222",' +
+      '"createdAt":"2026-04-30T00:00:00Z","value":100,"valueDecimals":0,' +
+      '"tag1":"audit","tag2":"eu-ai-act","endpoint":"https://audit.zhgg.eth/v1",' +
+      '"attestation":{"root":"0xdeadbeef"},"proofOfPayment":{"txHash":"0xfeedface"}}';
+    const GOLDEN_HASH = '0x05f6ca9352fcf18b9958abae56969aa0d7582a9f4091d7fc5dd4dac06a03e82c';
+
+    const json = buildFeedbackJson(GOLDEN_INPUT);
+    expect(json).toBe(GOLDEN_JSON);
+    expect(keccak256(toBytes(json))).toBe(GOLDEN_HASH);
+  });
+
   it('encodes BigInt agentId as string for cross-language determinism', () => {
     const json = buildFeedbackJson({
       agentRegistry: `eip155:16602:${REGISTRY}`,
