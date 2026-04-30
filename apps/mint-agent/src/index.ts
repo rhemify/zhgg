@@ -30,6 +30,11 @@ import {
   registerAgent,
   type MintExecutor,
 } from './steps.js';
+import {
+  PUBLIC_RESOLVER_MAINNET,
+  PUBLIC_RESOLVER_SEPOLIA,
+  setAgentTextRecords,
+} from './ens-records.js';
 
 const ANSI_GREEN = '\x1b[32m';
 const ANSI_RED = '\x1b[31m';
@@ -111,27 +116,37 @@ function reqEnv(key: string): string {
   return v;
 }
 
-function buildExecutor(rpcUrl: string, privateKey: Hex): MintExecutor {
+interface ChainClients {
+  wallet: ReturnType<typeof createWalletClient>;
+  publicClient: ReturnType<typeof createPublicClient>;
+}
+
+function buildClients(rpcUrl: string, privateKey: Hex): ChainClients {
   const account = privateKeyToAccount(privateKey);
   const transport = http(rpcUrl);
-  const wallet = createWalletClient({ account, transport });
-  const pub = createPublicClient({ transport });
+  return {
+    wallet: createWalletClient({ account, transport }),
+    publicClient: createPublicClient({ transport }),
+  };
+}
 
+function buildExecutor(clients: ChainClients): MintExecutor {
+  const { wallet, publicClient } = clients;
   return {
     // chainId is part of the executor's MintExecutor type but the chain
     // is implicit in the transport binding here — each executor is built
     // per RPC URL, so passing chainId would be redundant. We accept and
     // ignore it for symmetry with mock executors used in tests.
     call: async ({ address, abi, functionName, args }) => {
-      const sim = await pub.simulateContract({
-        account,
+      const sim = await publicClient.simulateContract({
+        account: wallet.account,
         address,
         abi: abi as never,
         functionName: functionName as never,
         args: args as never,
       });
       const txHash = await wallet.writeContract(sim.request);
-      await pub.waitForTransactionReceipt({ hash: txHash });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
       return { result: sim.result as never, txHash };
     },
   };
@@ -187,9 +202,10 @@ async function main(): Promise<void> {
   const baseRpc = reqEnv('BASE_SEPOLIA_RPC_URL');
   const ensRpc = reqEnv('ENS_RPC_URL');
 
-  const zgExecutor = buildExecutor(zgRpc, privateKey);
-  const baseExecutor = buildExecutor(baseRpc, privateKey);
-  const ensExecutor = buildExecutor(ensRpc, privateKey);
+  const zgExecutor = buildExecutor(buildClients(zgRpc, privateKey));
+  const baseExecutor = buildExecutor(buildClients(baseRpc, privateKey));
+  const ensClients = buildClients(ensRpc, privateKey);
+  const ensExecutor = buildExecutor(ensClients);
 
   const manifest = buildCapabilityManifest(args.name, args.tier);
   const completed: StepRecord[] = [];
@@ -283,7 +299,34 @@ async function main(): Promise<void> {
     txHash: capped.value.txHash,
   });
 
-  // All 4 steps succeeded — flush buffered output now.
+  // Step 5 — write ENS text records so external indexers can resolve
+  // <name>.zhgg.eth → iNFT, ERC-8004 passport, tier. Done after the
+  // subname is minted (step 3); not parallelizable with steps 3/4
+  // because it needs the subname to exist + the resolver may need a
+  // pre-flight setResolver tx (see ens-records.ts).
+  const resolver = args.ensMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
+  try {
+    const records = await setAgentTextRecords(ensClients, {
+      label: args.name,
+      inft: `${agentNft}:${minted.value.tokenId.toString()}`,
+      passport: `eip155:16602:${agentRegistry}:${registered.value.agentId.toString()}`,
+      tier: args.tier,
+      resolver,
+    });
+    for (const txHash of records.txHashes) {
+      completed.push({
+        label: `${ANSI_GREEN}✓${ANSI_RESET} ENS text records on ${args.name}.zhgg.eth`,
+        txHash,
+      });
+    }
+  } catch (e) {
+    failPartial(
+      'set ENS text records',
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+
+  // All 5 steps succeeded — flush buffered output now.
   for (const rec of completed) {
     console.log(`${rec.label} ${ANSI_DIM}(tx ${fmtHash(rec.txHash)})${ANSI_RESET}`);
   }
