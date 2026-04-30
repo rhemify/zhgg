@@ -48,8 +48,6 @@
         "@zhgg/audit-agent": "workspace:*",
         "@zhgg/oracle-agent": "workspace:*",
         "@zhgg/router": "workspace:*",
-        "@zhgg/sdk": "workspace:*",
-        "@zhgg/tools": "workspace:*",
         "@zhgg/workflow": "workspace:*",
       },
       "devDependencies": {
@@ -161,25 +159,6 @@
       "devDependencies": {
         "@my-better-t-app/config": "workspace:*",
         "@types/bun": "latest",
-        "typescript": "catalog:",
-      },
-    },
-    "packages/sdk": {
-      "name": "@zhgg/sdk",
-      "version": "0.0.0",
-      "devDependencies": {
-        "@my-better-t-app/config": "workspace:*",
-        "typescript": "catalog:",
-      },
-    },
-    "packages/tools": {
-      "name": "@zhgg/tools",
-      "version": "0.0.0",
-      "dependencies": {
-        "@zhgg/sdk": "workspace:*",
-      },
-      "devDependencies": {
-        "@my-better-t-app/config": "workspace:*",
         "typescript": "catalog:",
       },
     },
@@ -731,10 +710,6 @@
     "@zhgg/oracle-data": ["@zhgg/oracle-data@workspace:packages/oracle-data"],
 
     "@zhgg/router": ["@zhgg/router@workspace:packages/router"],
-
-    "@zhgg/sdk": ["@zhgg/sdk@workspace:packages/sdk"],
-
-    "@zhgg/tools": ["@zhgg/tools@workspace:packages/tools"],
 
     "@zhgg/workflow": ["@zhgg/workflow@workspace:packages/workflow"],
 

@@ -12,8 +12,6 @@
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/router": "workspace:*",
-    "@zhgg/sdk": "workspace:*",
-    "@zhgg/tools": "workspace:*",
     "@zhgg/workflow": "workspace:*"
   },
   "devDependencies": {
