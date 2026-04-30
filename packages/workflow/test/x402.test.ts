@@ -47,7 +47,26 @@ describe('buildPaymentRequirements', () => {
 });
 
 describe('verifyPayment', () => {
-  it('returns 402 when X-Payment header missing', async () => {
+  it('402 response includes WWW-Authenticate x402 realm', async () => {
+    const requirements = buildPaymentRequirements({
+      amount: '100000',
+      payTo: FEE_SPLITTER,
+      asset: USDC_BASE_SEPOLIA,
+      network: 'eip155:84532',
+      resource: { url: 'https://api/x', description: 'd' },
+    });
+    const req = new Request('https://api/x', { method: 'GET' });
+    const result = await verifyPayment(req, requirements, {
+      facilitatorUrl: FACILITATOR,
+      fetchImpl: mockFetch(() => jsonResponse({ isValid: false })),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.response.headers.get('WWW-Authenticate')).toBe('x402 realm="zhgg"');
+    expect(result.response.headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('returns 402 when PAYMENT-SIGNATURE header missing', async () => {
     const requirements = buildPaymentRequirements({
       amount: '100000',
       payTo: FEE_SPLITTER,

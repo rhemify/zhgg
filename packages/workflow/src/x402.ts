@@ -70,6 +70,20 @@ export interface PaymentRequirements {
   extensions: Record<string, unknown>;
 }
 
+/// Build a 402 response with the canonical x402 headers. Centralized so the
+/// `WWW-Authenticate` realm + content-type stay consistent across every
+/// challenge surface. Clients use the realm to detect this is x402 (not a
+/// generic auth challenge).
+export function payment402(requirements: PaymentRequirements): Response {
+  return new Response(JSON.stringify(requirements), {
+    status: 402,
+    headers: {
+      'Content-Type': 'application/json',
+      'WWW-Authenticate': 'x402 realm="zhgg"',
+    },
+  });
+}
+
 export function buildPaymentRequirements(input: PaymentRequirementsInput): PaymentRequirements {
   return {
     x402Version: 2,
@@ -115,10 +129,7 @@ export async function verifyPayment(
 
   const paymentPayload = request.headers.get(PAYMENT_HEADER);
   if (!paymentPayload) {
-    return { ok: false, response: new Response(JSON.stringify(requirements), {
-      status: 402,
-      headers: { 'Content-Type': 'application/json' },
-    })};
+    return { ok: false, response: payment402(requirements) };
   }
 
   let verifyResp: Response;
@@ -129,34 +140,22 @@ export async function verifyPayment(
       body: JSON.stringify({ paymentPayload, paymentRequirements: requirements }),
     });
   } catch {
-    return { ok: false, response: new Response(JSON.stringify(requirements), {
-      status: 402,
-      headers: { 'Content-Type': 'application/json' },
-    })};
+    return { ok: false, response: payment402(requirements) };
   }
 
   if (!verifyResp.ok) {
-    return { ok: false, response: new Response(JSON.stringify(requirements), {
-      status: 402,
-      headers: { 'Content-Type': 'application/json' },
-    })};
+    return { ok: false, response: payment402(requirements) };
   }
 
   let body: { isValid?: unknown; payer?: unknown };
   try {
     body = (await verifyResp.json()) as { isValid?: unknown; payer?: unknown };
   } catch {
-    return { ok: false, response: new Response(JSON.stringify(requirements), {
-      status: 402,
-      headers: { 'Content-Type': 'application/json' },
-    })};
+    return { ok: false, response: payment402(requirements) };
   }
 
   if (body.isValid !== true) {
-    return { ok: false, response: new Response(JSON.stringify(requirements), {
-      status: 402,
-      headers: { 'Content-Type': 'application/json' },
-    })};
+    return { ok: false, response: payment402(requirements) };
   }
 
   return {
