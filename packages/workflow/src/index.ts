@@ -15,3 +15,21 @@ export type {
   PostError,
   ReceiptContext,
 } from './erc8004.js';
+
+export {
+  PAYMENT_HEADER,
+  PAYMENT_RESPONSE_HEADER,
+  buildPaymentRequirements,
+  paymentResponseHeader,
+  settlePayment,
+  verifyPayment,
+} from './x402.js';
+export type {
+  PaymentRequirements,
+  PaymentRequirementsInput,
+  SettleError,
+  SettleOptions,
+  SettleOutput,
+  VerifyOptions,
+  VerifyOutcome,
+} from './x402.js';
