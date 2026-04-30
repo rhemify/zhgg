@@ -1,4 +1,5 @@
 import { runHeadlines, type HeadlineResult } from './agent.js';
+import { runAuditCli } from './cross-agent-cli.js';
 import { HEADLINES } from './headlines.js';
 import { buildDemoStack } from './wire.js';
 
@@ -104,7 +105,17 @@ async function main(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch((err: unknown) => {
+async function entry(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args[0] === 'audit') {
+    const target = args[1] ?? 'oracle.zhgg.eth';
+    const code = await runAuditCli(target);
+    process.exit(code);
+  }
+  await main();
+}
+
+entry().catch((err: unknown) => {
   const reason = err instanceof Error ? err.message : String(err);
   console.error(`demo failed: ${reason}`);
   process.exit(1);
