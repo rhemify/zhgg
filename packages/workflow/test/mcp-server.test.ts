@@ -53,6 +53,35 @@ describe('listTools', () => {
   });
 });
 
+describe('createHttpHandler', () => {
+  const make = async () => {
+    const { buildRegistry, zgPlugin } = await loadDeps();
+    const { createHttpHandler } = await import('../src/mcp-server.js');
+    const registry = buildRegistry([zgPlugin]);
+    return { handler: createHttpHandler({ registry, authToken: 'secret' }), registry };
+  };
+
+  it('GET /health returns 200 + tool list when registry populated', async () => {
+    const { handler } = await make();
+    const res = await handler(new Request('http://x/health'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string; tools: string[] };
+    expect(body.status).toBe('ok');
+    expect(body.tools.length).toBeGreaterThan(0);
+  });
+
+  it('GET /health returns 503 when registry is empty', async () => {
+    const { buildRegistry } = await loadDeps();
+    const { createHttpHandler } = await import('../src/mcp-server.js');
+    const handler = createHttpHandler({ registry: buildRegistry([]), authToken: 'secret' });
+    const res = await handler(new Request('http://x/health'));
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { status: string; reason: string };
+    expect(body.status).toBe('unhealthy');
+    expect(body.reason).toBe('no tools registered');
+  });
+});
+
 describe('callTool', () => {
   it('routes call to the action.stepFunction with the supplied args', async () => {
     const { buildRegistry, callTool } = await loadDeps();
