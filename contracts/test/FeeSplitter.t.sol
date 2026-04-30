@@ -111,4 +111,73 @@ contract FeeSplitterTest is Test {
         assertEq(zhgg.balance,       0.05 ether);
         assertEq(commons.balance,    0.05 ether);
     }
+
+    // ----- pull-payment escrow for failing native recipients -----
+
+    function test_splitNative_revertingRecipientEscrowsLeg() public {
+        RejectingRecipient bad = new RejectingRecipient();
+        // Redeploy splitter with a reverting commons recipient so we can
+        // exercise the failure path on a real address that explicitly
+        // rejects ETH.
+        FeeSplitter spl = new FeeSplitter(keeper, zhgg, address(bad));
+        vm.deal(payer, 10 ether);
+
+        vm.prank(payer);
+        spl.splitNative{value: 1 ether}(agentOwner);
+
+        // Working recipients still receive their cut.
+        assertEq(agentOwner.balance, 0.85 ether);
+        assertEq(keeper.balance,     0.05 ether);
+        assertEq(zhgg.balance,       0.05 ether);
+        // Reverting recipient's leg is escrowed, not lost.
+        assertEq(spl.pendingNative(address(bad)), 0.05 ether);
+        assertEq(address(bad).balance,            0);
+    }
+
+    function test_claimNative_pullsEscrowedLeg() public {
+        RejectingRecipient bad = new RejectingRecipient();
+        FeeSplitter spl = new FeeSplitter(keeper, zhgg, address(bad));
+        vm.deal(payer, 10 ether);
+        vm.prank(payer);
+        spl.splitNative{value: 1 ether}(agentOwner);
+
+        // Recipient flips to accepting-mode and claims.
+        bad.setAccepting(true);
+        vm.prank(address(bad));
+        spl.claimNative();
+        assertEq(address(bad).balance, 0.05 ether);
+        assertEq(spl.pendingNative(address(bad)), 0);
+    }
+
+    function test_claimNative_revertsWhenNoPending() public {
+        vm.prank(keeper);
+        vm.expectRevert(FeeSplitter.NoPendingNative.selector);
+        splitter.claimNative();
+    }
+
+    function test_splitNative_doesNotBrickWhenAgentOwnerReverts() public {
+        // The agent owner is per-call attacker-controlled — confirm a
+        // malicious owner cannot block the keeper/zhgg/commons legs.
+        RejectingRecipient badOwner = new RejectingRecipient();
+        vm.prank(payer);
+        splitter.splitNative{value: 1 ether}(address(badOwner));
+
+        assertEq(keeper.balance,  0.05 ether);
+        assertEq(zhgg.balance,    0.05 ether);
+        assertEq(commons.balance, 0.05 ether);
+        assertEq(splitter.pendingNative(address(badOwner)), 0.85 ether);
+    }
+}
+
+/// Minimal contract that rejects ETH unless explicitly enabled.
+contract RejectingRecipient {
+    bool public accepting;
+
+    function setAccepting(bool v) external {
+        accepting = v;
+    }
+
+    receive() external payable {
+        require(accepting, "rejecting");
+    }
 }

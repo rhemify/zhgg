@@ -40,6 +40,15 @@ contract FeeSplitter is ReentrancyGuard {
     /// @notice Recipient of the reputation commons 5% cut.
     address public immutable commonsRecipient;
 
+    /// @notice Pull-payment escrow for native sends that fail. Recipients
+    ///         that reject ETH (reverting receive(), out-of-gas grief, or
+    ///         a Safe-with-guard) would otherwise DoS every native split
+    ///         in the system because the immutable recipient set has no
+    ///         upgrade path. Failed legs accrue here; recipients call
+    ///         `claimNative` to pull what's owed. ERC-20 path stays strict
+    ///         because USDC does not revert on transfer.
+    mapping(address => uint256) public pendingNative;
+
     /// @notice Emitted on every successful split. Logs all four legs so
     ///         off-chain indexers can compute owner-by-owner volume.
     event Split(
@@ -53,10 +62,19 @@ contract FeeSplitter is ReentrancyGuard {
         bytes32 attributionTag
     );
 
+    /// @notice Emitted when a native send fails and the amount is escrowed
+    ///         for a pull-payment claim. Off-chain monitors can alert on
+    ///         this to surface stuck recipients.
+    event NativeLegEscrowed(address indexed recipient, uint256 amount);
+
+    /// @notice Emitted when a recipient pulls a previously-escrowed leg.
+    event NativeLegClaimed(address indexed recipient, uint256 amount);
+
     error ZeroAddress();
     error ZeroAmount();
     error InvalidSplitConfig();
     error NativeTransferFailed(address to, uint256 amount);
+    error NoPendingNative();
 
     /// @param keeperhubRecipient_ KeeperHub treasury address
     /// @param zhggRecipient_      zhgg treasury address
@@ -160,9 +178,35 @@ contract FeeSplitter is ReentrancyGuard {
         emit Split(agentOwner, address(0), totalAmount, ownerCut, keeperCut, zhggCut, commonsCut, attributionTag);
     }
 
+    /// @dev Try to send `amount` to `to`. On failure (revert, out-of-gas
+    ///      grief, no receive function), escrow the amount for the
+    ///      recipient to pull via `claimNative`. This isolates each leg
+    ///      so a single broken recipient cannot brick the splitter.
     function _sendNative(address to, uint256 amount) internal {
         if (amount == 0) return;
         (bool ok, ) = payable(to).call{value: amount}("");
-        if (!ok) revert NativeTransferFailed(to, amount);
+        if (!ok) {
+            pendingNative[to] += amount;
+            emit NativeLegEscrowed(to, amount);
+        }
+    }
+
+    /// @notice Pull any escrowed native owed to `msg.sender`.
+    /// @dev    Pull-payment pattern: recipient initiates, contract no
+    ///         longer holds liability for failed sends. Reentrancy-guarded
+    ///         because we send native after a state mutation.
+    function claimNative() external nonReentrant {
+        uint256 amount = pendingNative[msg.sender];
+        if (amount == 0) revert NoPendingNative();
+        pendingNative[msg.sender] = 0;
+        (bool ok, ) = payable(msg.sender).call{value: amount}("");
+        if (!ok) {
+            // Re-escrow on failure — recipient must fix their address
+            // before they can claim again. Critically: never silently
+            // lose funds even if the recipient still can't accept.
+            pendingNative[msg.sender] = amount;
+            revert NativeTransferFailed(msg.sender, amount);
+        }
+        emit NativeLegClaimed(msg.sender, amount);
     }
 }
