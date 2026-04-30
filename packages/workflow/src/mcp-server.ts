@@ -85,10 +85,11 @@ export interface HttpHandlerOptions {
 }
 
 /// Builds the standalone HTTP request handler. Exported so tests can call
-/// it without binding a port.
+/// it without binding a port. Tool list is computed PER REQUEST (not
+/// cached at handler construction) so callers that mutate the registry
+/// after building the handler see live state on `/health` and `/tools`.
 export function createHttpHandler(opts: HttpHandlerOptions): (req: Request) => Promise<Response> {
   const { registry, authToken } = opts;
-  const tools = listTools(registry);
 
   return async (req: Request) => {
     const url = new URL(req.url);
@@ -97,13 +98,14 @@ export function createHttpHandler(opts: HttpHandlerOptions): (req: Request) => P
       // Liveness != readiness. A registry with zero tools means the server
       // is up but there's nothing it can usefully serve — clients should
       // back off rather than retry against a permanently empty endpoint.
-      if (tools.length === 0) {
+      const liveTools = listTools(registry);
+      if (liveTools.length === 0) {
         return jsonResponse({ status: 'unhealthy', reason: 'no tools registered' }, 503);
       }
-      return jsonResponse({ status: 'ok', tools: tools.map((t) => t.name) });
+      return jsonResponse({ status: 'ok', tools: liveTools.map((t) => t.name) });
     }
     if (url.pathname === '/tools' && req.method === 'GET') {
-      return jsonResponse({ tools });
+      return jsonResponse({ tools: listTools(registry) });
     }
     if (url.pathname === '/call' && req.method === 'POST') {
       const auth = req.headers.get('Authorization');

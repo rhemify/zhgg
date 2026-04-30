@@ -80,6 +80,29 @@ describe('createHttpHandler', () => {
     expect(body.status).toBe('unhealthy');
     expect(body.reason).toBe('no tools registered');
   });
+
+  it('/health reflects post-construction registry mutations (live, not cached)', async () => {
+    const { buildRegistry, zgPlugin } = await loadDeps();
+    const { createHttpHandler } = await import('../src/mcp-server.js');
+    const registry = buildRegistry([]);
+    const handler = createHttpHandler({ registry, authToken: 'secret' });
+
+    // Before mutation: empty → 503
+    const res1 = await handler(new Request('http://x/health'));
+    expect(res1.status).toBe(503);
+
+    // Mutate the registry AFTER the handler was constructed
+    for (const [name, tool] of buildRegistry([zgPlugin])) {
+      registry.set(name, tool);
+    }
+
+    // After mutation: handler must see the live state
+    const res2 = await handler(new Request('http://x/health'));
+    expect(res2.status).toBe(200);
+    const body2 = (await res2.json()) as { status: string; tools: string[] };
+    expect(body2.status).toBe('ok');
+    expect(body2.tools.length).toBeGreaterThan(0);
+  });
 });
 
 describe('createHttpHandler /call auth', () => {
