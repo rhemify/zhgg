@@ -1,7 +1,11 @@
 {
   "extends": "@my-better-t-app/config/tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node", "@types/bun"]
+    "types": ["node", "@types/bun"],
+    "paths": {
+      "@/lib/workflow/executor/step-handler": ["./src/keeperhub-shim/step-handler.ts"],
+      "@/lib/metrics/instrumentation/plugin": ["./src/keeperhub-shim/metrics.ts"]
+    }
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*", "test/**/*", "plugins/**/*"]
 }
