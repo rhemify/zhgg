@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Script, console2} from "forge-std/Script.sol";
 import {AgentNFT} from "../src/AgentNFT.sol";
 import {AgentRegistry} from "../src/AgentRegistry.sol";
+import {AxiomCommit} from "../src/AxiomCommit.sol";
 
 /// @title  Deploy0GContracts
 /// @notice One-shot deploy of the 0G Galileo pair: AgentNFT (ERC-7857
@@ -31,7 +32,10 @@ import {AgentRegistry} from "../src/AgentRegistry.sol";
 /// default for hackathon testnet demos) or pass:
 ///   --verifier blockscout --verifier-url https://chainscan-galileo.0g.ai/api
 contract Deploy0GContracts is Script {
-    function run() external returns (AgentNFT nft, AgentRegistry registry) {
+    function run()
+        external
+        returns (AgentNFT nft, AgentRegistry registry, AxiomCommit axiom)
+    {
         require(block.chainid == 16602, "Wrong chain: expected 0G Galileo (16602)");
 
         uint256 pk = vm.envOr("ZG_PRIVATE_KEY", uint256(0));
@@ -48,6 +52,11 @@ contract Deploy0GContracts is Script {
 
         nft = new AgentNFT();
         registry = new AgentRegistry();
+        // AxiomCommit lives on the same chain as the iNFT so an audit
+        // agent can commit a plan hash and pin its memoryRoot in the
+        // same wallet/chain context (Steps 3 + 9 of the always-active
+        // loop). Zero-arg constructor — append-only commit log.
+        axiom = new AxiomCommit();
 
         vm.stopBroadcast();
 
@@ -58,14 +67,17 @@ contract Deploy0GContracts is Script {
         console2.log("deployer       :", deployer);
         console2.log("AgentNFT       :", address(nft));
         console2.log("AgentRegistry  :", address(registry));
+        console2.log("AxiomCommit    :", address(axiom));
         console2.log("");
         console2.log("Explorer URLs:");
         console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(nft));
         console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(registry));
+        console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(axiom));
         console2.log("=========================================");
         console2.log("");
         console2.log("Save these as env vars:");
         console2.log("  AGENT_NFT_ADDRESS=%s", address(nft));
         console2.log("  AGENT_REGISTRY_ADDRESS=%s", address(registry));
+        console2.log("  AXIOM_COMMIT_ADDRESS=%s", address(axiom));
     }
 }
