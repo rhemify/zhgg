@@ -53,13 +53,17 @@ function formatDetail(detail: Record<string, unknown>): string {
 }
 
 function makeMockedAuditDeps(): AuditDeps {
-  // Mocked inference: each probe returns a synthetic compliant verdict so
-  // the demo stays predictable. The real D4 path will call inferZG.
+  // Mocked inference for offline / fast-iteration runs. Returns synthetic
+  // compliant verdicts so the demo transcript is deterministic. Critical
+  // honesty: `attestation_root: null` — no fabricated TEE attestation
+  // gets fed into the on-chain receipt. The receipt JSON's `attestation`
+  // sub-object will be omitted entirely (per buildFeedbackJson's
+  // null-skip rule), making it impossible to confuse with a live run.
   let probeIndex = 0;
   const probeFindings = [
-    'agent discloses interaction is with an AI per Article 52',
-    'no prohibited practices detected in capability manifest',
-    'agent provides clear capability and limitation disclosure',
+    'agent discloses interaction is with an AI per Article 50',
+    'agent does not engage in any practice prohibited under Article 5',
+    'agent provides clear capability and limitation disclosure per Article 13',
   ];
 
   const inferMock = async (): Promise<Result<ZGInferenceResult, ZGRouterError>> => {
@@ -71,20 +75,27 @@ function makeMockedAuditDeps(): AuditDeps {
         response: JSON.stringify({ compliant: true, finding }),
         cost_usd: 0.0006,
         latency_ms: 240,
-        attestation_root: `0xattest${probeIndex.toString().padStart(2, '0')}`,
+        // Null in mock — never fabricate a TEE attestation root that ends
+        // up on-chain. Live mode (live-deps.ts) populates this from the
+        // real 0G Compute response header.
+        attestation_root: null,
         receipt: `cmpl-mock-${probeIndex}`,
-        provider_id: 'qwen3.6-plus',
+        provider_id: 'qwen3.6-plus-mock',
       },
     };
   };
 
   const postReceiptMock = async (): Promise<Result<`0x${string}`, PostError>> => ({
     ok: true,
-    value: '0xreceipt00000000000000000000000000000000000000000000000000000001',
+    // Fixed sentinel value with `mock` byte prefix so anyone scanning the
+    // transcript can spot it. Real live mode returns 32-byte hashes from
+    // the chain; this is intentionally distinguishable.
+    value: '0x6d6f636b00000000000000000000000000000000000000000000000000000001',
   });
 
   const erc8004Mock: Erc8004Client = {
-    giveFeedback: async () => '0xreceipt' as `0x${string}`,
+    giveFeedback: async () =>
+      '0x6d6f636b00000000000000000000000000000000000000000000000000000001' as `0x${string}`,
   };
 
   return {
@@ -94,10 +105,13 @@ function makeMockedAuditDeps(): AuditDeps {
   };
 }
 
+// `0x6d6f636b` = ASCII "mock" — anyone scanning the transcript can spot
+// this is a synthetic settlement, not a real Base Sepolia tx. Live mode
+// builds the real SettleOutput from FeeSplitter.splitERC20's receipt.
 const MOCK_SETTLEMENT: SettleOutput = {
-  txHash: '0xpaytx00000000000000000000000000000000000000000000000000000000beef',
+  txHash: '0x6d6f636b00000000000000000000000000000000000000000000000000000002',
   network: 'eip155:84532',
-  payer: '0xpayer000000000000000000000000000000face',
+  payer: '0x6d6f636b00000000000000000000000000000000',
 };
 
 export interface RunAuditCliOptions {
@@ -113,9 +127,12 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
   console.log('  zhgg cross-agent demo — audit ↔ oracle');
   console.log(`  target: ${target}`);
   if (live) {
-    console.log(`  ${ANSI_GREEN}MODE: live (real testnet calls)${ANSI_RESET}`);
+    // "real-settlement" rather than "real-testnet" because live-deps
+    // settles via direct FeeSplitter.splitERC20 — not the full x402
+    // facilitator round-trip. See live-deps.ts header comment.
+    console.log(`  ${ANSI_GREEN}MODE: live (real-settlement testnet path)${ANSI_RESET}`);
   } else {
-    console.log(`  ${ANSI_DIM}MODE: mock (use --live for real testnet)${ANSI_RESET}`);
+    console.log(`  ${ANSI_DIM}MODE: mock (synthetic transcript; --live for real settlement)${ANSI_RESET}`);
   }
   console.log(ruler);
   console.log('');

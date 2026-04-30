@@ -23,7 +23,8 @@ export type TranscriptStepName =
   | 'audit.start'
   | 'audit.complete'
   | 'audit.failed'
-  | 'audit.receipt.post';
+  | 'audit.receipt.post'
+  | 'audit.receipt.failed';
 
 export interface TranscriptStep {
   /// Milliseconds since the orchestrator started. Use the elapsed time as
@@ -158,7 +159,15 @@ export async function runCrossAgentDemo(
       verdict: auditReport.verdict,
       findingsCount: auditReport.findings.length,
     });
-    emit('audit.receipt.post', { txHash: auditReport.receiptTxHash });
+    // Honest post outcome: emit `.post` only when the on-chain write
+    // actually returned a tx hash. Null receipt → `.failed`. The
+    // transcript previously emitted `.post` with `txHash: null`,
+    // looking like a successful post that wasn't.
+    if (auditReport.receiptTxHash !== null) {
+      emit('audit.receipt.post', { txHash: auditReport.receiptTxHash });
+    } else {
+      emit('audit.receipt.failed', { reason: 'postReceipt returned null' });
+    }
   } catch (e) {
     auditError = e instanceof Error ? e.message : String(e);
     emit('audit.failed', { reason: auditError, paid: settle !== null });
