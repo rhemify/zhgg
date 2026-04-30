@@ -108,8 +108,19 @@ async function main(): Promise<void> {
 async function entry(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === 'audit') {
-    const target = args[1] ?? 'oracle.zhgg.eth';
-    const code = await runAuditCli(target);
+    // Parse positional + flags after `audit`. First non-flag is the
+    // target; `--live` switches to real testnet wiring.
+    let target = 'oracle.zhgg.eth';
+    let live = false;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      if (a === '--live') {
+        live = true;
+      } else if (a !== undefined && !a.startsWith('--')) {
+        target = a;
+      }
+    }
+    const code = await runAuditCli(target, { live });
     process.exit(code);
   }
   await main();

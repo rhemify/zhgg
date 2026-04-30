@@ -5,6 +5,7 @@
 /// 0G Compute calls.
 
 import { runCrossAgentDemo, type TranscriptStep } from './cross-agent.js';
+import { buildLiveDeps, readLiveConfigFromEnv } from './live-deps.js';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type {
   Erc8004Client,
@@ -20,6 +21,7 @@ const ANSI_YELLOW = '\x1b[33m';
 const ANSI_RED = '\x1b[31m';
 const ANSI_DIM = '\x1b[2m';
 const ANSI_RESET = '\x1b[0m';
+void ANSI_GREEN;
 
 function fmtTime(ms: number): string {
   return `[T+${(ms / 1000).toFixed(1)}s]`;
@@ -99,17 +101,42 @@ const MOCK_SETTLEMENT: SettleOutput = {
   payer: '0xpayer000000000000000000000000000000face',
 };
 
-export async function runAuditCli(target: string): Promise<number> {
+export interface RunAuditCliOptions {
+  /// When true, swap mocked deps for real testnet executors. Reads env
+  /// for keys + addresses. Fails loudly if env is incomplete.
+  live?: boolean;
+}
+
+export async function runAuditCli(target: string, opts: RunAuditCliOptions = {}): Promise<number> {
+  const live = opts.live ?? false;
   const ruler = '━'.repeat(60);
   console.log(ruler);
   console.log('  zhgg cross-agent demo — audit ↔ oracle');
   console.log(`  target: ${target}`);
-  console.log(`  ${ANSI_DIM}MODE: mock (D4 wires live testnet)${ANSI_RESET}`);
+  if (live) {
+    console.log(`  ${ANSI_GREEN}MODE: live (real testnet calls)${ANSI_RESET}`);
+  } else {
+    console.log(`  ${ANSI_DIM}MODE: mock (use --live for real testnet)${ANSI_RESET}`);
+  }
   console.log(ruler);
   console.log('');
 
+  let bundle:
+    | { deps: Parameters<typeof runCrossAgentDemo>[0]; auditOptions: Parameters<typeof runCrossAgentDemo>[1]['auditOptions'] }
+    | null = null;
+  if (live) {
+    try {
+      const cfg = readLiveConfigFromEnv();
+      bundle = buildLiveDeps(cfg);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.error(`${ANSI_RED}live-mode env error:${ANSI_RESET} ${reason}`);
+      return 1;
+    }
+  }
+
   const transcript = await runCrossAgentDemo(
-    {
+    bundle?.deps ?? {
       settleOraclePayment: async () => MOCK_SETTLEMENT,
       auditDeps: makeMockedAuditDeps(),
     },
@@ -117,10 +144,10 @@ export async function runAuditCli(target: string): Promise<number> {
       target: {
         agentId: 7n,
         agentName: target,
-        manifest: `placeholder manifest for ${target}; D4 will read from on-chain ERC-7857`,
+        manifest: `placeholder manifest for ${target}; D5 will read from on-chain ERC-7857`,
       },
       oracleTopic: 'eu-ai-act',
-      auditOptions: {
+      auditOptions: bundle?.auditOptions ?? {
         apiKey: process.env.ZG_ROUTER_KEY ?? 'sk-mock',
         registryAddress: '0x1111111111111111111111111111111111111111',
         agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
