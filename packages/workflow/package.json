@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./storage-log-zg": "./src/storage-log-zg.ts"
   },
   "scripts": {
     "check-types": "tsc --noEmit",
