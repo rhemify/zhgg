@@ -1,0 +1,248 @@
+/// `bun mint-agent` — open onboarding CLI.
+///
+/// One command provisions a new agent: mints the iNFT, registers it in
+/// AgentRegistry, mints the ENS subname, grants a SpendCap. Used live in
+/// the demo to mint a third agent on stage from the audience.
+///
+/// Required env:
+/// - MINT_AGENT_PRIVATE_KEY  — signer for all 4 calls
+/// - AGENT_NFT_ADDRESS       — D1 contract on 0G Galileo
+/// - AGENT_REGISTRY_ADDRESS  — D1 contract on 0G Galileo
+/// - ENS_REGISTRAR_ADDRESS   — D1 contract on Sepolia (or mainnet)
+/// - SPEND_CAP_ADDRESS       — D1 contract on Base Sepolia
+/// - ZG_RPC_URL              — 0G Galileo RPC
+/// - BASE_SEPOLIA_RPC_URL    — Base Sepolia RPC
+/// - ENS_RPC_URL             — Sepolia or mainnet RPC for ENS
+
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  toHex,
+  type Address,
+  type Hex,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import {
+  grantSpendCap,
+  mintAgentNFT,
+  mintSubname,
+  registerAgent,
+  type MintExecutor,
+} from './steps.js';
+
+const ANSI_GREEN = '\x1b[32m';
+const ANSI_RED = '\x1b[31m';
+const ANSI_DIM = '\x1b[2m';
+const ANSI_RESET = '\x1b[0m';
+
+const USDC_BASE_SEPOLIA: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const DEFAULT_DAILY_CAP_USDC = 50_000_000n; // 50 USDC at 6 decimals
+const DEFAULT_PERIOD_SECONDS = 86_400n; // 1 day
+
+interface CliArgs {
+  name: string;
+  tier: 'oracle' | 'audit';
+  owner: Address;
+  ensMainnet: boolean;
+}
+
+function parseArgs(argv: readonly string[]): CliArgs {
+  let name: string | undefined;
+  let tier: string | undefined;
+  let owner: string | undefined;
+  let ensMainnet = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--name') name = argv[++i];
+    else if (arg === '--tier') tier = argv[++i];
+    else if (arg === '--owner') owner = argv[++i];
+    else if (arg === '--ens-mainnet') ensMainnet = true;
+    else if (arg === '--help' || arg === '-h') {
+      printHelp();
+      process.exit(0);
+    }
+  }
+
+  if (!name) die('--name <slug> is required');
+  if (!tier || (tier !== 'oracle' && tier !== 'audit')) {
+    die('--tier must be one of: oracle, audit');
+  }
+  if (!owner || !/^0x[a-fA-F0-9]{40}$/.test(owner)) {
+    die('--owner must be a 0x-prefixed 20-byte address');
+  }
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    die('--name must be lowercase letters, digits, and hyphens only');
+  }
+
+  return { name, tier, owner: owner as Address, ensMainnet };
+}
+
+function printHelp(): void {
+  console.log(`bun mint-agent — open agent onboarding CLI
+
+Usage:
+  bun mint-agent --name <slug> --tier <oracle|audit> --owner <0x...> [--ens-mainnet]
+
+Required env:
+  MINT_AGENT_PRIVATE_KEY  signer for all 4 calls
+  AGENT_NFT_ADDRESS       0G Galileo
+  AGENT_REGISTRY_ADDRESS  0G Galileo
+  ENS_REGISTRAR_ADDRESS   Sepolia (or mainnet with --ens-mainnet)
+  SPEND_CAP_ADDRESS       Base Sepolia
+  ZG_RPC_URL              0G Galileo RPC
+  BASE_SEPOLIA_RPC_URL    Base Sepolia RPC
+  ENS_RPC_URL             Sepolia/mainnet RPC
+
+Outputs: 4 tx hashes (iNFT mint, registry register, ENS subname, spend cap grant).
+`);
+}
+
+function die(reason: string): never {
+  console.error(`${ANSI_RED}error:${ANSI_RESET} ${reason}`);
+  console.error(`run with --help for usage`);
+  process.exit(1);
+}
+
+function reqEnv(key: string): string {
+  const v = process.env[key];
+  if (!v) die(`missing required env: ${key}`);
+  return v;
+}
+
+function buildExecutor(rpcUrl: string, privateKey: Hex): MintExecutor {
+  const account = privateKeyToAccount(privateKey);
+  const transport = http(rpcUrl);
+  const wallet = createWalletClient({ account, transport });
+  const pub = createPublicClient({ transport });
+
+  return {
+    // chainId is part of the executor's MintExecutor type but the chain
+    // is implicit in the transport binding here — each executor is built
+    // per RPC URL, so passing chainId would be redundant. We accept and
+    // ignore it for symmetry with mock executors used in tests.
+    call: async ({ address, abi, functionName, args }) => {
+      const sim = await pub.simulateContract({
+        account,
+        address,
+        abi: abi as never,
+        functionName: functionName as never,
+        args: args as never,
+      });
+      const txHash = await wallet.writeContract(sim.request);
+      await pub.waitForTransactionReceipt({ hash: txHash });
+      return { result: sim.result as never, txHash };
+    },
+  };
+}
+
+function fmtHash(h: string | null | undefined): string {
+  if (!h) return '—';
+  if (h.length <= 12) return h;
+  return `${h.slice(0, 8)}…${h.slice(-4)}`;
+}
+
+function buildCapabilityManifest(name: string, tier: 'oracle' | 'audit'): Hex {
+  const manifest = {
+    type: `https://zhgg.eth/manifest/v1/${tier}`,
+    name,
+    tier,
+  };
+  return toHex(JSON.stringify(manifest));
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const ruler = '━'.repeat(60);
+  console.log(ruler);
+  console.log(`  zhgg mint-agent — provisioning ${args.name}.zhgg.eth`);
+  console.log(`  tier: ${args.tier}  owner: ${args.owner}`);
+  console.log(`  ${ANSI_DIM}ENS network: ${args.ensMainnet ? 'mainnet' : 'sepolia'}${ANSI_RESET}`);
+  console.log(ruler);
+  console.log('');
+
+  const privateKey = reqEnv('MINT_AGENT_PRIVATE_KEY') as Hex;
+  if (!/^0x[a-fA-F0-9]{64}$/.test(privateKey)) {
+    die('MINT_AGENT_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string');
+  }
+
+  const agentNft = reqEnv('AGENT_NFT_ADDRESS') as Address;
+  const agentRegistry = reqEnv('AGENT_REGISTRY_ADDRESS') as Address;
+  const ensRegistrar = reqEnv('ENS_REGISTRAR_ADDRESS') as Address;
+  const spendCap = reqEnv('SPEND_CAP_ADDRESS') as Address;
+  const zgRpc = reqEnv('ZG_RPC_URL');
+  const baseRpc = reqEnv('BASE_SEPOLIA_RPC_URL');
+  const ensRpc = reqEnv('ENS_RPC_URL');
+
+  const zgExecutor = buildExecutor(zgRpc, privateKey);
+  const baseExecutor = buildExecutor(baseRpc, privateKey);
+  const ensExecutor = buildExecutor(ensRpc, privateKey);
+
+  const manifest = buildCapabilityManifest(args.name, args.tier);
+
+  // Step 1 — mint iNFT
+  const minted = await mintAgentNFT(zgExecutor, {
+    agentNft,
+    owner: args.owner,
+    capabilityManifest: manifest,
+  });
+  if (!minted.ok) die(`step ${minted.error.kind}: ${minted.error.reason}`);
+  console.log(
+    `${ANSI_GREEN}✓${ANSI_RESET} minted iNFT #${minted.value.tokenId.toString()} ${ANSI_DIM}(tx ${fmtHash(minted.value.txHash)})${ANSI_RESET}`
+  );
+
+  // Step 2 — register in 8004
+  const agentURI = `ipfs://placeholder/${args.name}`;
+  const registered = await registerAgent(zgExecutor, {
+    agentRegistry,
+    agentURI,
+    metadata: [
+      { metadataKey: 'inft', metadataValue: toHex(`${agentNft}:${minted.value.tokenId}`) },
+      { metadataKey: 'ens', metadataValue: toHex(`${args.name}.zhgg.eth`) },
+      { metadataKey: 'tier', metadataValue: toHex(args.tier) },
+    ],
+  });
+  if (!registered.ok) die(`step ${registered.error.kind}: ${registered.error.reason}`);
+  console.log(
+    `${ANSI_GREEN}✓${ANSI_RESET} registered agentId #${registered.value.agentId.toString()} ${ANSI_DIM}(tx ${fmtHash(registered.value.txHash)})${ANSI_RESET}`
+  );
+
+  // Step 3 — mint ENS subname (public-mint path so anyone can use this CLI)
+  const subnameMinted = await mintSubname(ensExecutor, {
+    ensRegistrar,
+    label: args.name,
+    owner: args.owner,
+    publicMint: true,
+  });
+  if (!subnameMinted.ok) die(`step ${subnameMinted.error.kind}: ${subnameMinted.error.reason}`);
+  console.log(
+    `${ANSI_GREEN}✓${ANSI_RESET} minted ${args.name}.zhgg.eth ${ANSI_DIM}(tx ${fmtHash(subnameMinted.value.txHash)})${ANSI_RESET}`
+  );
+
+  // Step 4 — grant 50 USDC/day SpendCap
+  const capped = await grantSpendCap(baseExecutor, {
+    spendCap,
+    account: args.owner,
+    asset: USDC_BASE_SEPOLIA,
+    maxPerPeriod: DEFAULT_DAILY_CAP_USDC,
+    periodLength: DEFAULT_PERIOD_SECONDS,
+    expiresAt: 0n,
+  });
+  if (!capped.ok) die(`step ${capped.error.kind}: ${capped.error.reason}`);
+  console.log(
+    `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day ${ANSI_DIM}(tx ${fmtHash(capped.value.txHash)})${ANSI_RESET}`
+  );
+
+  console.log('');
+  console.log(ruler);
+  console.log(`  ${args.name}.zhgg.eth is live.`);
+  console.log(ruler);
+  process.exit(0);
+}
+
+main().catch((err: unknown) => {
+  const reason = err instanceof Error ? err.message : String(err);
+  console.error(`${ANSI_RED}mint-agent failed:${ANSI_RESET} ${reason}`);
+  process.exit(1);
+});
