@@ -183,10 +183,26 @@ interface StepRecord {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const ruler = '━'.repeat(60);
+
+  // ENS layer is opt-in: absence of ENS_REGISTRAR_ADDRESS skips both
+  // subname mint (step 3) and text records (step 5) cleanly. Lets
+  // hackathon teams ship the iNFT + 8004 + SpendCap + receiver wallet
+  // bundle without owning a parent ENS name. Agent identity falls
+  // back to (chainId, tokenId) — fully verifiable on chain.
+  const ensRegistrar = process.env.ENS_REGISTRAR_ADDRESS as Address | undefined;
+  const ensEnabled = ensRegistrar !== undefined;
+
   console.log(ruler);
-  console.log(`  zhgg mint-agent — provisioning ${args.name}.zhgg.eth`);
+  if (ensEnabled) {
+    console.log(`  zhgg mint-agent — provisioning ${args.name}.zhgg.eth`);
+  } else {
+    console.log(`  zhgg mint-agent — provisioning iNFT for "${args.name}"`);
+    console.log(`  ${ANSI_DIM}(ENS layer skipped — ENS_REGISTRAR_ADDRESS unset)${ANSI_RESET}`);
+  }
   console.log(`  tier: ${args.tier}  owner: ${args.owner}`);
-  console.log(`  ${ANSI_DIM}ENS network: ${args.ensMainnet ? 'mainnet' : 'sepolia'}${ANSI_RESET}`);
+  if (ensEnabled) {
+    console.log(`  ${ANSI_DIM}ENS network: ${args.ensMainnet ? 'mainnet' : 'sepolia'}${ANSI_RESET}`);
+  }
   console.log(ruler);
   console.log('');
 
@@ -197,16 +213,17 @@ async function main(): Promise<void> {
 
   const agentNft = reqEnv('AGENT_NFT_ADDRESS') as Address;
   const agentRegistry = reqEnv('AGENT_REGISTRY_ADDRESS') as Address;
-  const ensRegistrar = reqEnv('ENS_REGISTRAR_ADDRESS') as Address;
   const spendCap = reqEnv('SPEND_CAP_ADDRESS') as Address;
   const zgRpc = reqEnv('ZG_RPC_URL');
   const baseRpc = reqEnv('BASE_SEPOLIA_RPC_URL');
-  const ensRpc = reqEnv('ENS_RPC_URL');
 
   const zgExecutor = buildExecutor(buildClients(zgRpc, privateKey));
   const baseExecutor = buildExecutor(buildClients(baseRpc, privateKey));
-  const ensClients = buildClients(ensRpc, privateKey);
-  const ensExecutor = buildExecutor(ensClients);
+
+  // Only construct ENS clients when the layer is enabled — saves an
+  // unnecessary RPC connection in the iNFT-only path.
+  const ensClients = ensEnabled ? buildClients(reqEnv('ENS_RPC_URL'), privateKey) : null;
+  const ensExecutor = ensClients ? buildExecutor(ensClients) : null;
 
   const manifest = buildCapabilityManifest(args.name, args.tier);
   const completed: StepRecord[] = [];
@@ -251,16 +268,24 @@ async function main(): Promise<void> {
   // Step 2 — register in 8004
   // Custom `zhgg://` scheme makes it explicit that this is NOT a real
   // IPFS-pinned URI — D5 work pins the agent registration JSON to IPFS
-  // and writes the real CID here.
+  // and writes the real CID here. The `ens` metadata key is omitted
+  // when ENS is disabled so off-chain indexers don't see a stale
+  // `<name>.zhgg.eth` claim that doesn't resolve.
   const agentURI = `zhgg://placeholder/agent/${args.name}`;
+  const metadata: Array<{ metadataKey: string; metadataValue: Hex }> = [
+    { metadataKey: 'inft', metadataValue: toHex(`${agentNft}:${minted.value.tokenId}`) },
+    { metadataKey: 'tier', metadataValue: toHex(args.tier) },
+  ];
+  if (ensEnabled) {
+    metadata.splice(1, 0, {
+      metadataKey: 'ens',
+      metadataValue: toHex(`${args.name}.zhgg.eth`),
+    });
+  }
   const registered = await registerAgent(zgExecutor, {
     agentRegistry,
     agentURI,
-    metadata: [
-      { metadataKey: 'inft', metadataValue: toHex(`${agentNft}:${minted.value.tokenId}`) },
-      { metadataKey: 'ens', metadataValue: toHex(`${args.name}.zhgg.eth`) },
-      { metadataKey: 'tier', metadataValue: toHex(args.tier) },
-    ],
+    metadata,
   });
   ensureOk(registered, 'register agent (8004)');
   completed.push({
@@ -268,63 +293,73 @@ async function main(): Promise<void> {
     txHash: registered.value.txHash,
   });
 
-  // Steps 3 + 4 — ENS subname (Sepolia/mainnet) and SpendCap (Base Sepolia)
-  // are independent and live on different chains. Parallelize to halve
-  // the back-half wall-clock for the live stage demo.
-  const [subnameMinted, capped] = await Promise.all([
-    mintSubname(ensExecutor, {
-      ensRegistrar,
-      label: args.name,
-      owner: args.owner,
-      publicMint: true,
-    }),
-    grantSpendCap(baseExecutor, {
-      spendCap,
-      account: args.owner,
-      asset: USDC_BASE_SEPOLIA,
-      maxPerPeriod: DEFAULT_DAILY_CAP_USDC,
-      periodLength: DEFAULT_PERIOD_SECONDS,
-      expiresAt: 0n,
-    }),
-  ]);
-
-  ensureOk(subnameMinted, 'mint ENS subname');
-  completed.push({
-    label: `${ANSI_GREEN}✓${ANSI_RESET} minted ${args.name}.zhgg.eth`,
-    txHash: subnameMinted.value.txHash,
+  // Step 3 — ENS subname (only when enabled). Step 4 — SpendCap
+  // (always). When ENS is on, parallelize since they're on different
+  // chains; otherwise run SpendCap standalone.
+  const cappedPromise = grantSpendCap(baseExecutor, {
+    spendCap,
+    account: args.owner,
+    asset: USDC_BASE_SEPOLIA,
+    maxPerPeriod: DEFAULT_DAILY_CAP_USDC,
+    periodLength: DEFAULT_PERIOD_SECONDS,
+    expiresAt: 0n,
   });
 
-  ensureOk(capped, 'grant SpendCap (Base)');
-  completed.push({
-    label: `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day`,
-    txHash: capped.value.txHash,
-  });
+  if (ensEnabled && ensExecutor) {
+    const [subnameMinted, capped] = await Promise.all([
+      mintSubname(ensExecutor, {
+        ensRegistrar: ensRegistrar!,
+        label: args.name,
+        owner: args.owner,
+        publicMint: true,
+      }),
+      cappedPromise,
+    ]);
 
-  // Step 5 — write ENS text records so external indexers can resolve
-  // <name>.zhgg.eth → iNFT, ERC-8004 passport, tier. Done after the
-  // subname is minted (step 3); not parallelizable with steps 3/4
-  // because it needs the subname to exist + the resolver may need a
-  // pre-flight setResolver tx (see ens-records.ts).
-  const resolver = args.ensMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
-  try {
-    const records = await setAgentTextRecords(ensClients, {
-      label: args.name,
-      inft: `${agentNft}:${minted.value.tokenId.toString()}`,
-      passport: `eip155:16602:${agentRegistry}:${registered.value.agentId.toString()}`,
-      tier: args.tier,
-      resolver,
+    ensureOk(subnameMinted, 'mint ENS subname');
+    completed.push({
+      label: `${ANSI_GREEN}✓${ANSI_RESET} minted ${args.name}.zhgg.eth`,
+      txHash: subnameMinted.value.txHash,
     });
-    for (const txHash of records.txHashes) {
-      completed.push({
-        label: `${ANSI_GREEN}✓${ANSI_RESET} ENS text records on ${args.name}.zhgg.eth`,
-        txHash,
+
+    ensureOk(capped, 'grant SpendCap (Base)');
+    completed.push({
+      label: `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day`,
+      txHash: capped.value.txHash,
+    });
+
+    // Step 5 — ENS text records (only when ENS is enabled and the
+    // subname mint succeeded above). The resolver may need a pre-flight
+    // `setResolver` tx; see ens-records.ts for that path.
+    const resolver = args.ensMainnet ? PUBLIC_RESOLVER_MAINNET : PUBLIC_RESOLVER_SEPOLIA;
+    try {
+      const records = await setAgentTextRecords(ensClients!, {
+        label: args.name,
+        inft: `${agentNft}:${minted.value.tokenId.toString()}`,
+        passport: `eip155:16602:${agentRegistry}:${registered.value.agentId.toString()}`,
+        tier: args.tier,
+        resolver,
       });
+      for (const txHash of records.txHashes) {
+        completed.push({
+          label: `${ANSI_GREEN}✓${ANSI_RESET} ENS text records on ${args.name}.zhgg.eth`,
+          txHash,
+        });
+      }
+    } catch (e) {
+      failPartial(
+        'set ENS text records',
+        e instanceof Error ? e.message : String(e)
+      );
     }
-  } catch (e) {
-    failPartial(
-      'set ENS text records',
-      e instanceof Error ? e.message : String(e)
-    );
+  } else {
+    // ENS skipped — just await the cap grant.
+    const capped = await cappedPromise;
+    ensureOk(capped, 'grant SpendCap (Base)');
+    completed.push({
+      label: `${ANSI_GREEN}✓${ANSI_RESET} spend cap 50 USDC/day`,
+      txHash: capped.value.txHash,
+    });
   }
 
   // Step 6 (optional) — deploy the per-iNFT receiver wallet so KH can
@@ -356,7 +391,12 @@ async function main(): Promise<void> {
   }
   console.log('');
   console.log(ruler);
-  console.log(`  ${args.name}.zhgg.eth is live.`);
+  if (ensEnabled) {
+    console.log(`  ${args.name}.zhgg.eth is live.`);
+  } else {
+    console.log(`  iNFT #${minted.value.tokenId.toString()} is live (agent: "${args.name}").`);
+    console.log(`  ${ANSI_DIM}canonical id: eip155:16602:${agentNft}:${minted.value.tokenId.toString()}${ANSI_RESET}`);
+  }
   console.log(ruler);
   process.exit(0);
 }

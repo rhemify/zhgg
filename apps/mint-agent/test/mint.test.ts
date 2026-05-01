@@ -213,4 +213,60 @@ describe('mint sequence (full flow)', () => {
     expect(s.ok).toBe(true);
     expect(c.ok).toBe(true);
   });
+
+  it('ENS-skipped bundle: mint → register (no ens key) → grantSpendCap', async () => {
+    // Mirrors what apps/mint-agent/src/index.ts runs when
+    // ENS_REGISTRAR_ADDRESS is unset: only 3 on-chain steps, and the
+    // 8004 metadata MUST NOT include the `ens` key (otherwise off-chain
+    // indexers would see a `<name>.zhgg.eth` claim that doesn't resolve).
+    const { executor, spy } = makeExecutor([
+      { result: 7n, txHash: TX1 }, // mintAgentNFT
+      { result: 42n, txHash: TX2 }, // registerAgent
+      { result: undefined, txHash: TX3 }, // grantSpendCap
+    ]);
+
+    const m = await mintAgentNFT(executor, {
+      agentNft: AGENT_NFT,
+      owner: OWNER,
+      capabilityManifest: '0xdeadbeef',
+    });
+    expect(m.ok).toBe(true);
+    if (!m.ok) throw new Error('unreachable');
+
+    const r = await registerAgent(executor, {
+      agentRegistry: AGENT_REGISTRY,
+      agentURI: 'zhgg://placeholder/agent/test',
+      metadata: [
+        { metadataKey: 'inft', metadataValue: '0xabc' as Hex },
+        { metadataKey: 'tier', metadataValue: '0x6f7261636c65' as Hex },
+        // NOTE: no `ens` key — the ENS-skip path explicitly omits it.
+      ],
+    });
+    expect(r.ok).toBe(true);
+
+    const c = await grantSpendCap(executor, {
+      spendCap: SPEND_CAP,
+      account: OWNER,
+      asset: USDC,
+      maxPerPeriod: 50_000_000n,
+      periodLength: 86_400n,
+      expiresAt: 0n,
+    });
+    expect(c.ok).toBe(true);
+
+    // Three executor calls — no mintSubname between register and cap.
+    expect(spy).toHaveBeenCalledTimes(3);
+
+    // The register call's metadata MUST NOT contain an `ens` entry.
+    const registerCall = spy.mock.calls[1]![0] as {
+      functionName: string;
+      args: readonly unknown[];
+    };
+    expect(registerCall.functionName).toBe('register');
+    const passedMetadata = registerCall.args[1] as ReadonlyArray<{
+      metadataKey: string;
+    }>;
+    expect(passedMetadata.some((m) => m.metadataKey === 'ens')).toBe(false);
+    expect(passedMetadata.some((m) => m.metadataKey === 'inft')).toBe(true);
+  });
 });
