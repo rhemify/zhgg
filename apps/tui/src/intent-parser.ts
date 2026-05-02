@@ -10,6 +10,7 @@
 /// "unrecognised" toast and fixes the line.
 
 import type { OracleTopic } from '@zhgg/oracle-data';
+import { resolveAgent } from './agent-registry.js';
 
 export type IntentCommand =
   | {
@@ -23,7 +24,11 @@ export type IntentCommand =
     }
   | { kind: 'ask-oracle'; topic: OracleTopic; raw: string }
   | { kind: 'empty' }
-  | { kind: 'unknown'; raw: string; reason: string };
+  | { kind: 'unknown'; raw: string; reason: string }
+  /// Surfaced when the user types an `*.eth` target that isn't in
+  /// `agent-registry.ts`. Distinct from `unknown` so the TUI can
+  /// render a "mint first" hint instead of the generic command help.
+  | { kind: 'unknown_agent'; raw: string; target: string; message: string };
 
 const ORACLE_TOPICS: ReadonlySet<OracleTopic> = new Set<OracleTopic>([
   'eu-ai-act',
@@ -50,19 +55,51 @@ function resolveOracleTopic(raw: string): OracleTopic | null {
   return null;
 }
 
-/// Stable tokenId fallback for ENS-targets — the real cross-agent
-/// orchestrator wants a `bigint agentId`, but the TUI doesn't carry
-/// an on-chain ENS→tokenId resolver. We hash the ENS string to a
-/// 64-bit slot so each typed name maps to a deterministic synthetic
-/// id; numeric inputs pass through unchanged.
-function targetToTokenId(raw: string): bigint {
-  if (/^\d+$/.test(raw)) return BigInt(raw);
-  let h = 0n;
-  for (let i = 0; i < raw.length; i++) {
-    h = (h * 131n + BigInt(raw.charCodeAt(i))) & 0xffffffffffffffffn;
+/// Resolve an `audit <target>` argument to a real on-chain tokenId.
+///
+/// Three input shapes:
+///   - bare digits (e.g. `7`) → parsed as `BigInt`, passed through.
+///   - `*.eth` name → looked up in the static `agent-registry.ts`
+///     map; returns `unknown_agent` when missing so the TUI can
+///     prompt the user to mint first.
+///   - anything else → generic `unknown` reason (caller renders the
+///     command-help hint).
+///
+/// We deliberately removed the previous keccak-style hash fallback —
+/// it produced syntactically-valid `bigint`s that no AgentNFT could
+/// possibly own, so any downstream `tokenURI` / `ownerOf` read
+/// reverted with a confusing "ERC721NonexistentToken" error.
+type TargetResolution =
+  | { ok: true; tokenId: bigint }
+  | { ok: false; cmd: IntentCommand };
+
+function resolveTarget(target: string, raw: string): TargetResolution {
+  if (/^\d+$/.test(target)) {
+    return { ok: true, tokenId: BigInt(target) };
   }
-  // Reserve 0 as "unset" so the orchestrator never sees agentId=0.
-  return h === 0n ? 1n : h;
+  if (/\.eth$/i.test(target)) {
+    const tokenId = resolveAgent(target);
+    if (tokenId === null) {
+      return {
+        ok: false,
+        cmd: {
+          kind: 'unknown_agent',
+          raw,
+          target,
+          message: `${target} — not in agent-registry. Mint first or use a tokenId.`,
+        },
+      };
+    }
+    return { ok: true, tokenId };
+  }
+  return {
+    ok: false,
+    cmd: {
+      kind: 'unknown',
+      raw,
+      reason: `audit target "${target}" — expected an *.eth name or numeric tokenId`,
+    },
+  };
 }
 
 export function parseIntent(input: string): IntentCommand {
@@ -80,7 +117,9 @@ export function parseIntent(input: string): IntentCommand {
     if (!target) {
       return { kind: 'unknown', raw: trimmed, reason: 'audit needs a target (ens or tokenId)' };
     }
-    return { kind: 'audit', target, tokenId: targetToTokenId(target) };
+    const resolved = resolveTarget(target, trimmed);
+    if (!resolved.ok) return resolved.cmd;
+    return { kind: 'audit', target, tokenId: resolved.tokenId };
   }
 
   if (head === 'ask' && parts[1]?.toLowerCase() === 'oracle') {

@@ -964,6 +964,15 @@ function handleIntentKey(key: string): boolean {
       stagedIntent = null
       return true
     }
+    if (parsed.kind === 'unknown_agent') {
+      // Distinct hint vs `unknown` — the user typed a syntactically
+      // valid `*.eth` but it's not in our minted-agent registry.
+      // Keep them oriented instead of falling through to the generic
+      // command-help line.
+      intentHint = parsed.message
+      stagedIntent = null
+      return true
+    }
     if (parsed.kind === 'empty') {
       intentHint = ''
       stagedIntent = null

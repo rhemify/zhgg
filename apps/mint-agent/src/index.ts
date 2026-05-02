@@ -46,9 +46,11 @@ const USDC_BASE_SEPOLIA: Address = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const DEFAULT_DAILY_CAP_USDC = 50_000_000n; // 50 USDC at 6 decimals
 const DEFAULT_PERIOD_SECONDS = 86_400n; // 1 day
 
+type AgentTier = 'oracle' | 'audit' | 'swap';
+
 interface CliArgs {
   name: string;
-  tier: 'oracle' | 'audit';
+  tier: AgentTier;
   owner: Address;
   ensMainnet: boolean;
 }
@@ -72,8 +74,8 @@ function parseArgs(argv: readonly string[]): CliArgs {
   }
 
   if (!name) die('--name <slug> is required');
-  if (!tier || (tier !== 'oracle' && tier !== 'audit')) {
-    die('--tier must be one of: oracle, audit');
+  if (!tier || (tier !== 'oracle' && tier !== 'audit' && tier !== 'swap')) {
+    die('--tier must be one of: oracle, audit, swap');
   }
   if (!owner || !/^0x[a-fA-F0-9]{40}$/.test(owner)) {
     die('--owner must be a 0x-prefixed 20-byte address');
@@ -82,14 +84,14 @@ function parseArgs(argv: readonly string[]): CliArgs {
     die('--name must be lowercase letters, digits, and hyphens only');
   }
 
-  return { name, tier, owner: owner as Address, ensMainnet };
+  return { name, tier: tier as AgentTier, owner: owner as Address, ensMainnet };
 }
 
 function printHelp(): void {
   console.log(`bun mint-agent — open agent onboarding CLI
 
 Usage:
-  bun mint-agent --name <slug> --tier <oracle|audit> --owner <0x...> [--ens-mainnet]
+  bun mint-agent --name <slug> --tier <oracle|audit|swap> --owner <0x...> [--ens-mainnet]
 
 Required env:
   MINT_AGENT_PRIVATE_KEY  signer for all 4 calls
@@ -147,7 +149,17 @@ function buildExecutor(clients: ChainClients): MintExecutor {
         args: args as never,
       });
       const txHash = await wallet.writeContract(sim.request);
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      // 0G Galileo's public RPC frequently lags the propagation of a
+      // freshly-mined receipt — viem's default 6 retries × ~1s gives
+      // up before the tx is queryable, even though the tx itself
+      // landed. Bump the budget so a healthy mint doesn't surface as
+      // a false "FAILED at step" and trigger the partial-state
+      // recovery flow.
+      await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 120_000,
+        retryCount: 60,
+      });
       return { result: sim.result as never, txHash };
     },
   };
@@ -159,13 +171,42 @@ function fmtHash(h: string | null | undefined): string {
   return `${h.slice(0, 8)}…${h.slice(-4)}`;
 }
 
-function buildCapabilityManifest(name: string, tier: 'oracle' | 'audit'): Hex {
-  const manifest = {
+/// Per-tier capability descriptors baked into the iNFT manifest. The
+/// off-chain router reads `capabilities[]` to decide which tools the
+/// agent may invoke; `feeds[]` and `protocols[]` hint at the data
+/// surface so the audit-agent can flag a request that exceeds the
+/// declared envelope.
+function buildCapabilityManifest(name: string, tier: AgentTier): Hex {
+  const base = {
     type: `https://zhgg.eth/manifest/v1/${tier}`,
     name,
     tier,
   };
-  return toHex(JSON.stringify(manifest));
+  let extra: Record<string, unknown>;
+  switch (tier) {
+    case 'oracle':
+      extra = {
+        capabilities: ['price_feed', 'regulatory_data', 'usdc_payment_receipt'],
+        feeds: ['pyth', 'eu-ai-act'],
+        settlement: { chain: 'eip155:84532', asset: 'usdc' },
+      };
+      break;
+    case 'swap':
+      extra = {
+        capabilities: ['token_swap', 'spend_cap_aware'],
+        protocols: ['uniswap-v3'],
+        chains: ['eip155:84532'],
+      };
+      break;
+    case 'audit':
+    default:
+      extra = {
+        capabilities: ['compliance_probe', 'tee_attestation'],
+        rulesets: ['eu-ai-act', 'mica'],
+      };
+      break;
+  }
+  return toHex(JSON.stringify({ ...base, ...extra }));
 }
 
 /// Successful step output is BUFFERED rather than printed eagerly. We

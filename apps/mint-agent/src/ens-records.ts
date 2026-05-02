@@ -90,7 +90,7 @@ export interface SetAgentTextRecordsOpts {
   /// CAIP-2 ERC-8004 reference, e.g. `"eip155:16602:0xRegistry:agentId"`.
   passport: string;
   /// Agent tier.
-  tier: 'oracle' | 'audit';
+  tier: 'oracle' | 'audit' | 'swap';
   /// Optional MCP endpoint URL.
   endpoint?: string;
   /// PublicResolver address — pass `PUBLIC_RESOLVER_SEPOLIA` or
