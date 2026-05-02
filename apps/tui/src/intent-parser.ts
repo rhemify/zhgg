@@ -25,6 +25,16 @@ export type SwapSymbol = 'ETH' | 'WETH' | 'USDC';
 
 const SWAP_SYMBOLS: ReadonlySet<SwapSymbol> = new Set<SwapSymbol>(['ETH', 'WETH', 'USDC']);
 
+/// Symbols accepted by the yield park/unpark intents (Slice K). The
+/// MockERC4626 vault wraps an ERC-20, so native ETH is rejected — the
+/// operator must wrap to WETH first via `swap`. USDC is the canonical
+/// asset (FeeSplitter path); WETH is allowed for completeness so the
+/// same vault contract can be redeployed against WETH for a different
+/// demo.
+export type ParkSymbol = Extract<SwapSymbol, 'USDC' | 'WETH'>;
+
+const PARK_SYMBOLS: ReadonlySet<ParkSymbol> = new Set<ParkSymbol>(['USDC', 'WETH']);
+
 /// Roles accepted by the `mint <role>` operator intent. Mirrors the
 /// `AgentTier` union in `apps/mint-agent/src/index.ts` — kept as a
 /// duplicate literal here so the parser can return a typed value
@@ -84,6 +94,116 @@ export type IntentCommand =
   | { kind: 'block' }
   | { kind: 'cancel' }
   | { kind: 'mint'; role: MintRole }
+  /// ACP / ERC-8183 escrow intents (Slice J). Both fire REAL on-chain
+  /// transactions against the deployed AgenticCommerce contract on 0G
+  /// Galileo (chainId 16602). `acp create` opens a job AND funds it in
+  /// three txs (createJob → approve → fund); the user is the client and
+  /// is set as the evaluator too (self-evaluating workflow allowed by
+  /// the contract — evaluator==zero is rewritten to msg.sender). The
+  /// provider is resolved from AgentNFT.ownerOf(tokenId). `acp release`
+  /// calls AgenticCommerce.complete(jobId, reason) — only the evaluator
+  /// may call, so the same wallet that created the job must release it.
+  ///
+  /// Amount semantics: `usdcAmount` is decimal-string in the payment
+  /// token's units (parsed via parseUnits with 6 decimals — matches the
+  /// USDC convention; the actual ACP_PAYMENT_TOKEN address is read from
+  /// env at dispatch time and any 6-decimals ERC-20 will work).
+  | {
+      kind: 'acp-create';
+      /// Either an ENS-shaped string (e.g. `oracle.zhgg.eth`) or a
+      /// numeric tokenId. We keep both so the dispatcher can label the
+      /// audit row with the operator's input verbatim while feeding the
+      /// canonical bigint to AgentNFT.ownerOf.
+      target: string;
+      tokenId: bigint;
+      /// Decimal-string amount (e.g. "10", "0.5"). The dispatcher
+      /// converts to atomic units via parseUnits(amount, 6).
+      usdcAmount: string;
+    }
+  | {
+      kind: 'acp-release';
+      /// uint256 jobId. Bare digits only — jobIds are monotonic counters
+      /// scoped to AgenticCommerce and don't naturally map to a name.
+      jobId: bigint;
+    }
+  /// AxiomCommit intents (Slice H). Both fire REAL on-chain
+  /// `commitPlan` / `revealPlan` calls against the deployed contract on
+  /// 0G Galileo (chainId 16602). The `tokenId` is parsed identically to
+  /// `audit` (digits or *.eth via resolveAgent); `plan` is rest-of-line
+  /// kept verbatim — the dispatcher hashes it via keccak256(toHex(plan))
+  /// to mirror what off-chain audit indexers expect.
+  | {
+      kind: 'axiom-commit';
+      target: string;
+      tokenId: bigint;
+      plan: string;
+    }
+  | {
+      kind: 'axiom-reveal';
+      /// 0x + 64 hex commit handle returned by the original commitPlan tx.
+      /// Validated at parse time so the dispatcher never sees a malformed
+      /// id (the on-chain CommitNotFound revert path is reserved for
+      /// genuine "no such commit" cases, not typo'd input).
+      commitId: `0x${string}`;
+      plan: string;
+    }
+  /// Yield-vault intents (Slice K — ERC-4626). Both target the user's
+  /// AgentReceiverWallet for `tokenId` (default #1). `park` calls
+  /// `parkIdle()` on the receiver — anyone-may-call, deposits any idle
+  /// balance of the configured `yieldAsset` into the MockERC4626.
+  /// `unpark` calls `withdrawIdle(assets)` — owner-only, redeems a
+  /// specific atomic amount back from the vault into the receiver.
+  /// Native ETH is rejected; the vault always wraps an ERC-20.
+  | {
+      kind: 'park';
+      /// Decimal-string amount in the symbol's units (e.g. "1" for 1
+      /// USDC, "0.5" for 0.5 WETH). The dispatcher uses this to
+      /// pre-check the receiver wallet's balance and label the audit
+      /// row — `parkIdle()` itself deposits the FULL idle balance, so
+      /// the operator should fund the receiver with at least this much
+      /// before dispatching.
+      amount: string;
+      symbol: ParkSymbol;
+      /// iNFT this wallet serves. Defaults to 1 (the seed agent) when
+      /// the operator omits it; explicit form `park 2 0.5 USDC` lets a
+      /// power user pick a specific iNFT's receiver.
+      tokenId: bigint;
+    }
+  | {
+      kind: 'unpark';
+      /// Decimal-string amount in the symbol's units. Unlike park,
+      /// unpark uses this exactly: `withdrawIdle(parseUnits(amount,
+      /// decimals))` redeems precisely that asset amount from the
+      /// vault, burning the proportional share count.
+      amount: string;
+      symbol: ParkSymbol;
+      tokenId: bigint;
+    }
+  /// Delegation intent (Slice I — ERC-7710). Issues a real redeemable
+  /// delegation via the deployed `DelegationManager` on Base Sepolia
+  /// (chainId 84532). The dispatcher signs a `Delegation` struct
+  /// (caveats are hardcoded — allowedTargets=[SpendCap],
+  /// maxValuePerCall=0, expiresAt=now+1h, spendCapAsset=USDC,
+  /// permissionId=<intent.permissionId>) via EIP-712, ABI-encodes it
+  /// as a permissionContext, and calls `redeemDelegations(...)` on the
+  /// manager. Every redemption auto-debits the matching SpendCap
+  /// permissionId bucket.
+  ///
+  /// `to` is the delegate address — kept as a raw string here because
+  /// the dispatcher resolves three shapes: bare 0x address (viem
+  /// getAddress), agent ENS (`*.zhgg.eth` via agent-registry →
+  /// AgentNFT.ownerOf on 0G Galileo), or mainnet ENS (`*.eth` via
+  /// resolveRecipient). Validation at parse time is shape-only; real
+  /// resolution happens in the dispatcher with full clients.
+  | {
+      kind: 'delegate';
+      /// Raw `<to>` token — 0x-address, agent ENS, or mainnet ENS.
+      to: string;
+      /// 0x + 64 hex bytes32 — the SpendCap permissionId bucket the
+      /// delegation will debit on each redemption. Validated at parse
+      /// time so the dispatcher never sees a malformed id.
+      permissionId: `0x${string}`;
+    }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
   /// Surfaced when the user types an `*.eth` target that isn't in
@@ -181,6 +301,271 @@ export function parseIntent(input: string): IntentCommand {
     const resolved = resolveTarget(target, trimmed);
     if (!resolved.ok) return resolved.cmd;
     return { kind: 'audit', target, tokenId: resolved.tokenId };
+  }
+
+  // ── AxiomCommit intents (Slice H) ────────────────────────────────────
+  // `commit <tokenId|ens> <plan-text>` → commitPlan(tokenId, keccak256(plan))
+  // `reveal <commitId>     <plan-text>` → revealPlan(tokenId, commitId, plan, "")
+  // Plan is rest-of-line, kept verbatim — joining with single spaces is
+  // intentional (canonicalises whitespace). For reveal, the tokenId is
+  // recovered from the commit on-chain; the dispatcher reads it via
+  // commitOf(commitId) before sending the reveal tx.
+  if (head === 'commit') {
+    const target = parts[1]?.trim();
+    if (!target) {
+      return { kind: 'unknown', raw: trimmed, reason: 'commit needs <tokenId|ens> <plan>' };
+    }
+    const plan = parts.slice(2).join(' ').trim();
+    if (plan.length === 0) {
+      return { kind: 'unknown', raw: trimmed, reason: 'commit plan body is empty' };
+    }
+    const resolved = resolveTarget(target, trimmed);
+    if (!resolved.ok) return resolved.cmd;
+    return { kind: 'axiom-commit', target, tokenId: resolved.tokenId, plan };
+  }
+
+  if (head === 'reveal') {
+    const commitId = parts[1]?.trim() ?? '';
+    if (!/^0x[a-fA-F0-9]{64}$/.test(commitId)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `reveal commitId "${commitId}" — expected 0x + 64 hex chars`,
+      };
+    }
+    const plan = parts.slice(2).join(' ').trim();
+    if (plan.length === 0) {
+      return { kind: 'unknown', raw: trimmed, reason: 'reveal plan body is empty' };
+    }
+    return {
+      kind: 'axiom-reveal',
+      commitId: commitId as `0x${string}`,
+      plan,
+    };
+  }
+
+  // ── Delegation intent (Slice I — ERC-7710) ───────────────────────────
+  // `delegate <to> <permissionId>` — issues a real redeemable delegation
+  // via DelegationManager on Base Sepolia. <to> is one of:
+  //   - 0x + 40 hex address (validated by viem getAddress in the dispatcher)
+  //   - agent ENS like `oracle.zhgg.eth` (resolved via agent-registry →
+  //     AgentNFT.ownerOf on 0G Galileo to recover the iNFT owner address)
+  //   - mainnet ENS like `vitalik.eth` (resolved via resolveRecipient)
+  // <permissionId> MUST be 0x + 64 hex bytes32. We validate the shape
+  // here so the dispatcher never has to invent a hint for a typo'd id;
+  // a real "permission not granted" path stays available on chain via
+  // SpendCap's CapNotFound revert during redeem.
+  if (head === 'delegate') {
+    const to = parts[1]?.trim() ?? '';
+    const permissionId = parts[2]?.trim() ?? '';
+    if (!to) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'delegate needs <to> <permissionId> (e.g. "delegate oracle.zhgg.eth 0x0000…0001")',
+      };
+    }
+    if (!permissionId) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'delegate needs a permissionId (0x + 64 hex bytes32)',
+      };
+    }
+    if (parts.length > 3) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'delegate takes exactly two arguments: <to> <permissionId>',
+      };
+    }
+    // Shape-validate <to>: 0x40-hex OR *.eth name. The dispatcher does
+    // the real resolution (checksum + ENS lookup); we just reject obvious
+    // typos so the operator gets immediate feedback.
+    const isAddrShape = /^0x[a-fA-F0-9]{40}$/.test(to);
+    const isEnsShape = /\.eth$/i.test(to);
+    if (!isAddrShape && !isEnsShape) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `delegate to "${to}" — expected 0x-address or *.eth name (mainnet ENS or *.zhgg.eth agent)`,
+      };
+    }
+    if (!/^0x[a-fA-F0-9]{64}$/.test(permissionId)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `delegate permissionId "${permissionId}" — expected 0x + 64 hex chars (bytes32)`,
+      };
+    }
+    return {
+      kind: 'delegate',
+      to,
+      permissionId: permissionId as `0x${string}`,
+    };
+  }
+
+  // ── Yield-vault intents (Slice K — ERC-4626) ─────────────────────────
+  // Two accepted forms — short (defaults tokenId=1) and explicit:
+  //   `park <amount> <USDC|WETH>`               e.g. `park 1 USDC`
+  //   `park <tokenId> <amount> <USDC|WETH>`     e.g. `park 1 0.5 USDC`
+  // Same shapes for `unpark`. Disambiguation: the short form has 2
+  // args after the verb; the explicit form has 3. We refuse anything
+  // else with a precise hint rather than guessing.
+  if (head === 'park' || head === 'unpark') {
+    const tokens = parts.slice(1);
+    let tokenId: bigint;
+    let amount: string;
+    let symRaw: string;
+
+    if (tokens.length === 2) {
+      tokenId = 1n; // default to seed agent
+      amount = tokens[0]!;
+      symRaw = tokens[1]!;
+    } else if (tokens.length === 3) {
+      const tidRaw = tokens[0]!;
+      if (!/^\d+$/.test(tidRaw)) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: `${head} tokenId "${tidRaw}" — expected positive integer (e.g. 1, 2, 3)`,
+        };
+      }
+      tokenId = BigInt(tidRaw);
+      amount = tokens[1]!;
+      symRaw = tokens[2]!;
+    } else {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `${head} needs <amount> <USDC|WETH> or <tokenId> <amount> <USDC|WETH> (e.g. "${head} 1 USDC", "${head} 2 0.5 USDC")`,
+      };
+    }
+
+    if (!/^\d+(\.\d+)?$/.test(amount)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `${head} amount "${amount}" — expected decimal (e.g. 1, 0.5)`,
+      };
+    }
+    const symbol = symRaw.toUpperCase();
+    if (!PARK_SYMBOLS.has(symbol as ParkSymbol)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `${head} symbol "${symRaw}" — supported: USDC, WETH (native ETH not allowed; vault expects ERC-20)`,
+      };
+    }
+    return {
+      kind: head === 'park' ? 'park' : 'unpark',
+      amount,
+      symbol: symbol as ParkSymbol,
+      tokenId,
+    };
+  }
+
+  // ── ACP / EIP-8183 escrow intents (Slice J) ──────────────────────────
+  // Two sub-verbs against the deployed AgenticCommerce contract on 0G:
+  //   `acp create <agentTokenId|ens> <usdcAmount>` → createJob+fund
+  //   `acp release <jobId>`                         → complete (releases
+  //                                                    escrow → provider)
+  //
+  // agentTokenId follows the same digits-or-ENS resolution as `audit`.
+  // usdcAmount is a decimal-string in the payment token's units (the
+  // dispatcher applies parseUnits(_, 6) and reads the actual token
+  // address from ACP_PAYMENT_TOKEN env). jobId is bare uint256 digits.
+  //
+  // Refusals are surfaced as `unknown` with a precise reason — the
+  // dispatcher only ever sees a well-formed `acp-create` / `acp-release`.
+  if (head === 'acp') {
+    const sub = parts[1]?.toLowerCase();
+    if (!sub) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'acp needs a sub-verb: create | release',
+      };
+    }
+    if (sub === 'create') {
+      const target = parts[2]?.trim();
+      const amount = parts[3]?.trim();
+      if (!target || !amount) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp create needs <agentTokenId|ens> <usdcAmount> (e.g. "acp create oracle.zhgg.eth 0.5")',
+        };
+      }
+      if (parts.length > 4) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp create takes exactly two arguments: <agentTokenId|ens> <usdcAmount>',
+        };
+      }
+      // Decimal shape — same regex as swap/transfer so the dispatcher's
+      // parseUnits(_, 6) call never throws on user-typed input.
+      if (!/^\d+(\.\d+)?$/.test(amount)) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: `acp create amount "${amount}" — expected decimal USDC (e.g. 0.5, 10, 100.25)`,
+        };
+      }
+      // Reject zero-budget early — the contract reverts with ZeroBudget()
+      // on fund(); we can save the round trip and surface a clearer hint.
+      if (/^0(\.0+)?$/.test(amount)) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp create amount "0" — escrow must be > 0 (contract reverts ZeroBudget)',
+        };
+      }
+      const resolved = resolveTarget(target, trimmed);
+      if (!resolved.ok) return resolved.cmd;
+      return { kind: 'acp-create', target, tokenId: resolved.tokenId, usdcAmount: amount };
+    }
+    if (sub === 'release') {
+      const jobIdRaw = parts[2]?.trim();
+      if (!jobIdRaw) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp release needs <jobId> (e.g. "acp release 1")',
+        };
+      }
+      if (parts.length > 3) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp release takes exactly one argument: <jobId>',
+        };
+      }
+      // Plain uint256 digits only — leading zeros, signs, and hex are
+      // all rejected. Real jobIds are monotonic from 1.
+      if (!/^[0-9]+$/.test(jobIdRaw)) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: `acp release jobId "${jobIdRaw}" — expected uint256 digits (e.g. 1, 42)`,
+        };
+      }
+      const jobId = BigInt(jobIdRaw);
+      if (jobId === 0n) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'acp release jobId "0" — jobIds start at 1',
+        };
+      }
+      return { kind: 'acp-release', jobId };
+    }
+    return {
+      kind: 'unknown',
+      raw: trimmed,
+      reason: `acp: unknown sub-verb "${sub}" — supported: create, release`,
+    };
   }
 
   if (head === 'swap') {
@@ -445,6 +830,6 @@ export function parseIntent(input: string): IntentCommand {
   return {
     kind: 'unknown',
     raw: trimmed,
-    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", "transfer <amount> <token> to <recipient>", or "kh <trigger|status|workflows|integrations>"`,
+    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", "transfer <amount> <token> to <recipient>", "commit <tokenId> <plan>", "reveal <commitId> <plan>", or "kh <trigger|status|workflows|integrations>"`,
   };
 }

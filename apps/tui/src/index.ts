@@ -20,17 +20,26 @@ import {
   createWalletClient,
   http,
   parseAbi,
+  parseUnits,
+  formatUnits,
   keccak256,
   toHex,
+  type Account,
   type Address,
+  type Chain,
   type Hex,
   type PublicClient,
+  type Transport,
   type WalletClient,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { runCrossAgentDemo, type TranscriptStep } from '../../demo/src/cross-agent.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.js';
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
+import {
+  commitPlan as axiomCommitCall,
+  revealPlan as axiomRevealCall,
+} from '../../demo/src/loop-helpers.js';
 import { queryOracle } from '@zhgg/oracle-agent';
 import { executeSwap } from 'swap-agent';
 import { executeTransfer } from 'transfer-agent';
@@ -57,6 +66,11 @@ import {
   showBlock,
   type OpRow,
 } from './operator-intents.js';
+import {
+  dispatchAcpCreate,
+  dispatchAcpRelease,
+  type AcpRow,
+} from './acp-intents.js';
 
 // ── ANSI primitives ───────────────────────────────────────────────────────────
 
@@ -242,7 +256,13 @@ let runningCommand:
   | 'agents'
   | 'balances'
   | 'block'
-  | 'mint' = 'idle'
+  | 'mint'
+  | 'axiom-commit'
+  | 'axiom-reveal'
+  | 'acp-create'
+  | 'acp-release'
+  | 'park'
+  | 'unpark' = 'idle'
 
 /// Cancellation flag — flipped on by the `cancel` intent (or Esc while
 /// a dispatch is running). Long-running dispatchers check this between
@@ -778,6 +798,12 @@ function formatStaged(intent: IntentCommand): string {
     case 'kh-status': return `kh status ${intent.executionId}`
     case 'kh-workflows': return `kh workflows`
     case 'kh-integrations': return `kh integrations`
+    case 'axiom-commit': return `commit ${intent.target} (#${intent.tokenId}) plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
+    case 'axiom-reveal': return `reveal ${shortHash(intent.commitId)} plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
+    case 'acp-create': return `acp create ${intent.target} (#${intent.tokenId}) ${intent.usdcAmount} USDC`
+    case 'acp-release': return `acp release jobId=${intent.jobId}`
+    case 'park': return `park ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`
+    case 'unpark': return `unpark ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`
     default: return '—'
   }
 }
@@ -1187,6 +1213,232 @@ async function dispatchTransferIntent(
   }
 }
 
+// ── AxiomCommit dispatchers (Slice H) ────────────────────────────────────────
+//
+// `commit <tokenId> <plan>` and `reveal <commitId> <plan>` fire REAL
+// AxiomCommit.commitPlan + revealPlan transactions on 0G Galileo against
+// the contract at AXIOM_COMMIT_ADDRESS. No mocks. The committer is the
+// 0G wallet bound to MINT_AGENT_PRIVATE_KEY (built fresh per dispatch);
+// we never log the key. Reveal reverts surface verbatim — wrong
+// commitId → CommitNotFound, hash drift → PlanHashMismatch, foreign
+// caller → NotCommitter — that revert is the most informative signal in
+// the loop, so we forward the chain's reason text untouched.
+
+/// Build the 0G clients + signer used by both AxiomCommit dispatchers.
+/// Centralised here (rather than reading liveBundle) so commit/reveal
+/// works even when the Base Sepolia env block is incomplete — the
+/// AxiomCommit contract lives on 0G and only needs the 0G env. We
+/// intentionally read MINT_AGENT_PRIVATE_KEY directly (mirroring
+/// `dispatchOperatorMint`) so the caller never logs/echoes it and the
+/// account is bound at call time. Returns null + pushes an audit row
+/// when env is missing — caller bails on null without a second read.
+function buildAxiomBundle():
+  | {
+      address: Address
+      zgPub: PublicClient<Transport, Chain | undefined>
+      zgWallet: WalletClient<Transport, Chain | undefined, Account>
+    }
+  | null {
+  const axiomEnv = process.env.AXIOM_COMMIT_ADDRESS
+  if (!axiomEnv || !/^0x[a-fA-F0-9]{40}$/.test(axiomEnv)) {
+    pushAudit('axiom', 'AXIOM_COMMIT_ADDRESS missing/invalid', 'err')
+    setToast('err', 'AXIOM_COMMIT_ADDRESS required')
+    return null
+  }
+  const pkRaw = process.env.MINT_AGENT_PRIVATE_KEY
+  if (!pkRaw || !/^0x[0-9a-fA-F]{64}$/.test(pkRaw)) {
+    pushAudit('axiom', 'MINT_AGENT_PRIVATE_KEY missing/invalid', 'err')
+    setToast('err', 'MINT_AGENT_PRIVATE_KEY required')
+    return null
+  }
+  const zgRpc = process.env.ZG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai'
+  const account = privateKeyToAccount(pkRaw as Hex)
+  const transport = http(zgRpc)
+  const zgPub = createPublicClient({ transport })
+  const zgWallet = createWalletClient({ account, transport })
+  return { address: axiomEnv as Address, zgPub, zgWallet }
+}
+
+async function dispatchAxiomCommitIntent(
+  intent: Extract<IntentCommand, { kind: 'axiom-commit' }>,
+): Promise<void> {
+  if (cancelRequested) {
+    cancelRequested = false
+    pushAudit('intent', 'axiom-commit cancelled before dispatch', 'info')
+    return
+  }
+  cancelRequested = false
+  const ax = buildAxiomBundle()
+  if (!ax) return
+
+  runningCommand = 'axiom-commit'
+  const planHashPreview = keccak256(toHex(intent.plan))
+  pushAudit(
+    'axiom',
+    `axiom.commit.tx submitting tokenId=${intent.tokenId} planHash=${shortHash(planHashPreview)}`,
+    'info',
+  )
+  render()
+
+  try {
+    // The cross-package viem versions resolve to structurally-identical
+    // but nominally-distinct `Client` types (the helper lives in
+    // apps/demo, this file in apps/tui — bun's symlink layout produces
+    // two `Client` shapes TS treats as unrelated even though they're
+    // the same shape at runtime). Casting through Parameters keeps the
+    // cast scoped to exactly the helper's declared input.
+    type CommitArgs = Parameters<typeof axiomCommitCall>[0]
+    const res = await axiomCommitCall({
+      axiomAddress: ax.address,
+      tokenId: intent.tokenId,
+      plan: toHex(intent.plan),
+      publicClient: ax.zgPub as CommitArgs['publicClient'],
+      walletClient: ax.zgWallet as CommitArgs['walletClient'],
+    })
+    if (!res.ok) {
+      // Surface the chain's revert reason verbatim — typical paths here:
+      //   NotAuthorizedToCommit(tokenId, caller) — committer not the
+      //   token owner / operator. NotTokenOwner from setOperator. Other
+      //   transports report the underlying RPC error.
+      pushAudit('axiom', `axiom.commit.failed ${res.error.kind === 'commit_failed' ? res.error.reason : res.error.kind}`.slice(0, 200), 'err')
+      setToast('err', `axiom commit ${res.error.kind}`)
+      return
+    }
+    const v = res.value
+    pushAudit(
+      'axiom',
+      `axiom.commit.confirmed commitId=${v.commitId} tx=${shortHash(v.txHash)}`,
+      'ok',
+    )
+    // Update receipt panel with the parsed PlanCommitted event when
+    // available — we mark the envelope as settled with the tx hash so
+    // the JSON pane renders, and let an off-chain indexer decode the
+    // PlanCommitted log topic later via `parseEventLogs`.
+    try {
+      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash })
+      receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+      pushAudit(
+        'receipt',
+        `axiom-commit receipt status=${rcpt.status} blk=${rcpt.blockNumber} gas=${rcpt.gasUsed} planHash=${shortHash(v.planHash)}`,
+        rcpt.status === 'success' ? 'ok' : 'err',
+      )
+    } catch (e) {
+      pushAudit('receipt', `axiom-commit receipt fetch failed: ${e instanceof Error ? e.message : String(e)}`, 'err')
+    }
+  } catch (e) {
+    pushAudit('axiom', `axiom.commit.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200), 'err')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
+async function dispatchAxiomRevealIntent(
+  intent: Extract<IntentCommand, { kind: 'axiom-reveal' }>,
+): Promise<void> {
+  if (cancelRequested) {
+    cancelRequested = false
+    pushAudit('intent', 'axiom-reveal cancelled before dispatch', 'info')
+    return
+  }
+  cancelRequested = false
+  const ax = buildAxiomBundle()
+  if (!ax) return
+
+  runningCommand = 'axiom-reveal'
+  pushAudit('axiom', `axiom.reveal.tx submitting commitId=${shortHash(intent.commitId)}`, 'info')
+  render()
+
+  // Pre-flight: read commitOf(commitId) so we can surface CommitNotFound
+  // / AlreadyRevealed BEFORE submitting a tx that would revert (and burn
+  // 0G gas). The contract's reveal path only validates committer +
+  // planHash on-chain — `tokenId` at reveal is the value emitted on the
+  // PlanRevealed event, not a stored equality check — so the cleanest
+  // source-of-truth on the commit's original tokenId is off-chain (the
+  // indexer that watched PlanCommitted). Here we just verify the commit
+  // exists; the tokenId we pass to revealPlan is mirrored from the
+  // on-chain event by indexers anyway, and using `0n` makes it explicit
+  // that the TUI didn't recover it from the input.
+  const COMMIT_OF_ABI = parseAbi([
+    'function commitOf(bytes32 commitId) view returns (address committer, uint64 blockNumber, bool revealed, bytes32 planHash)',
+  ])
+  try {
+    const view = (await ax.zgPub.readContract({
+      address: ax.address,
+      abi: COMMIT_OF_ABI,
+      functionName: 'commitOf',
+      args: [intent.commitId],
+    })) as readonly [Address, bigint, boolean, Hex]
+    const committer = view[0]
+    const revealed = view[2]
+    if (committer === '0x0000000000000000000000000000000000000000') {
+      pushAudit('axiom', `axiom.reveal.failed CommitNotFound(${shortHash(intent.commitId)})`, 'err')
+      setToast('err', 'axiom reveal: CommitNotFound')
+      runningCommand = 'idle'
+      render()
+      return
+    }
+    if (revealed) {
+      pushAudit('axiom', `axiom.reveal.failed AlreadyRevealed(${shortHash(intent.commitId)})`, 'err')
+      setToast('err', 'axiom reveal: AlreadyRevealed')
+      runningCommand = 'idle'
+      render()
+      return
+    }
+  } catch (e) {
+    pushAudit('axiom', `axiom.reveal.commitOf.failed ${e instanceof Error ? e.message : String(e)}`.slice(0, 200), 'err')
+    setToast('err', 'axiom reveal: commitOf read failed')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+
+  try {
+    // Same cross-package viem cast as in dispatchAxiomCommitIntent —
+    // tight, scoped through Parameters, only relaxes the nominal Client
+    // identity, not the actual shape.
+    type RevealArgs = Parameters<typeof axiomRevealCall>[0]
+    const res = await axiomRevealCall({
+      axiomAddress: ax.address,
+      tokenId: 0n,
+      commitId: intent.commitId,
+      plan: toHex(intent.plan),
+      result: '0x',
+      publicClient: ax.zgPub as RevealArgs['publicClient'],
+      walletClient: ax.zgWallet as RevealArgs['walletClient'],
+    })
+    if (!res.ok) {
+      // Reveal reverts are the most informative signal in the audit
+      // loop — surface the chain's reason text verbatim. Common shapes:
+      //   PlanHashMismatch(expected,actual) — the plan text differs
+      //   from what was committed. NotCommitter(commitId,caller) —
+      //   the wallet calling reveal isn't the wallet that committed.
+      //   AlreadyRevealed(commitId) — replay attempt.
+      pushAudit('axiom', `axiom.reveal.reverted ${res.error.kind === 'reveal_failed' ? res.error.reason : res.error.kind}`.slice(0, 220), 'err')
+      setToast('err', `axiom reveal ${res.error.kind}`)
+      return
+    }
+    const v = res.value
+    pushAudit('axiom', `axiom.reveal.confirmed tx=${shortHash(v.txHash)}`, 'ok')
+    try {
+      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash })
+      receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+      pushAudit(
+        'receipt',
+        `axiom-reveal receipt status=${rcpt.status} blk=${rcpt.blockNumber} gas=${rcpt.gasUsed}`,
+        rcpt.status === 'success' ? 'ok' : 'err',
+      )
+    } catch (e) {
+      pushAudit('receipt', `axiom-reveal receipt fetch failed: ${e instanceof Error ? e.message : String(e)}`, 'err')
+    }
+  } catch (e) {
+    pushAudit('axiom', `axiom.reveal.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200), 'err')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
 // ── Operator UX dispatchers (Phase 3) ────────────────────────────────────────
 //
 // Read-only inspections + the explicit `mint` write. None of these go
@@ -1274,6 +1526,114 @@ async function dispatchOperatorCancel(): Promise<void> {
     return
   }
   pushAudit('cancel', `cancelling ${runningCommand} (in-flight tx will still mine if already submitted)`, 'info')
+  runningCommand = 'idle'
+  render()
+}
+
+// ── ACP / EIP-8183 escrow dispatchers (Slice J) ──────────────────────────────
+//
+// `acp create` and `acp release` both target the deployed AgenticCommerce
+// contract on 0G Galileo (chainId 16602). The user wallet (liveBundle's
+// zgAccount) is the client AND evaluator on every job — we set
+// evaluator=0x0 at create-time so the contract rewrites it to msg.sender,
+// which then makes `acp release` callable by the same key. Reverts bubble
+// verbatim — typical paths the operator will hit:
+//
+//   "ContractFunctionExecutionError: ... reverted with NotEvaluator(0x..)"
+//     → tried to release a job created by a different wallet
+//   "... WrongState(jobId, Submitted, Funded)"
+//     → release before provider has called submit() — wait for delivery
+//   "... InvalidJobId(N)" → typo in the jobId
+//
+// Required env: ACP_ADDRESS, AGENT_NFT_ADDRESS, ACP_PAYMENT_TOKEN,
+// ZG_RPC_URL, MINT_AGENT_PRIVATE_KEY (or ZG_PRIVATE_KEY). Without these
+// the dispatcher refuses cleanly — no synthetic fallback.
+
+async function dispatchAcpCreateIntent(
+  intent: Extract<IntentCommand, { kind: 'acp-create' }>,
+): Promise<void> {
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'acp create cancelled before dispatch', 'info'); return }
+  cancelRequested = false
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit('intent', `acp create blocked: ${liveBundleError ?? 'env-incomplete'}`, 'err')
+    setToast('err', `env-incomplete: ${liveBundleError ?? '?'}`)
+    return
+  }
+  // Three contract addresses from env — none have safe defaults so we
+  // refuse on missing rather than guess. ACP_ADDRESS is the deployed
+  // AgenticCommerce (chain 16602); ACP_PAYMENT_TOKEN is the ERC-20
+  // accepted as escrow; AGENT_NFT_ADDRESS is the iNFT for ownerOf().
+  const acpAddrRaw = process.env.ACP_ADDRESS
+  const tokenRaw = process.env.ACP_PAYMENT_TOKEN
+  if (!acpAddrRaw || !/^0x[a-fA-F0-9]{40}$/.test(acpAddrRaw)) {
+    pushAudit('acp', 'ACP_ADDRESS missing or invalid in env', 'err')
+    setToast('err', 'ACP_ADDRESS missing')
+    return
+  }
+  if (!bundle.agentNft) {
+    pushAudit('acp', 'AGENT_NFT_ADDRESS missing — needed to resolve provider via ownerOf', 'err')
+    setToast('err', 'AGENT_NFT_ADDRESS missing')
+    return
+  }
+  if (!tokenRaw || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
+    pushAudit('acp', 'ACP_PAYMENT_TOKEN missing or invalid (ERC-20 address on 0G)', 'err')
+    setToast('err', 'ACP_PAYMENT_TOKEN missing')
+    return
+  }
+
+  runningCommand = 'acp-create'
+  render()
+  const r = await dispatchAcpCreate({
+    tokenId: intent.tokenId,
+    target: intent.target,
+    usdcAmount: intent.usdcAmount,
+    acpAddress: acpAddrRaw as Address,
+    agentNftAddress: bundle.agentNft,
+    paymentToken: tokenRaw as Address,
+    zgPublicClient: bundle.zgPub,
+    zgWalletClient: bundle.zgWallet,
+    callerAddress: bundle.zgAccount.address,
+    onProgress: (row: AcpRow) => pushAudit(row.agent, row.event, row.ok),
+  })
+  if (!r.ok) {
+    setToast('err', `acp create failed`.slice(0, 80))
+  }
+  runningCommand = 'idle'
+  render()
+}
+
+async function dispatchAcpReleaseIntent(
+  intent: Extract<IntentCommand, { kind: 'acp-release' }>,
+): Promise<void> {
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'acp release cancelled before dispatch', 'info'); return }
+  cancelRequested = false
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit('intent', `acp release blocked: ${liveBundleError ?? 'env-incomplete'}`, 'err')
+    setToast('err', `env-incomplete: ${liveBundleError ?? '?'}`)
+    return
+  }
+  const acpAddrRaw = process.env.ACP_ADDRESS
+  if (!acpAddrRaw || !/^0x[a-fA-F0-9]{40}$/.test(acpAddrRaw)) {
+    pushAudit('acp', 'ACP_ADDRESS missing or invalid in env', 'err')
+    setToast('err', 'ACP_ADDRESS missing')
+    return
+  }
+
+  runningCommand = 'acp-release'
+  render()
+  const r = await dispatchAcpRelease({
+    jobId: intent.jobId,
+    acpAddress: acpAddrRaw as Address,
+    zgPublicClient: bundle.zgPub,
+    zgWalletClient: bundle.zgWallet,
+    callerAddress: bundle.zgAccount.address,
+    onProgress: (row: AcpRow) => pushAudit(row.agent, row.event, row.ok),
+  })
+  if (!r.ok) {
+    setToast('err', `acp release failed`.slice(0, 80))
+  }
   runningCommand = 'idle'
   render()
 }
@@ -1488,12 +1848,18 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'ask-oracle') void dispatchAskOracleIntent(parsed)
     else if (parsed.kind === 'swap') void dispatchSwapIntent(parsed)
     else if (parsed.kind === 'transfer') void dispatchTransferIntent(parsed)
+    // Slice H — AxiomCommit pre-commit / reveal log
+    else if (parsed.kind === 'axiom-commit') void dispatchAxiomCommitIntent(parsed)
+    else if (parsed.kind === 'axiom-reveal') void dispatchAxiomRevealIntent(parsed)
     // Phase 3 operator UX
     else if (parsed.kind === 'agents') void dispatchOperatorAgents()
     else if (parsed.kind === 'balances') void dispatchOperatorBalances()
     else if (parsed.kind === 'block') void dispatchOperatorBlock()
     else if (parsed.kind === 'mint') void dispatchOperatorMint(parsed)
     else if (parsed.kind === 'cancel') void dispatchOperatorCancel()
+    // Slice J — ACP / EIP-8183 escrow create + release
+    else if (parsed.kind === 'acp-create') void dispatchAcpCreateIntent(parsed)
+    else if (parsed.kind === 'acp-release') void dispatchAcpReleaseIntent(parsed)
     // Phase 2 KH direct API — auth via KH_API_KEY env, no liveBundle gate
     else if (parsed.kind === 'kh-trigger' || parsed.kind === 'kh-status'
           || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations') {

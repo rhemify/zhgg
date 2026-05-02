@@ -60,6 +60,29 @@ export function buildHelpLines(): string[] {
   lines.push('           transfer 0.001 ETH to 0xAbc…123');
   lines.push('     aliases: send, pay');
   lines.push('');
+  lines.push('  commit <tokenId|ens> <plan>     AxiomCommit.commitPlan (0G)');
+  lines.push('     e.g.  commit 1 buy 0.05 ETH if EU AI Act compliant');
+  lines.push('           commit audit.zhgg.eth refuse cap_exceeded');
+  lines.push('  reveal <commitId> <plan>        AxiomCommit.revealPlan (0G)');
+  lines.push('     e.g.  reveal 0xabc…def buy 0.05 ETH if EU AI Act compliant');
+  lines.push('     plan must match committed text byte-for-byte');
+  lines.push('     requires AXIOM_COMMIT_ADDRESS + MINT_AGENT_PRIVATE_KEY');
+  lines.push('');
+  lines.push('  delegate <to> <permissionId>    ERC-7710 redeemable delegation');
+  lines.push('     e.g.  delegate oracle.zhgg.eth 0x0000…0001');
+  lines.push('           delegate 0xAbc…123 0xa1b2…f00d');
+  lines.push('     <to> = 0x-addr | *.zhgg.eth | mainnet *.eth');
+  lines.push('     posts to DelegationManager (Base Sepolia); SpendCap auto-debits');
+  lines.push('     requires DELEGATION_MANAGER_ADDRESS + SPEND_CAP_ADDRESS');
+  lines.push('');
+  lines.push('  acp create <agentTokenId|ens> <usdcAmount>   open + fund job (EIP-8183)');
+  lines.push('     e.g.  acp create oracle.zhgg.eth 0.5');
+  lines.push('           acp create 2 10                (10 USDC escrow → token #2 owner)');
+  lines.push('  acp release <jobId>            evaluator releases escrow → provider');
+  lines.push('     e.g.  acp release 1');
+  lines.push('     calls AgenticCommerce.complete (0G); only the job evaluator may');
+  lines.push('     requires ACP_ADDRESS + AGENT_NFT_ADDRESS + ACP_PAYMENT_TOKEN');
+  lines.push('');
   // ── Operator UX (Phase 3) ─────────────────────────────────────────────
   // Read-only inspections plus the one explicitly-confirmed write
   // (`mint`). They bypass the FLOW panel because they don't exercise
