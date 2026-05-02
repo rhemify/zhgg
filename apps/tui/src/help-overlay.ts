@@ -60,10 +60,28 @@ export function buildHelpLines(): string[] {
   lines.push('           transfer 0.001 ETH to 0xAbc…123');
   lines.push('     aliases: send, pay');
   lines.push('');
+  // ── Operator UX (Phase 3) ─────────────────────────────────────────────
+  // Read-only inspections plus the one explicitly-confirmed write
+  // (`mint`). They bypass the FLOW panel because they don't exercise
+  // the audit/payment pipeline.
+  lines.push('  agents                  list our iNFTs (ownerOf, capabilities)');
+  lines.push('  balances                wallet: 0G + ETH/USDC/WETH on Base');
+  lines.push('  block                   current block heights (0G + Base)');
+  lines.push('  cancel                  abort the in-flight dispatch');
+  lines.push('  mint <role>             mint a new iNFT (audit|oracle|swap)');
+  lines.push('');
+  lines.push('  kh trigger <wfId> [<jsonInputs>]    fire saved KeeperHub workflow');
+  lines.push('  kh status <executionId>             poll workflow run state');
+  lines.push('  kh runs [success|error|pending] [1h|24h|7d]  recent run feed');
+  lines.push('  kh cap                              org daily spend-cap remaining');
+  lines.push('     e.g.  kh trigger wf-42 {"amount":"0.1"}');
+  lines.push('           kh runs error 1h');
+  lines.push('     requires KH_API_KEY (kh_…); KEEPERHUB_API_URL optional');
+  lines.push('');
   for (const ln of buildAgentLines()) lines.push(ln);
   lines.push('');
   lines.push('  keys:  [G] grant SpendCap (required before first audit)');
-  lines.push('         [Enter] dispatch  [Esc] clear  [TAB] focus  [Q] quit');
+  lines.push('         [Enter] dispatch  [Esc] clear/cancel  [TAB] focus  [Q] quit');
   return lines;
 }
 

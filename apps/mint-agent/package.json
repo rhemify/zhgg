@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./steps": "./src/steps.ts"
+  },
   "scripts": {
     "mint": "bun run src/index.ts",
     "check-types": "tsc --noEmit",

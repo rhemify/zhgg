@@ -34,6 +34,12 @@ import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
 import { queryOracle } from '@zhgg/oracle-agent';
 import { executeSwap } from 'swap-agent';
 import { executeTransfer } from 'transfer-agent';
+import {
+  executeKHCall,
+  type KHCall,
+  type KHCallResult,
+  type KHError as KHCallError,
+} from 'keeperhub-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { AGENT_REGISTRY } from './agent-registry.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
@@ -44,6 +50,13 @@ import {
   type ReceiptEnvelope,
   type ReceiptFeed,
 } from './receipt-feed.js';
+import {
+  dispatchMint,
+  listAgents,
+  showBalances,
+  showBlock,
+  type OpRow,
+} from './operator-intents.js';
 
 // ── ANSI primitives ───────────────────────────────────────────────────────────
 
@@ -219,7 +232,30 @@ let intentBuffer = ''
 let intentMode: 'idle' | 'editing' = 'editing'
 let intentHint = ''
 let stagedIntent: IntentCommand | null = null
-let runningCommand: 'idle' | 'audit' | 'ask-oracle' | 'swap' | 'transfer' = 'idle'
+let runningCommand:
+  | 'idle'
+  | 'audit'
+  | 'ask-oracle'
+  | 'swap'
+  | 'transfer'
+  | 'kh'
+  | 'agents'
+  | 'balances'
+  | 'block'
+  | 'mint' = 'idle'
+
+/// Cancellation flag — flipped on by the `cancel` intent (or Esc while
+/// a dispatch is running). Long-running dispatchers check this between
+/// awaits and abort early. Reset to `false` before every fresh dispatch
+/// so a stale cancel doesn't kill the next command.
+///
+/// We deliberately don't try to abort an already-submitted on-chain tx;
+/// once `writeContract` returns a hash the chain has the tx and there's
+/// nothing the TUI can do. The flag only affects the dispatch coroutine
+/// (early bail before next RPC call) and clears `runningCommand` so the
+/// UI returns to idle even if the underlying promise is still resolving
+/// in the background.
+let cancelRequested = false
 
 let grantModalOpen = false
 let grantModalLines: string[] = []
@@ -244,6 +280,19 @@ interface LiveBundle {
   usdc: Address
   oracleOwner: Address
   receiptFeed: ReceiptFeed
+  /// 0G Galileo (chainId 16602) clients — built once and reused by the
+  /// operator UX intents (`agents`, `balances`, `block`, `mint`). Kept on
+  /// the bundle so we don't recreate transports per keystroke. The wallet
+  /// is bound to MINT_AGENT_PRIVATE_KEY when present (the dedicated EOA
+  /// authorized to call AgentNFT.mint), falling back to ZG_PRIVATE_KEY.
+  zgPub: PublicClient
+  zgWallet: WalletClient
+  zgAccount: ReturnType<typeof privateKeyToAccount>
+  zgRpcUrl: string
+  /// Address of AgentNFT (ERC-7857) on 0G Galileo. Optional because the
+  /// CLI/demo flows don't strictly require it — but `mint` and `agents`
+  /// need it; absence is surfaced as a typed err row, not a crash.
+  agentNft: Address | null
   /// Full demo orchestrator deps (real settle, real Qwen call via the
   /// 0G router, real ERC-8004 receipt). Built from the same `buildLiveDeps()`
   /// the CLI uses — single source of truth, zero synthetic divergence.
@@ -275,6 +324,23 @@ function tryBuildLiveBundle(): LiveBundle | null {
     const baseWallet = createWalletClient({ account, transport: baseTransport })
     const receiptFeed = createReceiptFeed({ baseRpcUrl: baseRpc, zgRpcUrl: zgRpc })
 
+    // 0G Galileo clients — separate transport from Base. Mint prefers
+    // MINT_AGENT_PRIVATE_KEY (the EOA authorized to call AgentNFT.mint
+    // on the deployed contract); falls back to ZG_PRIVATE_KEY when
+    // unset. We never echo or log the key.
+    const zgTransport = http(zgRpc)
+    const zgPub = createPublicClient({ transport: zgTransport })
+    const mintKey: Hex = (process.env.MINT_AGENT_PRIVATE_KEY ?? '').length === 66
+      ? (process.env.MINT_AGENT_PRIVATE_KEY as Hex)
+      : cfg.zgPrivateKey
+    const zgAccount = privateKeyToAccount(mintKey)
+    const zgWallet = createWalletClient({ account: zgAccount, transport: zgTransport })
+    const agentNftEnv = process.env.AGENT_NFT_ADDRESS
+    const agentNft: Address | null =
+      agentNftEnv && /^0x[a-fA-F0-9]{40}$/.test(agentNftEnv)
+        ? (agentNftEnv as Address)
+        : null
+
     liveBundle = {
       basePub,
       baseWallet,
@@ -284,6 +350,11 @@ function tryBuildLiveBundle(): LiveBundle | null {
       usdc: cfg.usdc,
       oracleOwner: cfg.oracleOwner,
       receiptFeed,
+      zgPub,
+      zgWallet,
+      zgAccount,
+      zgRpcUrl: zgRpc,
+      agentNft,
       demo,
       inferenceReady: cfg.zgRouterKey !== undefined && cfg.zgRouterKey.length > 0,
     }
@@ -703,6 +774,10 @@ function formatStaged(intent: IntentCommand): string {
     case 'ask-oracle': return `ask oracle ${intent.raw} (topic=${intent.topic})`
     case 'swap': return `swap ${intent.amount} ${intent.fromSym} → ${intent.toSym}`
     case 'transfer': return `transfer ${intent.amount} ${intent.symbol} → ${intent.recipient}`
+    case 'kh-trigger': return `kh trigger ${intent.workflowId}${intent.inputs ? ' (+inputs)' : ''}`
+    case 'kh-status': return `kh status ${intent.executionId}`
+    case 'kh-runs': return `kh runs status=${intent.status ?? 'success'} range=${intent.range ?? '24h'}`
+    case 'kh-cap': return `kh cap`
     default: return '—'
   }
 }
@@ -895,6 +970,9 @@ function applyOrchestratorStep(step: TranscriptStep): void {
 async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit' }>): Promise<void> {
   // No synthetic fallback. The TUI is real-or-fail — judges greping for
   // "0x6d6f636b…" / "qwen-mock" will find nothing in this dispatch path.
+  // Early-bail check: a cancel queued before dispatch is honoured here.
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'audit cancelled before dispatch', 'info'); return }
+  cancelRequested = false
   const bundle = tryBuildLiveBundle()
   if (!bundle) {
     pushAudit('intent', `audit blocked: ${liveBundleError ?? 'env-incomplete'}`, 'err')
@@ -946,6 +1024,8 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
 async function dispatchAskOracleIntent(
   intent: Extract<IntentCommand, { kind: 'ask-oracle' }>,
 ): Promise<void> {
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'ask oracle cancelled before dispatch', 'info'); return }
+  cancelRequested = false
   runningCommand = 'ask-oracle'
   pushAudit('intent', `ask oracle ${intent.raw} (topic=${intent.topic})`, 'info')
   try {
@@ -987,6 +1067,8 @@ async function dispatchAskOracleIntent(
 async function dispatchSwapIntent(
   intent: Extract<IntentCommand, { kind: 'swap' }>,
 ): Promise<void> {
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'swap cancelled before dispatch', 'info'); return }
+  cancelRequested = false
   const bundle = tryBuildLiveBundle()
   if (!bundle) {
     pushAudit(
@@ -1052,6 +1134,8 @@ async function dispatchSwapIntent(
 async function dispatchTransferIntent(
   intent: Extract<IntentCommand, { kind: 'transfer' }>,
 ): Promise<void> {
+  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'transfer cancelled before dispatch', 'info'); return }
+  cancelRequested = false
   const bundle = tryBuildLiveBundle()
   if (!bundle) {
     pushAudit(

@@ -21,6 +21,8 @@ import {
   toHex,
   type Address,
   type Hex,
+  type PublicClient,
+  type WalletClient,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
@@ -450,8 +452,115 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((err: unknown) => {
-  const reason = err instanceof Error ? err.message : String(err);
-  console.error(`${ANSI_RED}mint-agent failed:${ANSI_RESET} ${reason}`);
-  process.exit(1);
-});
+// ─── Library entry point ────────────────────────────────────────────────
+//
+// Exposed so the TUI (and other in-process callers) can mint a fresh
+// iNFT without shelling out to this CLI. Scope is intentionally narrow:
+// just the AgentNFT.mint() call on 0G Galileo. The full provisioning
+// pipeline (8004 register, ENS subname, SpendCap grant, receiver wallet)
+// stays in `main()` because it spans three chains and isn't what the
+// TUI's `mint <role>` operator command needs — that command is for
+// expanding the audit/oracle/swap iNFT pool, not full onboarding.
+//
+// The TUI passes its own zg PublicClient + WalletClient (already built
+// from the live bundle) so we don't re-instantiate transports per call.
+// `account` is the WalletClient's signer; we accept it explicitly so
+// the caller can validate it matches their MINT_AGENT_PRIVATE_KEY EOA
+// before invoking us (the helper itself never sees the private key).
+
+export type AgentRole = AgentTier;
+
+export interface MintAgentInput {
+  /// Tier — drives the capability manifest baked into the iNFT.
+  role: AgentRole;
+  /// Address that will own the freshly minted iNFT. Usually the same
+  /// EOA backing `zgWalletClient` so the operator can later authorize
+  /// usage / update memoryRoot from the TUI.
+  account: Address;
+  /// AgentNFT (ERC-7857) address on 0G Galileo — chain 16602.
+  agentNftAddress: Address;
+  /// 0G Galileo public client (chainId 16602). Used for simulateContract
+  /// + waitForTransactionReceipt.
+  zgPublicClient: PublicClient;
+  /// 0G Galileo wallet client. The bound account here MUST equal the
+  /// `account` field above (caller's responsibility).
+  zgWalletClient: WalletClient;
+}
+
+export interface MintAgentResult {
+  tokenId: bigint;
+  txHash: Hex;
+}
+
+/// Library-mode mint. Single-purpose: mint one iNFT, return its
+/// tokenId + tx hash. Throws on any RPC / revert error so the caller
+/// can show the real chain message — no swallowing, no synthetic
+/// fallback.
+///
+/// Slug for the manifest is auto-derived from role + an 8-char tail of
+/// the freshly-minted block timestamp so two consecutive `mint audit`
+/// calls don't produce byte-identical capability blobs.
+export async function mintAgent(input: MintAgentInput): Promise<MintAgentResult> {
+  const { role, account, agentNftAddress, zgPublicClient, zgWalletClient } = input;
+  // Sanity check — caller-supplied wallet must hold an account.
+  const walletAccount = zgWalletClient.account;
+  if (!walletAccount) {
+    throw new Error('zgWalletClient has no bound account — pass account: privateKeyToAccount(...) when creating it');
+  }
+  // The auto-generated name is just a manifest-internal slug; the
+  // canonical id of the agent is (chainId, tokenId), not the slug.
+  const slug = `${role}-${Date.now().toString(36)}`;
+  const manifest = buildCapabilityManifest(slug, role);
+
+  const executor: MintExecutor = {
+    call: async ({ address, abi, functionName, args }) => {
+      const sim = await zgPublicClient.simulateContract({
+        account: walletAccount,
+        address,
+        abi: abi as never,
+        functionName: functionName as never,
+        args: args as never,
+      });
+      const txHash = await zgWalletClient.writeContract(sim.request);
+      // Same generous wait budget used by the CLI buildExecutor — 0G
+      // Galileo's public RPC frequently lags receipt propagation; viem's
+      // default would surface a healthy mint as a "FAILED" timeout.
+      await zgPublicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 120_000,
+        retryCount: 60,
+      });
+      return { result: sim.result as never, txHash };
+    },
+  };
+
+  const minted = await mintAgentNFT(executor, {
+    agentNft: agentNftAddress,
+    owner: account,
+    capabilityManifest: manifest,
+  });
+  if (!minted.ok) {
+    throw new Error(`mint failed: ${minted.error.reason}`);
+  }
+  return { tokenId: minted.value.tokenId, txHash: minted.value.txHash };
+}
+
+// CLI bootstrap — only runs when this file is invoked directly. Bun
+// reports `process.argv[1]` as the entrypoint script, so guarding on
+// that lets `import { mintAgent } from 'mint-agent'` work without
+// triggering the CLI side-effects.
+const isMain = (() => {
+  try {
+    return import.meta.url === `file://${process.argv[1]}`;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main().catch((err: unknown) => {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(`${ANSI_RED}mint-agent failed:${ANSI_RESET} ${reason}`);
+    process.exit(1);
+  });
+}

@@ -25,6 +25,15 @@ export type SwapSymbol = 'ETH' | 'WETH' | 'USDC';
 
 const SWAP_SYMBOLS: ReadonlySet<SwapSymbol> = new Set<SwapSymbol>(['ETH', 'WETH', 'USDC']);
 
+/// Roles accepted by the `mint <role>` operator intent. Mirrors the
+/// `AgentTier` union in `apps/mint-agent/src/index.ts` — kept as a
+/// duplicate literal here so the parser can return a typed value
+/// without importing the CLI module (the parser is sync; mint-agent
+/// pulls in viem clients).
+export type MintRole = 'audit' | 'oracle' | 'swap';
+
+const MINT_ROLES: ReadonlySet<MintRole> = new Set<MintRole>(['audit', 'oracle', 'swap']);
+
 export type IntentCommand =
   | {
       kind: 'audit';
@@ -56,6 +65,22 @@ export type IntentCommand =
       /// TUI label ("transferring 1 USDC → vitalik.eth").
       recipient: string;
     }
+  /// KeeperHub direct-API intents (Phase 2). Each maps 1:1 to an
+  /// `executeKHCall` shape in `keeperhub-agent`. The bearer
+  /// (`KH_API_KEY`) is read by the agent itself — never surfaced here.
+  | { kind: 'kh-trigger'; workflowId: string; inputs?: Record<string, unknown> }
+  | { kind: 'kh-status'; executionId: string }
+  | { kind: 'kh-runs'; status?: 'success' | 'error' | 'pending'; range?: '1h' | '24h' | '7d' }
+  | { kind: 'kh-cap' }
+  /// Operator UX intents (Phase 3). Read-only inspections + the explicit
+  /// `mint <role>` write. Each is dispatched directly from the TUI's
+  /// keypress handler; none of them touches the orchestrator FLOW panel
+  /// because they don't involve audit / payment legs.
+  | { kind: 'agents' }
+  | { kind: 'balances' }
+  | { kind: 'block' }
+  | { kind: 'cancel' }
+  | { kind: 'mint'; role: MintRole }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
   /// Surfaced when the user types an `*.eth` target that isn't in
@@ -291,9 +316,137 @@ export function parseIntent(input: string): IntentCommand {
     return { kind: 'ask-oracle', topic, raw: tail };
   }
 
+  // ── Operator UX intents (Phase 3) ─────────────────────────────────────
+  // Single-word verbs first — none take arguments. `mint <role>` is the
+  // only multi-token form; the role must be one of {audit, oracle, swap}.
+  if (head === 'agents' && parts.length === 1)   return { kind: 'agents' };
+  if (head === 'balances' && parts.length === 1) return { kind: 'balances' };
+  if (head === 'block' && parts.length === 1)    return { kind: 'block' };
+  if (head === 'cancel' && parts.length === 1)   return { kind: 'cancel' };
+
+  if (head === 'mint') {
+    const role = parts[1]?.toLowerCase();
+    if (!role) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'mint needs a role: audit | oracle | swap',
+      };
+    }
+    if (!MINT_ROLES.has(role as MintRole)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `mint role "${role}" — supported: audit, oracle, swap`,
+      };
+    }
+    if (parts.length > 2) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'mint takes exactly one argument: the role',
+      };
+    }
+    return { kind: 'mint', role: role as MintRole };
+  }
+
+  // ── KeeperHub direct-API intents (Phase 2) ───────────────────────────
+  // Form: `kh <sub> [args]`. The sub-verb selects an `executeKHCall`
+  // shape; arg parsing is permissive — invalid args surface as
+  // `unknown` with a precise reason rather than a typed call (so the
+  // user gets immediate feedback before the dispatcher round-trips).
+  if (head === 'kh') {
+    const sub = parts[1]?.toLowerCase();
+    if (!sub) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'kh needs a sub-verb: trigger | status | runs | cap',
+      };
+    }
+    if (sub === 'trigger') {
+      const workflowId = parts[2];
+      if (!workflowId) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'kh trigger needs <workflowId> [<jsonInputs>]',
+        };
+      }
+      // Inputs (optional): everything after the workflowId is rejoined
+      // and parsed as JSON. We require an object at the top level so the
+      // KH `inputs` payload contract holds; arrays / scalars are
+      // surfaced as `unknown` with the parse error verbatim.
+      let inputs: Record<string, unknown> | undefined;
+      if (parts.length > 3) {
+        const inputsRaw = parts.slice(3).join(' ');
+        try {
+          const v = JSON.parse(inputsRaw);
+          if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+            return {
+              kind: 'unknown',
+              raw: trimmed,
+              reason: `kh trigger inputs must be a JSON object, got ${Array.isArray(v) ? 'array' : typeof v}`,
+            };
+          }
+          inputs = v as Record<string, unknown>;
+        } catch (e) {
+          return {
+            kind: 'unknown',
+            raw: trimmed,
+            reason: `kh trigger inputs JSON parse error: ${(e as Error).message}`,
+          };
+        }
+      }
+      return { kind: 'kh-trigger', workflowId, inputs };
+    }
+    if (sub === 'status') {
+      const executionId = parts[2];
+      if (!executionId) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh status needs <executionId>' };
+      }
+      if (parts.length > 3) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh status takes exactly one argument' };
+      }
+      return { kind: 'kh-status', executionId };
+    }
+    if (sub === 'runs') {
+      // Form: `kh runs [success|error|pending] [1h|24h|7d]`. Both args
+      // are optional; defaults applied at dispatch time.
+      const validStatus = new Set(['success', 'error', 'pending']);
+      const validRange = new Set(['1h', '24h', '7d']);
+      let status: 'success' | 'error' | 'pending' | undefined;
+      let range: '1h' | '24h' | '7d' | undefined;
+      for (const tok of parts.slice(2)) {
+        const t = tok.toLowerCase();
+        if (validStatus.has(t)) status = t as typeof status;
+        else if (validRange.has(t)) range = t as typeof range;
+        else {
+          return {
+            kind: 'unknown',
+            raw: trimmed,
+            reason: `kh runs unknown filter "${tok}" — expected status (success|error|pending) or range (1h|24h|7d)`,
+          };
+        }
+      }
+      return { kind: 'kh-runs', status, range };
+    }
+    if (sub === 'cap') {
+      if (parts.length > 2) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh cap takes no arguments' };
+      }
+      return { kind: 'kh-cap' };
+    }
+    return {
+      kind: 'unknown',
+      raw: trimmed,
+      reason: `kh: unknown sub-verb "${sub}" — supported: trigger, status, runs, cap`,
+    };
+  }
+
   return {
     kind: 'unknown',
     raw: trimmed,
-    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", or "transfer <amount> <token> to <recipient>"`,
+    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", "transfer <amount> <token> to <recipient>", or "kh <trigger|status|runs|cap>"`,
   };
 }
