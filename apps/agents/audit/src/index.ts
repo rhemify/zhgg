@@ -66,6 +66,19 @@ export interface AuditOptions {
   /// Verdict aggregation policy. `'all'` is strict (default); `'majority'`
   /// is demo-robust — one flaky probe doesn't drag the whole verdict.
   quorum?: Quorum;
+  /// Optional callback fired AFTER probes complete + verdict is known but
+  /// BEFORE postReceipt is called. Lets the orchestrator build an
+  /// AuditReport (Slice Y), pin the canonical bytes to 0G Storage, and
+  /// return the real `feedbackURI` + `feedbackHash` to be recorded
+  /// on chain. When omitted, runAudit falls back to `zhgg://placeholder/...`
+  /// + a hash of the placeholder URI — a clearly-marked unpinned receipt.
+  buildFeedbackAnchor?: (preReceipt: {
+    target: AuditTarget;
+    verdict: Verdict;
+    findings: string[];
+    results: ProbeResult[];
+    attestationRoot: string | null;
+  }) => Promise<{ feedbackURI: string; feedbackHash: `0x${string}` } | null>;
 }
 
 export async function runAudit(
@@ -133,6 +146,22 @@ export async function runAudit(
   // value: 100 for compliant, 0 for non-compliant, 50 for unclear
   const value = verdict === 'compliant' ? 100 : verdict === 'non_compliant' ? 0 : 50;
 
+  // Slice Y — let the orchestrator build a tamper-proof AuditReport,
+  // pin it to 0G Storage, and supply the real feedbackURI + hash. When
+  // the callback is absent OR returns null (storage disabled, no client),
+  // we fall through with a clearly-marked `zhgg://placeholder/...` URI
+  // so anyone indexing 8004 receipts can grep for unpinned audits.
+  let anchor: { feedbackURI: string; feedbackHash: `0x${string}` } | null = null;
+  if (opts.buildFeedbackAnchor) {
+    anchor = await opts.buildFeedbackAnchor({
+      target,
+      verdict,
+      findings,
+      results,
+      attestationRoot: lastAttestation,
+    });
+  }
+
   const receiptCtx: ReceiptContext = {
     registryAddress: opts.registryAddress,
     agentRegistryCaip: opts.agentRegistryCaip,
@@ -143,14 +172,11 @@ export async function runAudit(
     tag1,
     tag2,
     endpoint: 'https://audit.zhgg.eth/v1',
-    // Custom `zhgg://` scheme makes it explicit that this is NOT a real
-    // IPFS-pinned URI — D5 work pins the audit report to IPFS and writes
-    // the real CID here. Anyone indexing 8004 receipts can grep for
-    // `zhgg://placeholder/` to find unpinned audits.
-    feedbackURI: `zhgg://placeholder/audit/${target.agentName}`,
+    feedbackURI: anchor?.feedbackURI ?? `zhgg://placeholder/audit/${target.agentName}`,
     attestationRoot: lastAttestation,
     paymentTxHash: null,
     createdAt: opts.now ?? new Date().toISOString(),
+    feedbackHashOverride: anchor?.feedbackHash,
   };
 
   const post = await deps.postReceipt(deps.erc8004Client, receiptCtx);

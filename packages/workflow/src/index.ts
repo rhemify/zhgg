@@ -9,6 +9,23 @@ export type {
 
 export { buildFeedbackJson, postReceipt } from './erc8004.js';
 export { canonicalizeAuditPayload, writeAuditLog } from './storage-log.js';
+export {
+  AuditReportError,
+  buildAuditReport,
+  canonicalJsonStringify,
+  canonicalizeAuditReport,
+  writeAuditReport,
+} from './audit-report.js';
+export type {
+  AuditReport,
+  AuditReportFinding,
+  BuildAuditReportInput,
+  CanonicalAuditReport,
+  FindingStatus,
+  WriteAuditReportError,
+  WriteAuditReportOptions,
+  WriteAuditReportSuccess,
+} from './audit-report.js';
 export type {
   AuditLogPayload,
   Storage0GClient,

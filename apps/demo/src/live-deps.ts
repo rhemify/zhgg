@@ -351,13 +351,18 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
   // so mocked-mode runs never touch the storage adapter at all. When
   // `zgStorageEnabled` is false, the dep is undefined and the
   // orchestrator skips Step 8 (and Step 9, which depends on its rootHash).
+  // The same client is also exposed as `zgStorageClient` to power the
+  // Slice-Y canonical AuditReport writer (consumed by the orchestrator's
+  // `buildFeedbackAnchor` closure).
   let writeStorageLogDep: CrossAgentDemoDeps['writeStorageLog'] | undefined;
+  let zgStorageClient: Storage0GClient | undefined;
   if (cfg.zgStorageEnabled) {
-    const zgStorageClient: Storage0GClient = createZGStorageClient({
+    zgStorageClient = createZGStorageClient({
       privateKey: cfg.zgPrivateKey,
       rpcUrl: cfg.zgRpc,
       indexerUrl: cfg.zgIndexerRpc,
     });
+    const client = zgStorageClient;
     writeStorageLogDep = async (report) => {
       const payload: AuditLogPayload = {
         version: '1',
@@ -377,7 +382,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
         paymentTxHash: null,
         receiptTxHash: report.receiptTxHash as `0x${string}` | null,
       };
-      const r = await writeAuditLog(zgStorageClient, payload);
+      const r = await writeAuditLog(client, payload);
       return r.ok
         ? { ok: true, rootHash: r.value.rootHash }
         : { ok: false, error: r.error.kind };
@@ -394,6 +399,12 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       axiomReveal: axiomRevealDep,
       pinMemoryRoot: pinMemoryRootDep,
       writeStorageLog: writeStorageLogDep,
+      // Slice Y — share the same 0G client + flag with the orchestrator's
+      // canonical AuditReport writer. When zgStorageEnabled is false the
+      // client is undefined and writeAuditReport refuses with
+      // `storage_disabled` (no fake URI fallback).
+      zgStorageClient,
+      zgStorageEnabled: cfg.zgStorageEnabled === true,
     },
     auditOptions: {
       // When zgRouterKey is undefined we're in synthetic-inference

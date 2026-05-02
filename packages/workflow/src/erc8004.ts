@@ -93,6 +93,14 @@ export interface ReceiptContext {
   attestationRoot: string | null;
   paymentTxHash: string | null;
   createdAt: string;
+  /// Slice Y — when set, this hash (typically keccak256 of an AuditReport
+  /// canonical bytes pinned at `feedbackURI`) is recorded on chain instead
+  /// of the legacy `keccak(buildFeedbackJson(ctx))`. The on-chain
+  /// `feedbackHash` then commits to the EVIDENCE the regulator queries,
+  /// not to a redundant copy of the receipt fields. Backward-compatible:
+  /// callers who don't pin off-chain evidence omit this and the legacy
+  /// hash is still computed.
+  feedbackHashOverride?: Hex;
 }
 
 export type PostError =
@@ -132,20 +140,25 @@ export async function postReceipt(
     };
   }
 
-  const json = buildFeedbackJson({
-    agentRegistry: ctx.agentRegistryCaip,
-    agentId: ctx.agentId,
-    clientAddress: ctx.clientAddress,
-    createdAt: ctx.createdAt,
-    value: ctx.value,
-    valueDecimals: ctx.valueDecimals,
-    tag1: ctx.tag1,
-    tag2: ctx.tag2,
-    endpoint: ctx.endpoint,
-    attestationRoot: ctx.attestationRoot,
-    paymentTxHash: ctx.paymentTxHash,
-  });
-  const feedbackHash = keccak256(toBytes(json));
+  let feedbackHash: Hex;
+  if (ctx.feedbackHashOverride !== undefined) {
+    feedbackHash = ctx.feedbackHashOverride;
+  } else {
+    const json = buildFeedbackJson({
+      agentRegistry: ctx.agentRegistryCaip,
+      agentId: ctx.agentId,
+      clientAddress: ctx.clientAddress,
+      createdAt: ctx.createdAt,
+      value: ctx.value,
+      valueDecimals: ctx.valueDecimals,
+      tag1: ctx.tag1,
+      tag2: ctx.tag2,
+      endpoint: ctx.endpoint,
+      attestationRoot: ctx.attestationRoot,
+      paymentTxHash: ctx.paymentTxHash,
+    });
+    feedbackHash = keccak256(toBytes(json));
+  }
 
   try {
     const txHash = await client.giveFeedback({

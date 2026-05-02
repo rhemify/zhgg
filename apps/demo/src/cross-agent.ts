@@ -13,11 +13,16 @@ import { EventEmitter } from 'node:events';
 import { runAudit, type AuditDeps, type AuditReport, type AuditTarget } from '@zhgg/audit-agent';
 import { queryOracle, type OracleQuery, type OracleResponse } from '@zhgg/oracle-agent';
 import {
+  buildAuditReport,
   buildPaymentRequirements,
+  writeAuditReport,
+  type AuditReport as CanonicalAuditReport,
   type SettleOutput,
   type PaymentRequirements,
+  type Storage0GClient,
+  type WriteAuditReportError,
 } from '@zhgg/workflow';
-import { keccak256, toHex } from 'viem';
+import { keccak256, toBytes, toHex, type Address, type Hex } from 'viem';
 
 export type TranscriptStepName =
   | 'oracle.spend_cap.check'
@@ -33,6 +38,8 @@ export type TranscriptStepName =
   | 'audit.start'
   | 'audit.complete'
   | 'audit.failed'
+  | 'audit.report.pin'
+  | 'audit.report.unpinned'
   | 'audit.receipt.post'
   | 'audit.receipt.failed';
 
@@ -59,6 +66,12 @@ export interface CrossAgentTranscript {
   refundable: boolean;
   /// Captured audit-stage error message when `refundable === true`.
   auditError: string | null;
+  /// Slice Y — the canonical, hash-anchored audit report produced for this
+  /// run. Populated when `buildFeedbackAnchor` fires (always, post-probes).
+  /// `anchors.storageURI` is the 0G CID when storage was enabled,
+  /// empty-string when ZG_STORAGE was disabled (honest "unpinned" marker).
+  /// `anchors.feedbackTx` is stamped after `giveFeedback` returns.
+  canonicalAuditReport: CanonicalAuditReport | null;
 }
 
 export interface SpendCapCheckResult {
@@ -114,6 +127,17 @@ export interface CrossAgentDemoDeps {
   writeStorageLog?: (
     report: AuditReport
   ) => Promise<{ ok: boolean; rootHash?: `0x${string}`; error?: string }>;
+  /// Slice Y — 0G Storage adapter for pinning the canonical AuditReport
+  /// bytes that the on-chain `feedbackHash` commits to. Distinct from
+  /// `writeStorageLog` (which pins the legacy v1 audit-log payload). When
+  /// omitted OR when `zgStorageEnabled` is false, the orchestrator emits
+  /// `audit.report.unpinned` and posts ERC-8004 with `feedbackURI=""` +
+  /// `feedbackHash=0x0…0` — an honest "evidence not yet pinned" signal.
+  zgStorageClient?: Storage0GClient;
+  /// Toggle from env (`ZG_STORAGE_ENABLED === '1'`). Surfaced as a dep so
+  /// the orchestrator can refuse the storage write deterministically in
+  /// tests without poking process.env.
+  zgStorageEnabled?: boolean;
 }
 
 export interface CrossAgentDemoOpts {
@@ -138,6 +162,30 @@ export interface CrossAgentDemoOpts {
   /// Optional event emitter so the TUI (D3.5) can subscribe live. If
   /// omitted, the orchestrator creates its own and discards it.
   events?: EventEmitter;
+  /// Slice Y — auditor agent identity used to populate the canonical
+  /// AuditReport. Defaults pick safe placeholders so tests don't need to
+  /// supply this; live deployments override every field.
+  auditorIdentity?: {
+    iNFTAddress: Address;
+    tokenId: bigint;
+    ens: string;
+    manifestHash: Hex;
+    owner: Address;
+  };
+  /// Slice Y — subject agent metadata pinned into the AuditReport. Block
+  /// + capabilities default to placeholders when not known.
+  subjectIdentity?: {
+    capabilitiesAtAudit?: Hex;
+    registeredAtBlock?: string;
+    ens?: string;
+  };
+  /// Slice Y — the regulatory framework + articles probed. Defaults to
+  /// EU AI Act 2024/1689 + the three article refs in PROBE_PROMPTS.
+  regulation?: {
+    framework?: string;
+    articlesProbed?: string[];
+    regulatorySource?: { type: string; publishedAt?: string; fetchedFromCID?: string };
+  };
 }
 
 const DEFAULT_AMOUNT_ATOMIC = '100000'; // 0.1 USDC at 6 decimals
@@ -145,6 +193,42 @@ const DEFAULT_OWNER: `0x${string}` = '0x000000000000000000000000000000000000beef
 const DEFAULT_SPLITTER: `0x${string}` = '0x000000000000000000000000000000000000feed';
 const DEFAULT_USDC: `0x${string}` = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const DEFAULT_NETWORK = 'eip155:84532';
+
+const ZERO_ADDR: Address = '0x0000000000000000000000000000000000000000';
+const ZERO_HASH: Hex = `0x${'0'.repeat(64)}` as Hex;
+const DEFAULT_ARTICLES = [
+  'EU AI Act Article 5 (Regulation 2024/1689)',
+  'EU AI Act Article 13 (Regulation 2024/1689)',
+  'EU AI Act Article 50 (Regulation 2024/1689)',
+];
+
+/// Map probe verdicts to Slice-Y AuditReport finding statuses. `null`
+/// (parse failure / unclear) maps to `inconclusive` so the regulator
+/// can see the gap rather than a forced pass/fail.
+function findingStatus(compliant: boolean | null): 'pass' | 'fail' | 'inconclusive' {
+  if (compliant === true) return 'pass';
+  if (compliant === false) return 'fail';
+  return 'inconclusive';
+}
+
+/// Stamp the on-chain `feedbackTx` onto a previously-built canonical
+/// audit report. Off-chain mutation only — the bytes pinned at
+/// `anchors.storageURI` already exclude `feedbackTx` via
+/// canonicalization, so this stamp does not invalidate the stored hash.
+/// Pulled out into a top-level fn so TypeScript's narrowing doesn't
+/// collapse the branch where `canonicalAuditReport` is captured by an
+/// upstream closure.
+function stampFeedbackTx(
+  report: CanonicalAuditReport | null,
+  txHash: string
+): CanonicalAuditReport | null {
+  if (report === null) return null;
+  if (!/^0x[0-9a-fA-F]+$/.test(txHash)) return report;
+  return {
+    ...report,
+    anchors: { ...report.anchors, feedbackTx: txHash as Hex },
+  };
+}
 
 export async function runCrossAgentDemo(
   deps: CrossAgentDemoDeps,
@@ -207,6 +291,7 @@ export async function runCrossAgentDemo(
         totalCostUSD: 0,
         refundable: false,
         auditError: `spend cap blocked: ${capResult.reason ?? 'unknown'}`,
+        canonicalAuditReport: null,
       };
     }
     emit('oracle.spend_cap.check', {
@@ -258,6 +343,7 @@ export async function runCrossAgentDemo(
   //     agent has decided to execute, derived from the enriched manifest +
   //     oracle context. Hash-only on chain; bytes revealed at Step 10.
   let axiomCommitId: `0x${string}` | null = null;
+  let axiomCommitTx: `0x${string}` | null = null;
   let axiomPlanBytes: Uint8Array | null = null;
   if (deps.axiomCommit) {
     axiomPlanBytes = new TextEncoder().encode(
@@ -270,6 +356,7 @@ export async function runCrossAgentDemo(
     const c = await deps.axiomCommit({ tokenId: opts.target.agentId, plan: axiomPlanBytes });
     if (c.ok && c.commitId) {
       axiomCommitId = c.commitId;
+      axiomCommitTx = c.txHash ?? null;
       emit('audit.axiom.commit', { commitId: c.commitId, txHash: c.txHash });
     } else {
       emit('audit.axiom.commit', { ok: false, error: c.error });
@@ -284,12 +371,142 @@ export async function runCrossAgentDemo(
   emit('audit.start', { agentId: opts.target.agentId.toString() });
   let auditReport: AuditReport | null = null;
   let auditError: string | null = null;
+  let canonicalAuditReport: CanonicalAuditReport | null = null;
+
+  // Slice Y — buildFeedbackAnchor closure runs INSIDE runAudit, after
+  // probes return + verdict is known but BEFORE postReceipt is called.
+  // The closure assembles the canonical AuditReport from evidence the
+  // orchestrator collected on the way down (settlement, axiomCommit,
+  // attestation), pins the bytes to 0G Storage, and returns the URI +
+  // hash that gets recorded on chain. When storage is disabled we
+  // refuse to fabricate a URI — the receipt posts with feedbackURI=""
+  // + feedbackHash=0x0…0 so an indexer can prove the audit was
+  // intentionally not pinned (vs. silently faking a CID).
+  const buildFeedbackAnchor = async (preReceipt: {
+    target: { agentId: bigint; agentName: string; manifest: string };
+    verdict: 'compliant' | 'non_compliant' | 'unclear';
+    findings: string[];
+    results: Array<{
+      id: string;
+      articleRef: string;
+      compliant: boolean | null;
+      finding: string;
+    }>;
+    attestationRoot: string | null;
+  }): Promise<{ feedbackURI: string; feedbackHash: Hex } | null> => {
+    const auditor = opts.auditorIdentity;
+    const subject = opts.subjectIdentity;
+    const reg = opts.regulation;
+
+    // Map verdict to ERC-8004 valueSigned (-100..+100 convention).
+    const valueSigned =
+      preReceipt.verdict === 'compliant'
+        ? 100
+        : preReceipt.verdict === 'non_compliant'
+          ? -100
+          : 0;
+
+    const findings = preReceipt.results.map((r) => ({
+      article: r.articleRef,
+      status: findingStatus(r.compliant),
+      evidence: r.finding,
+    }));
+
+    // Hash prompt = hash of the manifest fed into probes (the full
+    // prompt template is deterministic given the manifest). Hash response
+    // = hash of the joined raw findings text. Both are content-derived so
+    // a re-run with identical inputs produces identical hashes.
+    const promptHash = keccak256(toBytes(preReceipt.target.manifest));
+    const responseHash = keccak256(toBytes(JSON.stringify(preReceipt.results)));
+
+    const draft = buildAuditReport({
+      auditorAgent: {
+        iNFTAddress: auditor?.iNFTAddress ?? ZERO_ADDR,
+        tokenId: (auditor?.tokenId ?? 0n).toString(),
+        ens: auditor?.ens ?? 'audit.zhgg.eth',
+        manifestHash: auditor?.manifestHash ?? ZERO_HASH,
+        owner: auditor?.owner ?? ZERO_ADDR,
+      },
+      subjectAgent: {
+        tokenId: preReceipt.target.agentId.toString(),
+        ens: subject?.ens,
+        capabilitiesAtAudit: subject?.capabilitiesAtAudit ?? '0x',
+        registeredAtBlock: subject?.registeredAtBlock ?? '0',
+      },
+      regulation: {
+        framework: reg?.framework ?? 'EU AI Act Regulation 2024/1689',
+        articlesProbed: reg?.articlesProbed ?? DEFAULT_ARTICLES,
+        regulatorySource: reg?.regulatorySource,
+      },
+      evidenceChain: {
+        axiomCommit:
+          axiomCommitId && axiomCommitTx
+            ? { commitId: axiomCommitId, commitTx: axiomCommitTx, commitBlock: '0' }
+            : undefined,
+        qwenInference: {
+          modelId: 'qwen3.6-plus',
+          promptHash,
+          responseHash,
+          // null teeAttestation when ZG_ROUTER_KEY unfunded — honest
+          // "not in TEE" signal.
+          teeAttestation:
+            preReceipt.attestationRoot && /^0x[0-9a-fA-F]+$/.test(preReceipt.attestationRoot)
+              ? (preReceipt.attestationRoot as Hex)
+              : undefined,
+        },
+        settlement:
+          settle && /^0x[0-9a-fA-F]+$/.test(settle.txHash)
+            ? {
+                rail: settle.rail,
+                tx: settle.txHash as Hex,
+                amount: opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC,
+              }
+            : undefined,
+      },
+      verdict: {
+        compliant: preReceipt.verdict === 'compliant',
+        findings,
+        confidence:
+          preReceipt.results.length === 0
+            ? 0
+            : preReceipt.results.filter((r) => r.compliant !== null).length /
+              preReceipt.results.length,
+        valueSigned,
+        valueDecimals: 2,
+      },
+    });
+
+    const writeResult = await writeAuditReport(draft, {
+      client: deps.zgStorageClient,
+      enabled: deps.zgStorageEnabled,
+    });
+
+    if (writeResult.ok) {
+      canonicalAuditReport = writeResult.value.report;
+      emit('audit.report.pin', {
+        uri: writeResult.value.uri,
+        hash: writeResult.value.hash,
+      });
+      return { feedbackURI: writeResult.value.uri, feedbackHash: writeResult.value.hash };
+    }
+
+    // Storage disabled or upload failed — keep the report but mark it
+    // unpinned. ERC-8004 receipt goes out with feedbackURI="" +
+    // feedbackHash=0x0…0 (an honest, indexer-greppable signal).
+    canonicalAuditReport = draft;
+    const err: WriteAuditReportError = writeResult.error;
+    emit('audit.report.unpinned', {
+      kind: err.kind,
+      reason: err.reason,
+    });
+    return { feedbackURI: '', feedbackHash: ZERO_HASH };
+  };
+
   try {
-    auditReport = await runAudit(
-      { ...opts.target, manifest },
-      deps.auditDeps,
-      opts.auditOptions
-    );
+    auditReport = await runAudit({ ...opts.target, manifest }, deps.auditDeps, {
+      ...opts.auditOptions,
+      buildFeedbackAnchor,
+    });
     emit('audit.complete', {
       verdict: auditReport.verdict,
       findingsCount: auditReport.findings.length,
@@ -300,6 +517,15 @@ export async function runCrossAgentDemo(
     // looking like a successful post that wasn't.
     if (auditReport.receiptTxHash !== null) {
       emit('audit.receipt.post', { txHash: auditReport.receiptTxHash });
+      // Stamp the on-chain feedbackTx onto the canonical report so
+      // off-chain consumers can correlate. The bytes pinned at
+      // `anchors.storageURI` already exclude this field via
+      // canonicalization — mutating it here is OFF-CHAIN-ONLY and does
+      // not invalidate the stored bytes' hash.
+      canonicalAuditReport = stampFeedbackTx(
+        canonicalAuditReport,
+        auditReport.receiptTxHash
+      );
     } else {
       emit('audit.receipt.failed', { reason: 'postReceipt returned null' });
     }
@@ -362,5 +588,6 @@ export async function runCrossAgentDemo(
     totalCostUSD,
     refundable,
     auditError,
+    canonicalAuditReport,
   };
 }
