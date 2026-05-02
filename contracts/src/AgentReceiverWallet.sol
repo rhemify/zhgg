@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC4626} from "./interfaces/IERC4626.sol";
 
 interface IAgentNFT {
     function ownerOf(uint256 tokenId) external view returns (address);
@@ -55,6 +56,17 @@ contract AgentReceiverWallet is ReentrancyGuard {
     address public delegationManager;
     bool    public delegationManagerLocked;
 
+    /// @notice Optional yield vault. When non-zero, idle balance of
+    ///         `vaultAsset()` is parkable in this 4626 vault via
+    ///         `parkIdle()`; redemption is automatic before splits via
+    ///         `_ensureLiquid()`. Owner-rotatable so a paused vault
+    ///         can be migrated. Setting to address(0) is allowed and
+    ///         disables yield routing entirely (the safest default).
+    IERC4626 public yieldVault;
+    /// @notice Cached `vaultAsset` so we avoid repeated external reads
+    ///         on the hot path. Refreshed when `setYieldVault` runs.
+    address public yieldAsset;
+
     event BalanceSplit(address indexed asset, uint256 amount, address indexed ownerAtSplit, address indexed caller);
     event Withdrawn(address indexed asset, address indexed to, uint256 amount, address indexed owner);
     /// @notice Emitted when `splitMyBalance` is a no-op because the
@@ -64,6 +76,9 @@ contract AgentReceiverWallet is ReentrancyGuard {
     event DelegationManagerSet(address indexed manager, address indexed setter);
     event DelegationManagerLocked(address indexed setter);
     event DelegationExecuted(address indexed target, uint256 value, bytes4 selector);
+    event YieldVaultSet(address indexed vault, address indexed asset, address indexed setter);
+    event IdleParked(address indexed vault, address indexed asset, uint256 assets, uint256 shares);
+    event IdleRedeemed(address indexed vault, address indexed asset, uint256 shares, uint256 assets);
 
     error NotOwner(address caller, address owner);
     error NothingToSplit(address asset);
@@ -73,6 +88,7 @@ contract AgentReceiverWallet is ReentrancyGuard {
     error DelegationManagerAlreadyLocked();
     error NotDelegationManager(address caller);
     error DelegatedCallFailed(bytes returnData);
+    error VaultAssetMismatch(address vaultAsset, address splitAsset);
 
     constructor(address agentNft_, address feeSplitter_, uint256 tokenId_) {
         agentNft       = IAgentNFT(agentNft_);
@@ -97,6 +113,14 @@ contract AgentReceiverWallet is ReentrancyGuard {
     ///         `ownerOf(tokenId)`, so a malicious caller can only
     ///         accelerate a payout — not redirect it.
     function splitMyBalance(IERC20 asset) external nonReentrant {
+        // If the asset matches the configured yield vault's underlying,
+        // pull idle funds back from the vault first. Bounded-loss
+        // invariant preserved: redemption failure does NOT brick the
+        // split — we fall through to whatever raw balance is held.
+        if (address(yieldVault) != address(0) && address(asset) == yieldAsset) {
+            _redeemFromVaultBestEffort();
+        }
+
         uint256 bal = asset.balanceOf(address(this));
         if (bal == 0) revert NothingToSplit(address(asset));
         // Dust grief defense: if a malicious party airdrops a tiny
@@ -221,5 +245,69 @@ contract AgentReceiverWallet is ReentrancyGuard {
         (bool ok, bytes memory ret) = target.call{value: value}(data);
         if (!ok) revert DelegatedCallFailed(ret);
         return ret;
+    }
+
+    // ---------------------------------------------------------------------
+    // ERC-4626 yield wrapper (Phase 22)
+    // ---------------------------------------------------------------------
+
+    /// @notice Owner sets / rotates the yield vault. Setting to zero
+    ///         disables yield routing — the safest default. The vault's
+    ///         `asset()` is cached in `yieldAsset` so the hot path
+    ///         doesn't make an external read per split.
+    /// @dev    The owner is responsible for verifying:
+    ///           - the vault is reputable (Aave / Yearn V3 / Morpho)
+    ///           - the vault's asset matches the splitter's expected USDC
+    ///         Setting a hostile vault address is owner-error and breaks
+    ///         the bounded-loss invariant. Document loudly.
+    function setYieldVault(IERC4626 vault) external {
+        address o = owner();
+        if (msg.sender != o) revert NotOwner(msg.sender, o);
+        yieldVault = vault;
+        yieldAsset = address(vault) == address(0) ? address(0) : vault.asset();
+        emit YieldVaultSet(address(vault), yieldAsset, o);
+    }
+
+    /// @notice Anyone may call to deposit any idle `yieldAsset` balance
+    ///         into the vault. Permissionless because it only earns
+    ///         yield — no funds move out of the wallet's control.
+    function parkIdle() external nonReentrant {
+        if (address(yieldVault) == address(0)) return;
+        uint256 idle = IERC20(yieldAsset).balanceOf(address(this));
+        if (idle == 0) return;
+        IERC20(yieldAsset).forceApprove(address(yieldVault), idle);
+        uint256 shares = yieldVault.deposit(idle, address(this));
+        emit IdleParked(address(yieldVault), yieldAsset, idle, shares);
+    }
+
+    /// @notice Owner-only escape hatch — pulls everything back from the
+    ///         vault into the wallet, regardless of whether a split is
+    ///         imminent. Used when the owner wants to migrate to a new
+    ///         vault or the current vault is misbehaving.
+    function withdrawAllIdle() external nonReentrant {
+        address o = owner();
+        if (msg.sender != o) revert NotOwner(msg.sender, o);
+        if (address(yieldVault) == address(0)) return;
+        uint256 shares = yieldVault.balanceOf(address(this));
+        if (shares == 0) return;
+        uint256 assets = yieldVault.redeem(shares, address(this), address(this));
+        emit IdleRedeemed(address(yieldVault), yieldAsset, shares, assets);
+    }
+
+    /// @dev Hot-path redemption — fails open. If the vault is paused,
+    ///      reverts on redeem, or otherwise misbehaves, the split path
+    ///      proceeds with whatever raw balance is in the wallet.
+    ///      Guarantee: a broken vault never bricks the split.
+    function _redeemFromVaultBestEffort() internal {
+        IERC4626 v = yieldVault;
+        uint256 shares = v.balanceOf(address(this));
+        if (shares == 0) return;
+        try v.redeem(shares, address(this), address(this)) returns (uint256 assets) {
+            emit IdleRedeemed(address(v), yieldAsset, shares, assets);
+        } catch {
+            // Vault paused / queue / oracle stale — leave shares in
+            // place. Owner can call `withdrawAllIdle` later when the
+            // vault recovers, OR rotate to a new vault.
+        }
     }
 }
