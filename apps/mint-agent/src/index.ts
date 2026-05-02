@@ -189,7 +189,13 @@ async function main(): Promise<void> {
   // hackathon teams ship the iNFT + 8004 + SpendCap + receiver wallet
   // bundle without owning a parent ENS name. Agent identity falls
   // back to (chainId, tokenId) — fully verifiable on chain.
-  const ensRegistrar = process.env.ENS_REGISTRAR_ADDRESS as Address | undefined;
+  // Treat empty string the same as undefined — `source .env` exposes
+  // unset values as `""` in process.env, which is "set but empty".
+  const ensRegistrarRaw = process.env.ENS_REGISTRAR_ADDRESS;
+  const ensRegistrar =
+    ensRegistrarRaw && ensRegistrarRaw.length > 0
+      ? (ensRegistrarRaw as Address)
+      : undefined;
   const ensEnabled = ensRegistrar !== undefined;
 
   console.log(ruler);
@@ -369,7 +375,9 @@ async function main(): Promise<void> {
   const receiverFactory = process.env.RECEIVER_FACTORY_ADDRESS as Address | undefined;
   if (receiverFactory) {
     try {
-      const deployed = await deployReceiverWallet(zgExecutor, {
+      // Receiver factory lives on Base Sepolia (the chain where USDC
+      // settlement happens) — use the Base executor, not the 0G one.
+      const deployed = await deployReceiverWallet(baseExecutor, {
         factory: receiverFactory,
         tokenId: minted.value.tokenId,
       });
