@@ -753,14 +753,33 @@ function applyOrchestratorStep(step: TranscriptStep): void {
       pushAudit('spend-cap', `cap pre-flight ok (enforced=${detail.enforced ?? false} remaining=${detail.remaining ?? '—'})`, 'ok')
       flow.nodes = ['done', 'active', 'off', 'off']
       break
-    case 'oracle.spend_cap.exceeded':
+    case 'oracle.spend_cap.exceeded': {
       // POLICY rejected — whole flow halts. Cascade `rejected` to the
       // downstream nodes so the operator sees the deliberate stop
       // rather than "off" (which would imply "not yet evaluated").
-      pushAudit('spend-cap', `BLOCKED: ${detail.reason ?? 'exceeded'}`, 'err')
+      const reason = String(detail.reason ?? 'exceeded')
+      pushAudit('spend-cap', `BLOCKED: ${reason}`, 'err')
+      // cap_not_found is the most common first-run reason — surface a
+      // contextual fix instead of leaving the operator wondering. Also
+      // a generic hint for any other cap rejection.
+      if (reason === 'cap_not_found') {
+        pushAudit(
+          'spend-cap',
+          'unblock: press [G] to grant 0.5 USDC SpendCap permission, then re-dispatch the audit',
+          'info',
+        )
+        setToast('info', 'press [G] to grant SpendCap then retry')
+      } else {
+        pushAudit(
+          'spend-cap',
+          `unblock: press [G] to grant a higher cap or refresh the period; then re-dispatch`,
+          'info',
+        )
+      }
       flow.nodes = ['done', 'rejected', 'rejected', 'rejected']
       flow.complete = true
       break
+    }
     case 'oracle.payment.settle': {
       const txHash = typeof detail.txHash === 'string' ? (detail.txHash as Hex) : null
       const rail = typeof detail.rail === 'string' ? detail.rail : '?'

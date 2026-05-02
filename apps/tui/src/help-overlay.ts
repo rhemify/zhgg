@@ -51,16 +51,18 @@ export function buildHelpLines(): string[] {
   lines.push('           ask oracle ETH/USD');
   lines.push('');
   lines.push('  swap <amount> <from> <to>  agent-executed token swap');
-  lines.push('     e.g.  swap 0.001 ETH USDC');
+  lines.push('     e.g.  swap 0.001 ETH USDC      (compact)');
+  lines.push('           swap 0.001 ETH to USDC   (natural)');
+  lines.push('           supported: ETH, WETH, USDC');
   lines.push('');
   for (const ln of buildAgentLines()) lines.push(ln);
   lines.push('');
-  lines.push('  keys:  [SPACE] step  [A] auto  [R] reset  [G] grant');
-  lines.push('         [TAB] focus  [Esc] clear input  [Q] quit');
+  lines.push('  keys:  [G] grant SpendCap (required before first audit)');
+  lines.push('         [Enter] dispatch  [Esc] clear  [TAB] focus  [Q] quit');
   return lines;
 }
 
 /// Persistent one-line hint that lives just above the intent input
 /// row. Shorter than the overlay — designed to remind a confused
 /// operator that `?` exists without taking screen real estate.
-export const PERSISTENT_HINT = '?: help  │  available: audit, ask oracle, swap, grant';
+export const PERSISTENT_HINT = '?: help  │  first time? press [G] to grant SpendCap, then audit/ask/swap';
