@@ -13,4 +13,6 @@ export * from './identity/inft.js';
 export * from './identity/ens.js';
 export * from './providers/openclaw.js';
 export * from './router.js';
+export * from './classifier.js';
+export * from './mode-decider.js';
 export * from './testing/mock-stack.js';
