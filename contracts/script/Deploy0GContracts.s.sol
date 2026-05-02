@@ -5,6 +5,8 @@ import {Script, console2} from "forge-std/Script.sol";
 import {AgentNFT} from "../src/AgentNFT.sol";
 import {AgentRegistry} from "../src/AgentRegistry.sol";
 import {AxiomCommit} from "../src/AxiomCommit.sol";
+import {AgenticCommerce} from "../src/AgenticCommerce.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title  Deploy0GContracts
 /// @notice One-shot deploy of the 0G Galileo pair: AgentNFT (ERC-7857
@@ -34,7 +36,12 @@ import {AxiomCommit} from "../src/AxiomCommit.sol";
 contract Deploy0GContracts is Script {
     function run()
         external
-        returns (AgentNFT nft, AgentRegistry registry, AxiomCommit axiom)
+        returns (
+            AgentNFT nft,
+            AgentRegistry registry,
+            AxiomCommit axiom,
+            AgenticCommerce acp
+        )
     {
         require(block.chainid == 16602, "Wrong chain: expected 0G Galileo (16602)");
 
@@ -59,6 +66,13 @@ contract Deploy0GContracts is Script {
         // operators authorized via `setOperator(tokenId, addr, true)`.
         axiom = new AxiomCommit(address(nft));
 
+        // ERC-8183 Agentic Commerce Protocol — job escrow + evaluator
+        // attestation. Treasury defaults to the deployer; fee = 250 bps
+        // (2.5%) which mirrors zhgg's KH split philosophy.
+        address treasury = vm.envOr("ACP_TREASURY", deployer);
+        uint16 acpFeeBps = uint16(vm.envOr("ACP_FEE_BPS", uint256(250)));
+        acp = new AgenticCommerce(treasury, acpFeeBps);
+
         vm.stopBroadcast();
 
         console2.log("=========================================");
@@ -69,16 +83,21 @@ contract Deploy0GContracts is Script {
         console2.log("AgentNFT       :", address(nft));
         console2.log("AgentRegistry  :", address(registry));
         console2.log("AxiomCommit    :", address(axiom));
+        console2.log("AgenticCommerce:", address(acp));
+        console2.log("  treasury     :", treasury);
+        console2.log("  feeBps       :", uint256(acpFeeBps));
         console2.log("");
         console2.log("Explorer URLs:");
         console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(nft));
         console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(registry));
         console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(axiom));
+        console2.log("  https://chainscan-galileo.0g.ai/address/%s", address(acp));
         console2.log("=========================================");
         console2.log("");
         console2.log("Save these as env vars:");
         console2.log("  AGENT_NFT_ADDRESS=%s", address(nft));
         console2.log("  AGENT_REGISTRY_ADDRESS=%s", address(registry));
         console2.log("  AXIOM_COMMIT_ADDRESS=%s", address(axiom));
+        console2.log("  ACP_ADDRESS=%s", address(acp));
     }
 }

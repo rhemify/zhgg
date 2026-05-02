@@ -12,6 +12,7 @@
     "@keeperhub/wallet": "^0.1.8",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
+    "@zhgg/oracle-data": "workspace:*",
     "@zhgg/router": "workspace:*",
     "@zhgg/workflow": "workspace:*",
     "tui": "workspace:*"

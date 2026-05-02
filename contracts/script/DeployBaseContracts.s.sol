@@ -6,6 +6,8 @@ import {SpendCap} from "../src/SpendCap.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {AgentReceiverWalletFactory} from "../src/AgentReceiverWalletFactory.sol";
 import {OwnerMirror} from "../src/OwnerMirror.sol";
+import {DelegationManager} from "../src/DelegationManager.sol";
+import {AgentSimpleAccountFactory} from "../src/AgentSimpleAccountFactory.sol";
 
 /// @title  DeployBaseContracts
 /// @notice Deploys the Base Sepolia pair: SpendCap (ERC-7715-style cap
@@ -47,13 +49,18 @@ import {OwnerMirror} from "../src/OwnerMirror.sol";
 ///     --rpc-url $BASE_SEPOLIA_RPC \
 ///     --broadcast --verify
 contract DeployBaseContracts is Script {
+    /// @dev Canonical EntryPoint v0.7 — same address every EVM chain.
+    address internal constant ENTRYPOINT_V07 = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
+
     function run()
         external
         returns (
             SpendCap spendCap,
             FeeSplitter feeSplitter,
             AgentReceiverWalletFactory receiverFactory,
-            OwnerMirror ownerMirror
+            OwnerMirror ownerMirror,
+            DelegationManager delegationManager,
+            AgentSimpleAccountFactory aaFactory
         )
     {
         require(block.chainid == 84532, "Wrong chain: expected Base Sepolia (84532)");
@@ -97,6 +104,18 @@ contract DeployBaseContracts is Script {
             receiverFactory = new AgentReceiverWalletFactory(address(ownerMirror), address(feeSplitter));
         }
 
+        // ERC-7710 DelegationManager — wires SpendCap so each
+        // redemption automatically debits the matching permissionId
+        // bucket. Smart wallets authorize this address via
+        // `setDelegationManager` post-deploy.
+        delegationManager = new DelegationManager(address(spendCap));
+
+        // ERC-4337 v0.7 SimpleAccount factory. Pinned to the canonical
+        // EntryPoint address (same every EVM chain). Agents call
+        // `aaFactory.createAccount(owner, salt)` to deploy their AA
+        // wallet on first userOp.
+        aaFactory = new AgentSimpleAccountFactory(ENTRYPOINT_V07);
+
         vm.stopBroadcast();
 
         console2.log("=========================================");
@@ -117,6 +136,10 @@ contract DeployBaseContracts is Script {
         } else {
             console2.log("ReceiverFactory: skipped (DEPLOY_RECEIVER_FACTORY=false)");
         }
+        console2.log("DelegationMgr  :", address(delegationManager));
+        console2.log("  spendCap     :", address(spendCap));
+        console2.log("AA Factory     :", address(aaFactory));
+        console2.log("  entryPoint   :", ENTRYPOINT_V07);
         console2.log("");
         console2.log("Explorer URLs:");
         console2.log("  https://sepolia.basescan.org/address/%s", address(spendCap));
@@ -133,5 +156,7 @@ contract DeployBaseContracts is Script {
         if (address(receiverFactory) != address(0)) {
             console2.log("  RECEIVER_FACTORY_ADDRESS=%s", address(receiverFactory));
         }
+        console2.log("  DELEGATION_MANAGER_ADDRESS=%s", address(delegationManager));
+        console2.log("  AA_FACTORY_ADDRESS=%s", address(aaFactory));
     }
 }
