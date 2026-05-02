@@ -83,6 +83,14 @@ export function buildHelpLines(): string[] {
   lines.push('     calls AgenticCommerce.complete (0G); only the job evaluator may');
   lines.push('     requires ACP_ADDRESS + AGENT_NFT_ADDRESS + ACP_PAYMENT_TOKEN');
   lines.push('');
+  lines.push('  park <amount> <USDC|WETH>     deposit receiver idle into MockERC4626');
+  lines.push('     e.g.  park 1 USDC                  (defaults to iNFT #1)');
+  lines.push('           park 2 0.5 USDC              (explicit tokenId)');
+  lines.push('     requires: receiver wallet funded with the asset');
+  lines.push('               YIELD_VAULT_ADDRESS in env (deploy via forge script)');
+  lines.push('  unpark <amount> <USDC|WETH>   redeem from vault back to receiver');
+  lines.push('     e.g.  unpark 0.5 USDC             (owner-only — must own iNFT)');
+  lines.push('');
   // ── Operator UX (Phase 3) ─────────────────────────────────────────────
   // Read-only inspections plus the one explicitly-confirmed write
   // (`mint`). They bypass the FLOW panel because they don't exercise

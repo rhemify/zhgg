@@ -88,6 +88,7 @@ import {
   type Delegation as ERC7710Delegation,
 } from '@zhgg/workflow';
 import { resolveRecipient } from '../../transfer-agent/src/resolve-recipient.js';
+import { executePark, executeUnpark } from './yield-intents.js';
 
 // ── ANSI primitives ───────────────────────────────────────────────────────────
 
@@ -1825,6 +1826,159 @@ async function dispatchOperatorCancel(): Promise<void> {
   render()
 }
 
+// ── Yield-vault dispatchers (Slice K — ERC-4626) ─────────────────────────────
+//
+// Real on-chain `parkIdle` / `withdrawIdle` against the user's
+// AgentReceiverWallet (per iNFT, deterministic via the factory CREATE2).
+// Heavy lifting lives in `yield-intents.ts`; this thin wrapper handles
+// env validation, liveBundle gating, audit/receipt rendering. Both
+// require RECEIVER_FACTORY_ADDRESS + YIELD_VAULT_ADDRESS in env; the
+// latter is the MockERC4626 deployed via
+// `forge script script/DeployYieldVault.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast`.
+
+async function dispatchParkIntent(
+  intent: Extract<IntentCommand, { kind: 'park' }>,
+): Promise<void> {
+  if (cancelRequested) {
+    cancelRequested = false
+    pushAudit('intent', 'park cancelled before dispatch', 'info')
+    return
+  }
+  cancelRequested = false
+
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit(
+      'intent',
+      `park blocked: ${liveBundleError ?? 'env-incomplete (BASE_SEPOLIA_RPC_URL or BASE_SEPOLIA_PRIVATE_KEY)'}`,
+      'err',
+    )
+    setToast('err', `env-incomplete: ${liveBundleError ?? 'BASE_SEPOLIA_PRIVATE_KEY/RPC_URL'}`)
+    return
+  }
+
+  const factory = process.env.RECEIVER_FACTORY_ADDRESS as Address | undefined
+  if (!factory || !/^0x[a-fA-F0-9]{40}$/.test(factory)) {
+    pushAudit('yield', 'park blocked: RECEIVER_FACTORY_ADDRESS unset/invalid', 'err')
+    setToast('err', 'RECEIVER_FACTORY_ADDRESS missing')
+    return
+  }
+  const yieldVaultEnv = process.env.YIELD_VAULT_ADDRESS as Address | undefined
+  if (!yieldVaultEnv || !/^0x[a-fA-F0-9]{40}$/.test(yieldVaultEnv)) {
+    pushAudit('yield', 'park blocked: YIELD_VAULT_ADDRESS unset. Deploy MockERC4626 first:', 'err')
+    pushAudit(
+      'yield',
+      '  USDC_ADDRESS=$USDC_BASE_SEPOLIA_ADDRESS forge script script/DeployYieldVault.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast',
+      'info',
+    )
+    pushAudit(
+      'yield',
+      '  Then: cast send <RECEIVER_WALLET> "setYieldVault(address)" <vault> --private-key $BASE_SEPOLIA_PRIVATE_KEY --rpc-url $BASE_SEPOLIA_RPC_URL',
+      'info',
+    )
+    setToast('err', 'YIELD_VAULT_ADDRESS missing — deploy + wire vault first')
+    return
+  }
+
+  runningCommand = 'park'
+  pushAudit('yield', `park.intent ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`, 'info')
+  render()
+
+  try {
+    const result = await executePark({
+      symbol: intent.symbol,
+      amount: intent.amount,
+      tokenId: intent.tokenId,
+      factory,
+      yieldVaultEnv,
+      publicClient: bundle.basePub,
+      walletClient: bundle.baseWallet,
+      account: bundle.baseAccount,
+    })
+    for (const r of result.rows) pushAudit(r.agent, r.event, r.ok)
+    if (result.ok) {
+      receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+    } else {
+      setToast('err', 'park blocked — see audit trail')
+    }
+  } catch (e) {
+    pushAudit('yield', `park.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 220), 'err')
+    setToast('err', 'park failed — see audit trail')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
+async function dispatchUnparkIntent(
+  intent: Extract<IntentCommand, { kind: 'unpark' }>,
+): Promise<void> {
+  if (cancelRequested) {
+    cancelRequested = false
+    pushAudit('intent', 'unpark cancelled before dispatch', 'info')
+    return
+  }
+  cancelRequested = false
+
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit(
+      'intent',
+      `unpark blocked: ${liveBundleError ?? 'env-incomplete (BASE_SEPOLIA_RPC_URL or BASE_SEPOLIA_PRIVATE_KEY)'}`,
+      'err',
+    )
+    setToast('err', `env-incomplete: ${liveBundleError ?? 'BASE_SEPOLIA_PRIVATE_KEY/RPC_URL'}`)
+    return
+  }
+
+  const factory = process.env.RECEIVER_FACTORY_ADDRESS as Address | undefined
+  if (!factory || !/^0x[a-fA-F0-9]{40}$/.test(factory)) {
+    pushAudit('yield', 'unpark blocked: RECEIVER_FACTORY_ADDRESS unset/invalid', 'err')
+    setToast('err', 'RECEIVER_FACTORY_ADDRESS missing')
+    return
+  }
+  const yieldVaultEnv = process.env.YIELD_VAULT_ADDRESS as Address | undefined
+  if (!yieldVaultEnv || !/^0x[a-fA-F0-9]{40}$/.test(yieldVaultEnv)) {
+    pushAudit('yield', 'unpark blocked: YIELD_VAULT_ADDRESS unset. Deploy MockERC4626 first:', 'err')
+    pushAudit(
+      'yield',
+      '  USDC_ADDRESS=$USDC_BASE_SEPOLIA_ADDRESS forge script script/DeployYieldVault.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast',
+      'info',
+    )
+    setToast('err', 'YIELD_VAULT_ADDRESS missing — deploy vault first')
+    return
+  }
+
+  runningCommand = 'unpark'
+  pushAudit('yield', `unpark.intent ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`, 'info')
+  render()
+
+  try {
+    const result = await executeUnpark({
+      symbol: intent.symbol,
+      amount: intent.amount,
+      tokenId: intent.tokenId,
+      factory,
+      yieldVaultEnv,
+      publicClient: bundle.basePub,
+      walletClient: bundle.baseWallet,
+      account: bundle.baseAccount,
+    })
+    for (const r of result.rows) pushAudit(r.agent, r.event, r.ok)
+    if (result.ok) {
+      receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+    } else {
+      setToast('err', 'unpark blocked — see audit trail')
+    }
+  } catch (e) {
+    pushAudit('yield', `unpark.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 220), 'err')
+    setToast('err', 'unpark failed — see audit trail')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
 // ── ACP / EIP-8183 escrow dispatchers (Slice J) ──────────────────────────────
 //
 // `acp create` and `acp release` both target the deployed AgenticCommerce
@@ -2154,6 +2308,9 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'block') void dispatchOperatorBlock()
     else if (parsed.kind === 'mint') void dispatchOperatorMint(parsed)
     else if (parsed.kind === 'cancel') void dispatchOperatorCancel()
+    // Slice K — yield vault park / unpark
+    else if (parsed.kind === 'park') void dispatchParkIntent(parsed)
+    else if (parsed.kind === 'unpark') void dispatchUnparkIntent(parsed)
     // Slice J — ACP / EIP-8183 escrow create + release
     else if (parsed.kind === 'acp-create') void dispatchAcpCreateIntent(parsed)
     else if (parsed.kind === 'acp-release') void dispatchAcpReleaseIntent(parsed)
