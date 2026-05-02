@@ -57,26 +57,8 @@ export interface KHWorkflowExecution {
   [extra: string]: unknown;
 }
 
-/// Single row from `GET /api/analytics/runs`.
-export interface KHAnalyticsRun {
-  executionId: string;
-  workflowId?: string;
-  workflowName?: string;
-  status: string;
-  startedAt?: string;
-  completedAt?: string;
-  /// Total wei spent by this run (string — KH returns big-int as decimal
-  /// string; we don't parse to bigint here so the surface stays loose).
-  spendWei?: string;
-  [extra: string]: unknown;
-}
-
-/// `GET /api/analytics/spend-cap` — org-level daily limit. The cap and
-/// remaining are decimal-string wei (treat as bigint at the call site).
-export interface KHSpendCap {
-  capWei: string;
-  remainingWei: string;
-  /// ISO-8601 reset timestamp, e.g. "2026-05-03T00:00:00.000Z".
-  resetAt?: string;
-  [extra: string]: unknown;
-}
+// NOTE: KHAnalyticsRun + KHSpendCap removed 2026-05-02 after live probe
+// confirmed `/api/analytics/runs` and `/api/analytics/spend-cap` are
+// NOT deployed for kh_ bearer auth on app.keeperhub.com (404 / 401).
+// Re-add when KH ships them; until then, list_workflows + list_integrations
+// are the only read surfaces that work.

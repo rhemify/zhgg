@@ -776,8 +776,8 @@ function formatStaged(intent: IntentCommand): string {
     case 'transfer': return `transfer ${intent.amount} ${intent.symbol} → ${intent.recipient}`
     case 'kh-trigger': return `kh trigger ${intent.workflowId}${intent.inputs ? ' (+inputs)' : ''}`
     case 'kh-status': return `kh status ${intent.executionId}`
-    case 'kh-runs': return `kh runs status=${intent.status ?? 'success'} range=${intent.range ?? '24h'}`
-    case 'kh-cap': return `kh cap`
+    case 'kh-workflows': return `kh workflows`
+    case 'kh-integrations': return `kh integrations`
     default: return '—'
   }
 }
@@ -1288,8 +1288,8 @@ async function dispatchKHIntent(
   intent:
     | Extract<IntentCommand, { kind: 'kh-trigger' }>
     | Extract<IntentCommand, { kind: 'kh-status' }>
-    | Extract<IntentCommand, { kind: 'kh-runs' }>
-    | Extract<IntentCommand, { kind: 'kh-cap' }>,
+    | Extract<IntentCommand, { kind: 'kh-workflows' }>
+    | Extract<IntentCommand, { kind: 'kh-integrations' }>,
 ): Promise<void> {
   const apiKey = process.env.KH_API_KEY
   if (!apiKey || apiKey.length === 0) {
@@ -1309,9 +1309,9 @@ async function dispatchKHIntent(
       ? { kind: 'workflow_trigger', workflowId: intent.workflowId, inputs: intent.inputs }
       : intent.kind === 'kh-status'
         ? { kind: 'workflow_status', executionId: intent.executionId }
-        : intent.kind === 'kh-runs'
-          ? { kind: 'analytics_runs', status: intent.status, range: intent.range }
-          : { kind: 'spend_cap' }
+        : intent.kind === 'kh-workflows'
+          ? { kind: 'list_workflows' }
+          : { kind: 'list_integrations' }
 
   const label = intent.kind.replace('kh-', '')
   pushAudit('kh', `${label} call → ${baseUrl}`, 'info')
@@ -1333,20 +1333,21 @@ async function dispatchKHIntent(
 
   // Discriminate on the result's kind (matches the call's kind 1:1).
   const out = result.value
-  if (out.kind === 'spend_cap') {
-    const sc = out.value
-    pushAudit(
-      'kh',
-      `cap=${sc.capWei ?? '?'}  remaining=${sc.remainingWei ?? '?'}  reset=${sc.resetAt ?? '?'}`,
-      'ok',
-    )
-  } else if (out.kind === 'analytics_runs') {
+  if (out.kind === 'list_workflows') {
     const list = out.value
-    pushAudit('kh', `runs returned ${list.length} entries`, 'ok')
-    for (const r of list.slice(0, 5)) {
-      const txRaw = r.transactionHash
-      const tx = typeof txRaw === 'string' ? txRaw.slice(0, 12) + '…' : ''
-      pushAudit('kh', `  ${r.status.padEnd(9)} ${r.executionId.slice(0, 18)} ${tx}`, 'info')
+    pushAudit('kh', `workflows: ${list.length} found`, 'ok')
+    if (list.length === 0) {
+      pushAudit('kh', '  (none — create one at app.keeperhub.com/workflows)', 'info')
+    }
+    for (const w of list.slice(0, 8)) {
+      pushAudit('kh', `  ${w.id.padEnd(22)} ${w.name ?? '(unnamed)'}`, 'info')
+    }
+  } else if (out.kind === 'list_integrations') {
+    const list = out.value
+    pushAudit('kh', `integrations: ${list.length} found`, 'ok')
+    for (const i of list.slice(0, 8)) {
+      const m = i.isManaged ? 'managed' : 'byo'
+      pushAudit('kh', `  ${i.type.padEnd(10)} ${i.name.padEnd(20)} (${m})`, 'info')
     }
   } else if (out.kind === 'workflow_trigger') {
     const t = out.value
@@ -1495,7 +1496,7 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'cancel') void dispatchOperatorCancel()
     // Phase 2 KH direct API — auth via KH_API_KEY env, no liveBundle gate
     else if (parsed.kind === 'kh-trigger' || parsed.kind === 'kh-status'
-          || parsed.kind === 'kh-runs'    || parsed.kind === 'kh-cap') {
+          || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations') {
       void dispatchKHIntent(parsed)
     }
     return true

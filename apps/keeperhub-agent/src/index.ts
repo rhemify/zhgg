@@ -26,13 +26,9 @@ import {
 } from './client.js';
 import { triggerWorkflow } from './endpoints/workflow-trigger.js';
 import { getWorkflowStatus } from './endpoints/workflow-status.js';
-import { getAnalyticsRuns, type RunRangeFilter, type RunStatusFilter } from './endpoints/analytics-runs.js';
-import { getSpendCap } from './endpoints/spend-cap.js';
-import type {
-  KHAnalyticsRun,
-  KHSpendCap,
-  KHWorkflowExecution,
-} from './types.js';
+import { listWorkflows, type KHWorkflowSummary } from './endpoints/list-workflows.js';
+import { listIntegrations, type KHIntegrationSummary } from './endpoints/list-integrations.js';
+import type { KHWorkflowExecution } from './types.js';
 
 // ─── Result + error envelope ─────────────────────────────────────────────
 
@@ -65,17 +61,21 @@ export type KHResult<T> = { ok: true; value: T } | { ok: false; error: KHError }
 // One union per supported intent. Adding a new endpoint = one extra arm
 // here + one extra case in the switch below.
 
+// Empirical surface: only the four below are deployed for `kh_` bearers
+// on `app.keeperhub.com`. The previously-documented `/api/analytics/*`,
+// `/api/runs`, and `/api/me` endpoints either 404 or 401 with a real
+// org key — they're session-only or aspirational. Probed live 2026-05-02.
 export type KHCall =
   | { kind: 'workflow_trigger'; workflowId: string; inputs?: Record<string, unknown> }
   | { kind: 'workflow_status'; executionId: string }
-  | { kind: 'analytics_runs'; status?: RunStatusFilter; range?: RunRangeFilter }
-  | { kind: 'spend_cap' };
+  | { kind: 'list_workflows' }
+  | { kind: 'list_integrations' };
 
 export type KHCallResult =
   | { kind: 'workflow_trigger'; value: KHWorkflowExecution }
   | { kind: 'workflow_status'; value: KHWorkflowExecution }
-  | { kind: 'analytics_runs'; value: KHAnalyticsRun[] }
-  | { kind: 'spend_cap'; value: KHSpendCap };
+  | { kind: 'list_workflows'; value: KHWorkflowSummary[] }
+  | { kind: 'list_integrations'; value: KHIntegrationSummary[] };
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -113,15 +113,15 @@ export async function executeKHCall(
       if (!r.ok) return r;
       return { ok: true, value: { kind: 'workflow_status', value: r.value } };
     }
-    case 'analytics_runs': {
-      const r = await getAnalyticsRuns(client, { status: call.status, range: call.range });
+    case 'list_workflows': {
+      const r = await listWorkflows(client);
       if (!r.ok) return r;
-      return { ok: true, value: { kind: 'analytics_runs', value: r.value } };
+      return { ok: true, value: { kind: 'list_workflows', value: r.value } };
     }
-    case 'spend_cap': {
-      const r = await getSpendCap(client);
+    case 'list_integrations': {
+      const r = await listIntegrations(client);
       if (!r.ok) return r;
-      return { ok: true, value: { kind: 'spend_cap', value: r.value } };
+      return { ok: true, value: { kind: 'list_integrations', value: r.value } };
     }
   }
 }
@@ -159,7 +159,12 @@ export function buildKHFromEnv(
       },
     };
   }
-  const baseUrl = env.KEEPERHUB_API_URL ?? KH_DEFAULT_BASE_URL;
+  // Treat empty string the same as unset — `??` lets "" through, which
+  // produces an invalid URL like "/api/workflows" that fetch rejects.
+  const baseUrl =
+    env.KEEPERHUB_API_URL && env.KEEPERHUB_API_URL.length > 0
+      ? env.KEEPERHUB_API_URL
+      : KH_DEFAULT_BASE_URL;
   return {
     ok: true,
     value: createKHClient({ apiKey, baseUrl, fetchImpl: opts.fetchImpl }),
@@ -171,20 +176,19 @@ export function buildKHFromEnv(
 export type { KHClient, KHFetch } from './client.js';
 export { KH_DEFAULT_BASE_URL } from './client.js';
 export type {
-  KHAnalyticsRun,
-  KHSpendCap,
   KHWorkflowExecution,
   KHWorkflowStep,
   KHWorkflowStatus,
 } from './types.js';
-export type { RunRangeFilter, RunStatusFilter } from './endpoints/analytics-runs.js';
+export type { KHWorkflowSummary } from './endpoints/list-workflows.js';
+export type { KHIntegrationSummary, KHIntegrationType } from './endpoints/list-integrations.js';
 
 // ─── CLI entrypoint (one-shot) ───────────────────────────────────────────
 
 async function main(): Promise<void> {
   const [sub, ...rest] = process.argv.slice(2);
   if (!sub) {
-    console.error('usage: bun run keeperhub-agent <trigger|status|runs|cap> [args]');
+    console.error('usage: bun run keeperhub-agent <trigger|status|workflows|integrations> [args]');
     process.exit(2);
   }
 
@@ -216,14 +220,12 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     call = { kind: 'workflow_status', executionId };
-  } else if (sub === 'runs') {
-    const status = rest[0] as RunStatusFilter | undefined;
-    const range = rest[1] as RunRangeFilter | undefined;
-    call = { kind: 'analytics_runs', status, range };
-  } else if (sub === 'cap') {
-    call = { kind: 'spend_cap' };
+  } else if (sub === 'workflows') {
+    call = { kind: 'list_workflows' };
+  } else if (sub === 'integrations') {
+    call = { kind: 'list_integrations' };
   } else {
-    console.error(`unknown subcommand: ${sub}`);
+    console.error(`unknown subcommand: ${sub} — try trigger|status|workflows|integrations`);
     process.exit(2);
   }
 

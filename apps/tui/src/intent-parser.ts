@@ -68,10 +68,13 @@ export type IntentCommand =
   /// KeeperHub direct-API intents (Phase 2). Each maps 1:1 to an
   /// `executeKHCall` shape in `keeperhub-agent`. The bearer
   /// (`KH_API_KEY`) is read by the agent itself — never surfaced here.
+  /// Endpoint surface confirmed by live probe (2026-05-02): only the
+  /// four below work for `kh_` org bearer; analytics/runs and
+  /// analytics/spend-cap return 401/404 on app.keeperhub.com.
   | { kind: 'kh-trigger'; workflowId: string; inputs?: Record<string, unknown> }
   | { kind: 'kh-status'; executionId: string }
-  | { kind: 'kh-runs'; status?: 'success' | 'error' | 'pending'; range?: '1h' | '24h' | '7d' }
-  | { kind: 'kh-cap' }
+  | { kind: 'kh-workflows' }
+  | { kind: 'kh-integrations' }
   /// Operator UX intents (Phase 3). Read-only inspections + the explicit
   /// `mint <role>` write. Each is dispatched directly from the TUI's
   /// keypress handler; none of them touches the orchestrator FLOW panel
@@ -410,43 +413,38 @@ export function parseIntent(input: string): IntentCommand {
       }
       return { kind: 'kh-status', executionId };
     }
-    if (sub === 'runs') {
-      // Form: `kh runs [success|error|pending] [1h|24h|7d]`. Both args
-      // are optional; defaults applied at dispatch time.
-      const validStatus = new Set(['success', 'error', 'pending']);
-      const validRange = new Set(['1h', '24h', '7d']);
-      let status: 'success' | 'error' | 'pending' | undefined;
-      let range: '1h' | '24h' | '7d' | undefined;
-      for (const tok of parts.slice(2)) {
-        const t = tok.toLowerCase();
-        if (validStatus.has(t)) status = t as typeof status;
-        else if (validRange.has(t)) range = t as typeof range;
-        else {
-          return {
-            kind: 'unknown',
-            raw: trimmed,
-            reason: `kh runs unknown filter "${tok}" — expected status (success|error|pending) or range (1h|24h|7d)`,
-          };
-        }
-      }
-      return { kind: 'kh-runs', status, range };
-    }
-    if (sub === 'cap') {
+    if (sub === 'workflows') {
       if (parts.length > 2) {
-        return { kind: 'unknown', raw: trimmed, reason: 'kh cap takes no arguments' };
+        return { kind: 'unknown', raw: trimmed, reason: 'kh workflows takes no arguments' };
       }
-      return { kind: 'kh-cap' };
+      return { kind: 'kh-workflows' };
+    }
+    if (sub === 'integrations') {
+      if (parts.length > 2) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh integrations takes no arguments' };
+      }
+      return { kind: 'kh-integrations' };
+    }
+    if (sub === 'runs' || sub === 'cap') {
+      // Endpoints documented in kh-api.md but NOT deployed for kh_ bearer
+      // (verified live 2026-05-02 — both 401/404 on app.keeperhub.com).
+      // Surface this honestly so the operator doesn't waste time.
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `kh ${sub} — endpoint not deployed for kh_ bearer auth on app.keeperhub.com. Use 'kh workflows' or 'kh integrations' instead.`,
+      };
     }
     return {
       kind: 'unknown',
       raw: trimmed,
-      reason: `kh: unknown sub-verb "${sub}" — supported: trigger, status, runs, cap`,
+      reason: `kh: unknown sub-verb "${sub}" — supported: trigger, status, workflows, integrations`,
     };
   }
 
   return {
     kind: 'unknown',
     raw: trimmed,
-    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", "transfer <amount> <token> to <recipient>", or "kh <trigger|status|runs|cap>"`,
+    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", "transfer <amount> <token> to <recipient>", or "kh <trigger|status|workflows|integrations>"`,
   };
 }

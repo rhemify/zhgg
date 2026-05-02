@@ -197,56 +197,35 @@ describe('executeKHCall — endpoint URL construction', () => {
     expect(r.value.value.steps?.[0]?.txHash).toBe('0xdead');
   });
 
-  it('analytics_runs accepts both array and {runs:[]} shapes', async () => {
-    // Direct-array shape.
-    {
-      const { fetchImpl } = mockFetch(() => ({
-        status: 200,
-        body: JSON.stringify([{ executionId: 'a', status: 'success' }]),
-      }));
-      const client = createKHClient({ apiKey: KEY, fetchImpl });
-      const r = await executeKHCall({ kind: 'analytics_runs', status: 'success' }, { client });
-      expect(r.ok).toBe(true);
-      if (!r.ok) throw new Error('unreachable');
-      if (r.value.kind !== 'analytics_runs') throw new Error('unreachable');
-      expect(r.value.value.length).toBe(1);
-    }
-    // Wrapped shape.
-    {
-      const { fetchImpl, calls } = mockFetch(() => ({
-        status: 200,
-        body: JSON.stringify({ runs: [{ executionId: 'a' }, { executionId: 'b' }] }),
-      }));
-      const client = createKHClient({ apiKey: KEY, fetchImpl });
-      const r = await executeKHCall(
-        { kind: 'analytics_runs', range: '24h' },
-        { client },
-      );
-      expect(calls[0]!.url).toBe('https://app.keeperhub.com/api/analytics/runs?range=24h');
-      expect(r.ok).toBe(true);
-      if (!r.ok) throw new Error('unreachable');
-      if (r.value.kind !== 'analytics_runs') throw new Error('unreachable');
-      expect(r.value.value.length).toBe(2);
-    }
-  });
-
-  it('spend_cap parses { capWei, remainingWei, resetAt }', async () => {
+  it('list_workflows hits /api/workflows and returns array', async () => {
     const { fetchImpl, calls } = mockFetch(() => ({
       status: 200,
-      body: JSON.stringify({
-        capWei: '1000000000000000000',
-        remainingWei: '750000000000000000',
-        resetAt: '2026-05-03T00:00:00.000Z',
-      }),
+      body: JSON.stringify([{ id: 'wf-1', name: 'audit' }, { id: 'wf-2' }]),
     }));
     const client = createKHClient({ apiKey: KEY, fetchImpl });
-    const r = await executeKHCall({ kind: 'spend_cap' }, { client });
-    expect(calls[0]!.url).toBe('https://app.keeperhub.com/api/analytics/spend-cap');
+    const r = await executeKHCall({ kind: 'list_workflows' }, { client });
+    expect(calls[0]!.url).toBe('https://app.keeperhub.com/api/workflows');
     expect(r.ok).toBe(true);
     if (!r.ok) throw new Error('unreachable');
-    if (r.value.kind !== 'spend_cap') throw new Error('unreachable');
-    expect(r.value.value.capWei).toBe('1000000000000000000');
-    expect(r.value.value.remainingWei).toBe('750000000000000000');
+    if (r.value.kind !== 'list_workflows') throw new Error('unreachable');
+    expect(r.value.value.length).toBe(2);
+    expect(r.value.value[0]!.id).toBe('wf-1');
+  });
+
+  it('list_integrations hits /api/integrations', async () => {
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 200,
+      body: JSON.stringify([
+        { id: 'int-1', name: '0xAbC', type: 'web3', isManaged: false },
+      ]),
+    }));
+    const client = createKHClient({ apiKey: KEY, fetchImpl });
+    const r = await executeKHCall({ kind: 'list_integrations' }, { client });
+    expect(calls[0]!.url).toBe('https://app.keeperhub.com/api/integrations');
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    if (r.value.kind !== 'list_integrations') throw new Error('unreachable');
+    expect(r.value.value[0]!.type).toBe('web3');
   });
 });
 
@@ -283,16 +262,17 @@ describe('executeKHCall — malformed responses', () => {
     expect(r.error.reason).toContain('completed');
   });
 
-  it('spend_cap: missing capWei → malformed_response', async () => {
+  it('list_workflows: non-array response → malformed_response', async () => {
     const { fetchImpl } = mockFetch(() => ({
       status: 200,
-      body: JSON.stringify({ remainingWei: '1' }),
+      body: JSON.stringify({ unexpected: 'object' }),
     }));
     const client = createKHClient({ apiKey: KEY, fetchImpl });
-    const r = await executeKHCall({ kind: 'spend_cap' }, { client });
+    const r = await executeKHCall({ kind: 'list_workflows' }, { client });
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error('unreachable');
     expect(r.error.kind).toBe('malformed_response');
+    expect(r.error.reason).toContain('array');
   });
 });
 
