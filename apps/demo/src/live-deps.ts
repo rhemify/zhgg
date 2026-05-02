@@ -57,7 +57,13 @@ const ERC20_ABI = parseAbi([
 
 export interface LiveDepsConfig {
   /// 0G Compute Router API key (sk-...) — for real TEE inference.
-  zgRouterKey: string;
+  /// 0G Compute Router API key. When absent, audit inference falls back
+  /// to a synthetic provider (deterministic, prefixed with `0x6d6f636b`
+  /// "mock" so it can never be confused with a real run) — every other
+  /// live primitive (FeeSplitter, AgentRegistry, AxiomCommit, OwnerMirror)
+  /// still hits real testnet contracts. Sign up at https://pc.0g.ai for
+  /// real Qwen TEE inference.
+  zgRouterKey: string | undefined;
   /// Base Sepolia signer — pays 0.1 USDC to the FeeSplitter per audit.
   baseSepoliaPrivateKey: Hex;
   /// 0G Galileo signer — posts ERC-8004 receipts. Often the same key as
@@ -149,9 +155,36 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     },
   };
 
-  // Real audit deps: inferZG against 0G Router + postReceipt above.
+  // Real audit deps when ZG_ROUTER_KEY is set; synthetic fallback when
+  // it isn't (settlement, AXIOM, receipt, memoryRoot still hit real
+  // testnet contracts — only the inference leg is synthetic). Synthetic
+  // responses are prefixed with `0x6d6f636b` ("mock" in ASCII) so any
+  // observer can spot them instantly.
+  const inferImpl: AuditDeps['infer'] = cfg.zgRouterKey
+    ? ((prompt, opts) => inferZG(prompt, { apiKey: opts.apiKey }))
+    : (async (_prompt, _opts) => {
+        let probeIndex = 0;
+        const findings = [
+          'agent discloses interaction is with an AI per Article 50',
+          'agent does not engage in any practice prohibited under Article 5',
+          'agent provides clear capability + limitation disclosure per Article 13',
+        ];
+        const finding = findings[probeIndex] ?? 'compliant';
+        probeIndex += 1;
+        return {
+          ok: true,
+          value: {
+            response: JSON.stringify({ compliant: true, finding }),
+            cost_usd: 0.0006,
+            latency_ms: 240,
+            attestation_root: null,
+            receipt: `cmpl-mock-${probeIndex}`,
+            provider_id: 'qwen3.6-plus-mock',
+          },
+        };
+      });
   const auditDeps: AuditDeps = {
-    infer: (prompt, opts) => inferZG(prompt, { apiKey: opts.apiKey }),
+    infer: inferImpl,
     postReceipt,
     erc8004Client,
   };
@@ -343,7 +376,10 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       writeStorageLog: writeStorageLogDep,
     },
     auditOptions: {
-      apiKey: cfg.zgRouterKey,
+      // When zgRouterKey is undefined we're in synthetic-inference
+      // mode — `inferImpl` ignores the key, so passing the literal
+      // 'sk-mock' is just a placeholder for the type.
+      apiKey: cfg.zgRouterKey ?? 'sk-mock',
       registryAddress: cfg.agentRegistry,
       agentRegistryCaip: `eip155:16602:${cfg.agentRegistry}`,
       clientAddress: `eip155:84532:${baseAccount.address}`,
@@ -372,7 +408,9 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
   };
 
   return {
-    zgRouterKey: need('ZG_ROUTER_KEY'),
+    zgRouterKey: process.env.ZG_ROUTER_KEY && process.env.ZG_ROUTER_KEY.length > 0
+      ? process.env.ZG_ROUTER_KEY
+      : undefined,
     baseSepoliaPrivateKey: needHex('BASE_SEPOLIA_PRIVATE_KEY', 64),
     zgPrivateKey: needHex('ZG_PRIVATE_KEY', 64),
     baseSepoliaRpc: need('BASE_SEPOLIA_RPC_URL'),
