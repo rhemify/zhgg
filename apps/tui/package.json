@@ -20,6 +20,7 @@
     "@zhgg/oracle-data": "workspace:*",
     "@zhgg/router": "workspace:*",
     "@zhgg/workflow": "workspace:*",
+    "swap-agent": "workspace:*",
     "viem": "^2.21.0"
   },
   "devDependencies": {

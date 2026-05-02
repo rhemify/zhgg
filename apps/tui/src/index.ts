@@ -32,6 +32,7 @@ import { runCrossAgentDemo, type TranscriptStep } from '../../demo/src/cross-age
 import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.js';
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
 import { queryOracle } from '@zhgg/oracle-agent';
+import { executeSwap } from 'swap-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
 import {
@@ -893,6 +894,79 @@ async function dispatchAskOracleIntent(
   }
 }
 
+// ── Real on-chain swap dispatch ──────────────────────────────────────────────
+//
+// Slice E: typed `swap <amount> <from> <to>` intents fan out to the
+// `swap-agent` workspace package, which executes against either Uniswap
+// V3 SwapRouter02 or WETH9 deposit/withdraw on Base Sepolia. The TUI
+// MUST refuse if env is incomplete (no fake hash) and surface the real
+// chain revert reason on failure (no synthetic fallback).
+
+async function dispatchSwapIntent(
+  intent: Extract<IntentCommand, { kind: 'swap' }>,
+): Promise<void> {
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit(
+      'intent',
+      `swap blocked: ${liveBundleError ?? 'env-incomplete (BASE_SEPOLIA_RPC_URL or BASE_SEPOLIA_PRIVATE_KEY)'}`,
+      'err',
+    )
+    setToast('err', `env-incomplete: ${liveBundleError ?? 'BASE_SEPOLIA_PRIVATE_KEY/RPC_URL'}`)
+    return
+  }
+
+  runningCommand = 'swap'
+  pushAudit('swap-agent', `swap.intent ${intent.amount} ${intent.fromSym} → ${intent.toSym}`, 'info')
+  pushAudit('swap-agent', `swap.quote probing Uniswap V3 fee tiers [500,3000,10000]`, 'info')
+  render()
+
+  try {
+    pushAudit('swap-agent', `swap.execute submitting tx via SwapRouter02 / WETH9`, 'info')
+    const result = await executeSwap(
+      {
+        publicClient: bundle.basePub,
+        walletClient: bundle.baseWallet,
+        account: bundle.baseAccount.address,
+      },
+      intent.amount,
+      intent.fromSym,
+      intent.toSym,
+    )
+
+    if (!result.ok) {
+      const e = result.error
+      pushAudit('swap-agent', `swap.reverted ${e.kind}: ${e.reason}`.slice(0, 160), 'err')
+      setToast('err', `swap ${e.kind}`.slice(0, 80))
+      return
+    }
+
+    const v = result.value
+    pushAudit(
+      'swap-agent',
+      `swap.confirmed route=${v.route}${v.poolFee ? ` fee=${v.poolFee}` : ''} tx=${shortHash(v.txHash)}`,
+      'ok',
+    )
+
+    try {
+      const rcpt = await bundle.basePub.waitForTransactionReceipt({ hash: v.txHash })
+      receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+      pushAudit(
+        'receipt',
+        `swap receipt status=${rcpt.status} blk=${rcpt.blockNumber} gas=${rcpt.gasUsed}`,
+        rcpt.status === 'success' ? 'ok' : 'err',
+      )
+    } catch (e) {
+      pushAudit('receipt', `swap receipt fetch failed: ${e instanceof Error ? e.message : String(e)}`, 'err')
+    }
+  } catch (e) {
+    pushAudit('swap-agent', `swap.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160), 'err')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
 // ── SpendCap [G] grant flow ──────────────────────────────────────────────────
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
@@ -1019,6 +1093,7 @@ function handleIntentKey(key: string): boolean {
     stagedIntent = parsed
     if (parsed.kind === 'audit') void dispatchAuditIntent(parsed)
     else if (parsed.kind === 'ask-oracle') void dispatchAskOracleIntent(parsed)
+    else if (parsed.kind === 'swap') void dispatchSwapIntent(parsed)
     return true
   }
   // Backspace (0x7f / 0x08).

@@ -1,0 +1,25 @@
+{
+  "name": "swap-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./uniswap-v3": "./src/uniswap-v3.ts",
+    "./wrap-fallback": "./src/wrap-fallback.ts"
+  },
+  "scripts": {
+    "swap": "bun run src/index.ts",
+    "check-types": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

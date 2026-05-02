@@ -3,6 +3,7 @@
 /// Recognised forms:
 ///   `audit <ens-or-tokenid>`     → kick the cross-agent orchestrator
 ///   `ask oracle <topic>`         → standalone oracle query
+///   `swap <amount> <from> <to>`  → real on-chain swap via swap-agent
 ///
 /// Anything else returns `{ kind: 'unknown' }` so the caller can render
 /// a hint instead of dispatching. We deliberately avoid throwing on bad
@@ -11,6 +12,14 @@
 
 import type { OracleTopic } from '@zhgg/oracle-data';
 import { resolveAgent } from './agent-registry.js';
+
+/// Symbols accepted by the swap-agent (kept in sync with
+/// `apps/swap-agent/src/index.ts` SUPPORTED_SYMBOLS). Listed here as a
+/// literal-union so the parser can produce a typed value the TUI passes
+/// through without re-validating.
+export type SwapSymbol = 'ETH' | 'WETH' | 'USDC';
+
+const SWAP_SYMBOLS: ReadonlySet<SwapSymbol> = new Set<SwapSymbol>(['ETH', 'WETH', 'USDC']);
 
 export type IntentCommand =
   | {
@@ -23,6 +32,15 @@ export type IntentCommand =
       tokenId: bigint;
     }
   | { kind: 'ask-oracle'; topic: OracleTopic; raw: string }
+  | {
+      kind: 'swap';
+      /// Decimal-string amount expressed in the from-symbol's UNITS
+      /// (e.g. "0.001" for 0.001 ETH, "5" for 5 USDC). The agent
+      /// converts to atomic units via parseUnits + TOKEN_DECIMALS.
+      amount: string;
+      fromSym: SwapSymbol;
+      toSym: SwapSymbol;
+    }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
   /// Surfaced when the user types an `*.eth` target that isn't in
@@ -122,6 +140,56 @@ export function parseIntent(input: string): IntentCommand {
     return { kind: 'audit', target, tokenId: resolved.tokenId };
   }
 
+  if (head === 'swap') {
+    // Form: `swap <amount> <fromSym> <toSym>`
+    const amount = parts[1]?.trim();
+    const fromRaw = parts[2]?.trim();
+    const toRaw = parts[3]?.trim();
+    if (!amount || !fromRaw || !toRaw) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'swap needs <amount> <fromSym> <toSym> (e.g. "swap 0.001 ETH USDC")',
+      };
+    }
+    if (!/^\d+(\.\d+)?$/.test(amount)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `swap amount "${amount}" — expected decimal (e.g. 0.001, 5)`,
+      };
+    }
+    const fromSym = fromRaw.toUpperCase();
+    const toSym = toRaw.toUpperCase();
+    if (!SWAP_SYMBOLS.has(fromSym as SwapSymbol)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `swap fromSym "${fromRaw}" — supported: ETH, WETH, USDC`,
+      };
+    }
+    if (!SWAP_SYMBOLS.has(toSym as SwapSymbol)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `swap toSym "${toRaw}" — supported: ETH, WETH, USDC`,
+      };
+    }
+    if (fromSym === toSym) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `swap fromSym and toSym are identical (${fromSym})`,
+      };
+    }
+    return {
+      kind: 'swap',
+      amount,
+      fromSym: fromSym as SwapSymbol,
+      toSym: toSym as SwapSymbol,
+    };
+  }
+
   if (head === 'ask' && parts[1]?.toLowerCase() === 'oracle') {
     const tail = parts.slice(2).join(' ').trim();
     if (tail.length === 0) {
@@ -137,6 +205,6 @@ export function parseIntent(input: string): IntentCommand {
   return {
     kind: 'unknown',
     raw: trimmed,
-    reason: `unknown intent — try "audit <ens>" or "ask oracle <topic>"`,
+    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", or "swap <amount> <from> <to>"`,
   };
 }

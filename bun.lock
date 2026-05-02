@@ -73,6 +73,19 @@
         "typescript": "^5",
       },
     },
+    "apps/swap-agent": {
+      "name": "swap-agent",
+      "version": "0.0.1",
+      "dependencies": {
+        "viem": "^2.21.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "apps/tee-verifier": {
       "name": "tee-verifier",
       "version": "0.0.1",
@@ -96,6 +109,7 @@
         "@zhgg/oracle-data": "workspace:*",
         "@zhgg/router": "workspace:*",
         "@zhgg/workflow": "workspace:*",
+        "swap-agent": "workspace:*",
         "viem": "^2.21.0",
       },
       "devDependencies": {
@@ -1558,6 +1572,8 @@
     "stubborn-utils": ["stubborn-utils@1.0.2", "", {}, "sha512-zOh9jPYI+xrNOyisSelgym4tolKTJCQd5GBhK0+0xJvcYDcwlOoxF/rnFKQ2KRZknXSG9jWAp66fwP6AxN9STg=="],
 
     "supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
+
+    "swap-agent": ["swap-agent@workspace:apps/swap-agent"],
 
     "symbol-tree": ["symbol-tree@3.2.4", "", {}, "sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw=="],
 
