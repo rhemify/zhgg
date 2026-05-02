@@ -1,8 +1,10 @@
 /// CLI runner for the cross-agent demo. Wires runCrossAgentDemo with
 /// fully-mocked deps so `bun run apps/demo audit <target>` prints a
 /// realistic-looking transcript end-to-end without hitting any testnet.
-/// D4 swaps the mocks for live KeeperHub MCP + Base Sepolia x402 +
-/// 0G Compute calls.
+/// `--live` swaps the mocks for live KeeperHub MCP + 0G Compute calls
+/// and a Base Sepolia settle leg whose rail is `x402` when KH is
+/// configured, else `direct_split` (caller-funded FeeSplitter — NOT the
+/// x402 protocol).
 
 import { runCrossAgentDemo, type TranscriptStep } from './cross-agent.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from './live-deps.js';
@@ -112,6 +114,7 @@ const MOCK_SETTLEMENT: SettleOutput = {
   txHash: '0x6d6f636b00000000000000000000000000000000000000000000000000000002',
   network: 'eip155:84532',
   payer: '0x6d6f636b00000000000000000000000000000000',
+  rail: 'direct_split',
 };
 
 export interface RunAuditCliOptions {

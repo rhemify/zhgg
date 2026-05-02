@@ -211,10 +211,23 @@ export interface SettleOptions {
   fetchImpl?: FetchLike;
 }
 
+/// Settlement transport indicator.
+///   - `x402`: the canonical x402 facilitator round-trip (this module's
+///     `settlePayment`, or KeeperHub's marketplace facilitator). EIP-3009
+///     `transferWithAuthorization` happens off-caller.
+///   - `direct_split`: caller funds the splitter contract directly via
+///     ERC-20 `approve` + `transferFrom`. NOT x402 protocol — accurate
+///     name for the FeeSplitter direct path used in mocked/cheap-demo runs.
+export type SettleRail = 'x402' | 'direct_split';
+
 export interface SettleOutput {
   txHash: string;
   network: string;
   payer: string | null;
+  /// Which rail produced this settlement. Forwarded onto the orchestrator
+  /// transcript so observers can tell the protocol path apart from a
+  /// direct splitter call.
+  rail: SettleRail;
 }
 
 export type SettleError =
@@ -270,6 +283,7 @@ export async function settlePayment(
       txHash: body.transaction,
       network: body.network,
       payer: typeof body.payer === 'string' ? body.payer : null,
+      rail: 'x402',
     },
   };
 }

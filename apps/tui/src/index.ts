@@ -680,9 +680,13 @@ function applyOrchestratorStep(step: TranscriptStep): void {
       break
     case 'oracle.payment.settle': {
       const txHash = typeof detail.txHash === 'string' ? (detail.txHash as Hex) : null
-      pushAudit('orchestrator', `settle tx=${txHash ? shortHash(txHash) : '—'}`, 'ok')
+      const rail = typeof detail.rail === 'string' ? detail.rail : '?'
+      pushAudit('orchestrator', `settle rail=${rail} tx=${txHash ? shortHash(txHash) : '—'}`, 'ok')
       flow.nodes = ['done', 'done', 'done', 'active']
-      flow.rails = { x402: 'done', mpp: 'rejected', gas: 'rejected' }
+      // Reflect the truthful rail in the FLOW panel: only light up `x402`
+      // when the orchestrator actually used the facilitator path.
+      if (rail === 'x402') flow.rails = { x402: 'done', mpp: 'rejected', gas: 'rejected' }
+      else flow.rails = { x402: 'rejected', mpp: 'rejected', gas: 'rejected' }
       if (txHash && liveBundle) {
         liveBundle.receiptFeed
           .fetchSplit(txHash)
@@ -772,6 +776,10 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
           txHash: '0x6d6f636b00000000000000000000000000000000000000000000000000000002' as Hex,
           network: 'eip155:84532',
           payer: '0x6d6f636b00000000000000000000000000000000' as Hex,
+          // Synthetic offline path is rail-equivalent to direct_split:
+          // no facilitator round-trip, no EIP-3009. Mark accordingly so
+          // the receipt panel reflects truth, not aspiration.
+          rail: 'direct_split' as const,
         }),
         auditDeps: {
           infer: async () => ({

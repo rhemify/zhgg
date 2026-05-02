@@ -327,6 +327,7 @@ describe('settlePayment', () => {
     if (!result.ok) throw new Error('unreachable');
     expect(result.value.txHash).toBe('0xsettle');
     expect(result.value.network).toBe('eip155:84532');
+    expect(result.value.rail).toBe('x402');
     expect(captured!.url).toBe(`${FACILITATOR}/settle`);
   });
 

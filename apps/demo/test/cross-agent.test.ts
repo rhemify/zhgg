@@ -47,6 +47,7 @@ describe('runCrossAgentDemo', () => {
       txHash: '0xpaytx',
       network: 'eip155:84532',
       payer: '0xpayer',
+      rail: 'direct_split' as const,
     }));
 
     const transcript = await runCrossAgentDemo(
@@ -168,6 +169,7 @@ describe('runCrossAgentDemo', () => {
           txHash: '0xpaid',
           network: 'eip155:84532',
           payer: '0xp',
+          rail: 'direct_split',
         }),
         auditDeps: inferThrows,
       },
@@ -199,6 +201,7 @@ describe('runCrossAgentDemo', () => {
           txHash: '0xpay',
           network: 'eip155:84532',
           payer: '0xp',
+          rail: 'direct_split',
         }),
         auditDeps: makeAuditDeps({
           inferResponses: [

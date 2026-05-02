@@ -77,6 +77,7 @@ const MOCK_SETTLEMENT: SettleOutput = {
   txHash: '0x6d6f636b00000000000000000000000000000000000000000000000000000002',
   network: 'eip155:84532',
   payer: '0x6d6f636b00000000000000000000000000000000',
+  rail: 'direct_split',
 };
 
 describe('TUI ↔ orchestrator integration', () => {

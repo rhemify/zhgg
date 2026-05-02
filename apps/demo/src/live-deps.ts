@@ -2,12 +2,16 @@
 /// real 0G Compute Router calls, real FeeSplitter settlements, real
 /// ERC-8004 receipt posts. Used by `bun run apps/demo audit --live`.
 ///
-/// Design choice: the "x402 settlement" leg calls our FeeSplitter
-/// directly via viem (caller-funds the split), rather than running the
-/// full x402 protocol round-trip with a separate facilitator. The
-/// observable end state — USDC moved on Base Sepolia with the 4-leg
-/// split visible on basescan — is identical. Full x402 dance is D5
-/// once we have a deployed facilitator on Base Sepolia we control.
+/// Settlement has two distinct rails (the orchestrator's transcript
+/// surfaces which one fired via `SettleOutput.rail`):
+///   - `x402`        — keeperhub marketplace facilitator (real x402
+///                     protocol: EIP-3009 transferWithAuthorization,
+///                     30/70 KH cut). Engaged when `cfg.keeperhub` is set.
+///   - `direct_split` — caller-funded `FeeSplitter.splitERC20`. Same
+///                     observable end state on basescan (USDC moved with
+///                     the 4-leg 85/5/5/5 split), but NOT x402 protocol
+///                     — no facilitator, no EIP-3009. This is the
+///                     default path for cheap-demo runs.
 
 import {
   createPublicClient,
@@ -195,9 +199,12 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     erc8004Client,
   };
 
-  // Settlement has two paths:
-  //  - cfg.keeperhub set → real KH marketplace (x402, 30/70 split)
-  //  - else → direct FeeSplitter via viem (caller-funds, full 85/5/5/5)
+  // Settlement has two rails (set via SettleOutput.rail so observers can
+  // tell them apart in the transcript):
+  //  - cfg.keeperhub set → `x402`        (KH marketplace facilitator,
+  //                                       30/70 split, real EIP-3009)
+  //  - else            → `direct_split` (caller-funded FeeSplitter, full
+  //                                       85/5/5/5 — NOT x402 protocol)
   const settleOraclePayment: CrossAgentDemoDeps['settleOraclePayment'] = async () => {
     if (cfg.keeperhub) {
       // Real marketplace path — KH facilitator settles EIP-3009 on Base,
@@ -211,6 +218,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
         txHash: settlement.paymentTxHash,
         network: settlement.network,
         payer: settlement.payerAddress,
+        rail: 'x402',
       };
     }
 
@@ -253,6 +261,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       txHash,
       network: 'eip155:84532',
       payer: baseAccount.address,
+      rail: 'direct_split',
     };
   };
 

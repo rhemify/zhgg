@@ -1,10 +1,13 @@
 /// Cross-agent demo orchestrator: audit ↔ oracle.
 ///
-/// audit pays oracle 0.1 USDC over x402 → oracle returns regulatory
-/// deltas → audit runs TEE compliance audit on a target → audit posts an
-/// ERC-8004 receipt. All external systems (facilitator, KeeperHub MCP,
-/// 0G compute, ERC-8004 chain) are dependency-injected so this module
-/// runs end-to-end with mocked deps in tests.
+/// audit pays oracle 0.1 USDC (rail TBD by injected `settleOraclePayment`
+/// — `x402` if keeperhub is configured, `direct_split` otherwise; the
+/// rail is reported back on the `oracle.payment.settle` transcript step
+/// via `SettleOutput.rail`). Oracle returns regulatory deltas → audit
+/// runs TEE compliance audit on a target → audit posts an ERC-8004
+/// receipt. All external systems (facilitator, KeeperHub MCP, 0G compute,
+/// ERC-8004 chain) are dependency-injected so this module runs
+/// end-to-end with mocked deps in tests.
 
 import { EventEmitter } from 'node:events';
 import { runAudit, type AuditDeps, type AuditReport, type AuditTarget } from '@zhgg/audit-agent';
@@ -51,7 +54,8 @@ export interface CrossAgentTranscript {
   /// True when the oracle payment settled but the audit threw or the audit
   /// report itself was unrecoverable. The user paid for work that didn't
   /// complete — surface this loudly so the demo / TUI / refund tooling can
-  /// react. (No automated refund: x402 settlements are final on-chain.)
+  /// react. (No automated refund: both rails — x402 facilitator settlement
+  /// and direct FeeSplitter calls — are final on-chain.)
   refundable: boolean;
   /// Captured audit-stage error message when `refundable === true`.
   auditError: string | null;
@@ -121,7 +125,9 @@ export interface CrossAgentDemoOpts {
   /// agent's iNFT owner). Defaults to a placeholder so demos run
   /// without env config.
   oracleOwner?: `0x${string}`;
-  /// FeeSplitter contract address — the x402 settlement target.
+  /// FeeSplitter contract address — the direct_split rail's settlement
+  /// target. (The x402 rail through KeeperHub uses its own facilitator
+  /// contract instead.)
   feeSplitter?: `0x${string}`;
   /// USDC contract address on Base Sepolia.
   asset?: `0x${string}`;
@@ -220,6 +226,7 @@ export async function runCrossAgentDemo(
     txHash: settle?.txHash ?? null,
     network: settle?.network ?? null,
     payer: settle?.payer ?? null,
+    rail: settle?.rail ?? null,
   });
 
   // 3. Query oracle (called directly — payment already settled)
