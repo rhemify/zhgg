@@ -33,6 +33,7 @@ import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.j
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
 import { queryOracle } from '@zhgg/oracle-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
+import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
 import {
   createReceiptFeed,
   envelopeJson,
@@ -82,12 +83,18 @@ const ROW_TOP_START   = 4
 const ROW_TOP_END     = () => Math.min(11, Math.floor(H() * 0.30))
 const ROW_MID_DIV     = () => ROW_TOP_END() + 1
 const ROW_BOT_START   = () => ROW_MID_DIV() + 1
-// Reserve four rows at the bottom for: log, receipt-status, intent input,
-// status footer (border + content). The receipt JSON itself goes into
-// the RECEIPT side of the bottom-right panel (replacing the bare
-// payment-flow strip's old extra padding).
-const ROW_LOG         = () => H() - 4
-const ROW_RECEIPT     = () => H() - 3
+// Reserve five rows at the bottom for: log border, receipt-status,
+// persistent hint, intent input, status, footer-border. The receipt
+// JSON itself goes into the RECEIPT side of the bottom-right panel
+// (replacing the bare payment-flow strip's old extra padding).
+//
+// `ROW_HINT` is a single-line "?: help" reminder that floats just
+// above the intent input — added in slice D so an operator never has
+// to wonder which commands are accepted. The overlay (toggled by `?`)
+// renders centred over the FLOW panel, not in this row.
+const ROW_LOG         = () => H() - 5
+const ROW_RECEIPT     = () => H() - 4
+const ROW_HINT        = () => H() - 3
 const ROW_INTENT      = () => H() - 2
 const ROW_STATUS      = () => H() - 1
 const ROW_FOOTER      = () => H()
@@ -126,68 +133,36 @@ function pushAudit(agent: string, event: string, ok: AuditRow['ok'] = 'info'): v
 }
 
 // ── Payment flow state ────────────────────────────────────────────────────────
+//
+// Slice C: All 4 flow nodes are driven exclusively by REAL transcript
+// events from `runCrossAgentDemo`. No more synthetic FLOW_STEPS array,
+// no SPACE-driven mock advance, no auto-play. The two rails we actually
+// support are `x402` (KeeperHub facilitator) and `direct_split`
+// (FeeSplitter on Base Sepolia) — those are the only two values
+// `SettleOutput.rail` ever carries.
 
 type NS = "off" | "active" | "done" | "rejected"
 
+/// The settled rail, read from `oracle.payment.settle` detail.rail.
+/// `null` when no settle has been observed yet.
+type SettledRail = 'x402' | 'direct_split' | null
+
 interface FlowState {
   nodes:    [NS, NS, NS, NS]  // intent, policy, rails, execute
-  rails:    { x402: NS; mpp: NS; gas: NS }
-  step:     number
-  log:      string[]
-  autoPlay: boolean
+  rails:    { x402: NS; direct_split: NS }
+  /// Pretty label for the FLOW panel header pill — set when a settle event
+  /// arrives. Stays null before settle and across resets.
+  settledRail: SettledRail
+  /// True once any node has reached a terminal state — used by the status
+  /// footer to show "COMPLETE" / "REJECTED" instead of "WAITING".
   complete: boolean
-  packet:   { nodeIdx: number; progress: number } | null
 }
-
-const FLOW_STEPS: Array<{
-  log: string
-  nodes: [NS, NS, NS, NS]
-  rails: { x402: NS; mpp: NS; gas: NS }
-  packet?: number  // which wire to animate (0=intent→policy, 1=policy→rails, 2=rails→execute)
-}> = [
-  {
-    log:    "[14:02:31] INTENT    audit→oracle  pay 0.1 USDC                     intent=simple_swap   risk=LOW",
-    nodes:  ["active", "off",    "off",    "off"],
-    rails:  { x402: "off",    mpp: "off",      gas: "off" },
-  },
-  {
-    log:    "[14:02:31] POLICY    ExecutionContext created   scope=[probe]   ttl=60m",
-    nodes:  ["done", "active", "off",    "off"],
-    rails:  { x402: "off",    mpp: "off",      gas: "off" },
-    packet: 0,
-  },
-  {
-    log:    "[14:02:32] POLICY    check PASSED   risk_tier=LOW   action=auto_execute",
-    nodes:  ["done", "done",   "active", "off"],
-    rails:  { x402: "active", mpp: "active",   gas: "active" },
-    packet: 1,
-  },
-  {
-    log:    "[14:02:32] RAILS     evaluated   x402=$0.001   MPP=$0.050   GAS=$0.002",
-    nodes:  ["done", "done",   "active", "off"],
-    rails:  { x402: "active", mpp: "rejected", gas: "rejected" },
-  },
-  {
-    log:    "[14:02:33] RAILS     x402 selected — cheapest route   saving $0.049 vs MPP",
-    nodes:  ["done", "done",   "done",   "active"],
-    rails:  { x402: "done",   mpp: "rejected", gas: "rejected" },
-    packet: 2,
-  },
-  {
-    log:    "[14:02:33] EXECUTE   FeeSplitter.splitERC20  in=0.1 USDC  splits=85/5/5/5  ✓",
-    nodes:  ["done", "done",   "done",   "done"],
-    rails:  { x402: "done",   mpp: "rejected", gas: "rejected" },
-  },
-]
 
 const mkFlow = (): FlowState => ({
   nodes:    ["off", "off", "off", "off"],
-  rails:    { x402: "off", mpp: "off", gas: "off" },
-  step:     0,
-  log:      [],
-  autoPlay: false,
+  rails:    { x402: "off", direct_split: "off" },
+  settledRail: null,
   complete: false,
-  packet:   null,
 })
 
 let flow = mkFlow()
@@ -204,10 +179,16 @@ let intentBuffer = ''
 let intentMode: 'idle' | 'editing' = 'editing'
 let intentHint = ''
 let stagedIntent: IntentCommand | null = null
-let runningCommand: 'idle' | 'audit' | 'ask-oracle' = 'idle'
+let runningCommand: 'idle' | 'audit' | 'ask-oracle' | 'swap' = 'idle'
 
 let grantModalOpen = false
 let grantModalLines: string[] = []
+
+/// Help overlay (slice D). Toggled by `?` and dismissed by `?` or Esc.
+/// While open, the overlay floats above the FLOW panel; intent input
+/// keeps editing — the operator can keep typing while reading the
+/// command palette.
+let helpOverlayOpen = false
 
 let toast: { kind: 'ok' | 'err' | 'info'; text: string } | null = null
 function setToast(kind: 'ok' | 'err' | 'info', text: string): void { toast = { kind, text } }
@@ -384,8 +365,22 @@ function buildFrame(): string {
   put(botStart, 2, $.dwhite + "  AUDIT TRAIL" + $.reset)
   put(botStart, mid + 1, $.green + "║" + $.reset)
   put(botStart, mid + 2, $.dwhite + "  PAYMENT FLOW + RECEIPT" + $.reset)
-  // Controls hint (right-aligned in header)
-  const hint = " SPACE·A·R·G·TAB·Q "
+  // RAIL pill — visible badge in the FLOW panel header showing the actual
+  // settled rail (truthful: only set after `oracle.payment.settle` lands).
+  // Lives just to the right of the panel title so judges can see at a
+  // glance whether x402 or direct_split actually settled this run.
+  const railPillText = flow.settledRail === 'x402'
+    ? ' RAIL: x402 '
+    : flow.settledRail === 'direct_split'
+      ? ' RAIL: direct_split '
+      : ' RAIL: — '
+  const railPillColor = flow.settledRail === null
+    ? $.dgray
+    : $.bold + $.green + $.bgNode
+  put(botStart, mid + 28, railPillColor + railPillText + $.reset)
+  // Controls hint (right-aligned in header). SPACE/A removed since the
+  // mock walk-through was deleted in Slice C.
+  const hint = " ?·R·G·TAB·Q "
   put(botStart, w - hint.length, $.dgray + hint + $.reset)
   put(botStart, w, $.green + "║" + $.reset)
 
@@ -403,7 +398,7 @@ function buildFrame(): string {
   })
   // Empty hint when no events yet
   if (AUDIT.length === 0 && botStart + 1 <= logEnd) {
-    put(botStart + 1, 3, $.dgray + "(no events — type an intent below or SPACE for legacy demo)" + $.reset)
+    put(botStart + 1, 3, $.dgray + "(no events — type an intent below and Enter to dispatch)" + $.reset)
   }
 
   // Side bars for bottom section
@@ -449,22 +444,26 @@ function buildFrame(): string {
       }
     }
 
-    // Rail labels beside RAILS node (index 2)
+    // Rail labels beside RAILS node (index 2). Only the two rails we
+    // actually emit on `oracle.payment.settle` are shown — exactly one
+    // can be `done` per run, the other is `rejected` (truthful UI: the
+    // non-selected rail wasn't tried, but the visual contract is "lit
+    // = chosen, dim red = not chosen", which is accurate).
     if (i === 2) {
       const railCol = fc + nw + 2
       const rr = flow.rails
-      const railLines = [
-        { label: "x402 $0.001", ns: rr.x402, tag: " ◀" },
-        { label: "MPP  $0.050", ns: rr.mpp,  tag: ""   },
-        { label: "GAS  $0.002", ns: rr.gas,  tag: ""   },
+      const railLines: Array<{ label: string; ns: NS; tag: string }> = [
+        { label: "x402        ", ns: rr.x402,        tag: rr.x402 === 'done' ? " ◀" : "" },
+        { label: "direct_split", ns: rr.direct_split, tag: rr.direct_split === 'done' ? " ◀" : "" },
       ]
       railLines.forEach(({ label, ns: rns, tag }, ri) => {
         const rrow = nr + ri
         if (rrow > logEnd) return
-        const rc = rns === "active" || rns === "done" ? $.bold + $.green
-                 : rns === "rejected"                 ? $.dim + $.dred
+        const rc = rns === "done"     ? $.bold + $.green
+                 : rns === "active"   ? $.bold + $.green
+                 : rns === "rejected" ? $.dim + $.dred
                  : $.dgray
-        put(rrow, railCol, rc + label + (rns !== "off" ? tag : "") + $.reset)
+        put(rrow, railCol, rc + label + tag + $.reset)
       })
     }
 
@@ -493,19 +492,6 @@ function buildFrame(): string {
     })
   }
 
-  // Packet animation
-  if (flow.packet) {
-    const { nodeIdx, progress } = flow.packet
-    const wireCol = fc + Math.floor(nw / 2) - 1
-    const startRow = nodeRow(nodeIdx) + 3
-    const packetRow = startRow + Math.floor(progress)
-    if (packetRow <= logEnd) {
-      const glyphs = ["◉", "●", "◎"]
-      const g = glyphs[Math.floor(Date.now() / 100) % 3]!
-      put(packetRow, wireCol, $.bold + $.yellow + g + $.reset)
-    }
-  }
-
   // ── Log row (last legacy-flow log line) ───────────────────────────────────
   const logRow = ROW_LOG()
   put(logRow, 1, $.green + "╠" + "═".repeat(w - 2) + "╣" + $.reset)
@@ -524,6 +510,16 @@ function buildFrame(): string {
   }
   put(receiptRow, 3, receiptStatus.slice(0, w * 4))
   put(receiptRow, w, $.green + "║" + $.reset)
+
+  // ── Persistent hint row (slice D) ─────────────────────────────────────────
+  // Always visible — eliminates the "what can I type" confusion the
+  // operator hits the first time they sit at the dashboard. The
+  // overlay (toggled via `?`) carries the full palette; this row is
+  // the breadcrumb that points at it.
+  const hintRow = ROW_HINT()
+  put(hintRow, 1, $.green + "║" + $.reset)
+  put(hintRow, 3, $.dgray + PERSISTENT_HINT + $.reset)
+  put(hintRow, w, $.green + "║" + $.reset)
 
   // ── Intent input row ──────────────────────────────────────────────────────
   const intentRow = ROW_INTENT()
@@ -548,12 +544,27 @@ function buildFrame(): string {
 
   // ── Status / footer ───────────────────────────────────────────────────────
   const statusRow = ROW_STATUS()
-  const stepInfo  = flow.complete ? "COMPLETE" : `step ${flow.step}/${FLOW_STEPS.length}`
-  const playInfo  = flow.autoPlay ? $.yellow + "◉ AUTO" + $.reset + $.dgray : $.dgray + "● MANUAL" + $.reset + $.dgray
+  // Slice C: phaseInfo is derived from `flow.nodes`, not a synthetic step
+  // counter. It picks the deepest-touched node + state so the status line
+  // shows whichever node was last moved by a real orchestrator emission.
+  // No auto-play, no SPACE-driven mock advance.
+  const phaseInfo =
+    flow.nodes[3] === 'rejected' ? $.red + "EXECUTE rejected" + $.reset + $.dgray :
+    flow.nodes[3] === 'done'     ? $.green + "EXECUTE done" + $.reset + $.dgray :
+    flow.nodes[3] === 'active'   ? $.amber + "EXECUTE active" + $.reset + $.dgray :
+    flow.nodes[2] === 'rejected' ? $.red + "RAILS rejected" + $.reset + $.dgray :
+    flow.nodes[2] === 'active'   ? $.amber + "RAILS active" + $.reset + $.dgray :
+    flow.nodes[2] === 'done'     ? $.green + "RAILS done" + $.reset + $.dgray :
+    flow.nodes[1] === 'rejected' ? $.red + "POLICY rejected" + $.reset + $.dgray :
+    flow.nodes[1] === 'active'   ? $.amber + "POLICY active" + $.reset + $.dgray :
+    flow.nodes[1] === 'done'     ? $.green + "POLICY done" + $.reset + $.dgray :
+    flow.nodes[0] === 'active'   ? $.amber + "INTENT active" + $.reset + $.dgray :
+    flow.nodes[0] === 'done'     ? $.green + "INTENT done" + $.reset + $.dgray :
+                                   $.dgray + "WAITING (no intent dispatched)" + $.reset + $.dgray
   const runInfo   = runningCommand === 'idle' ? '' : '  ' + $.amber + 'running ' + runningCommand + '…' + $.reset + $.dgray
   put(statusRow, 1, $.green + "║" + $.reset)
-  const left = $.dgray + "PAYMENT FLOW: " + playInfo + "  " + stepInfo + runInfo + $.reset
-  const right = $.dgray + "[Enter] dispatch  [G] grant  [TAB] focus  [SPACE] step  [Q] quit" + $.reset
+  const left = $.dgray + "FLOW: " + phaseInfo + runInfo + $.reset
+  const right = $.dgray + "[?] help  [Enter] dispatch  [G] grant  [TAB] focus  [Q] quit" + $.reset
   // Leave room for left + right; toast (if any) takes the centre.
   put(statusRow, 3, left)
   put(statusRow, Math.max(3, w - 70), right)
@@ -590,6 +601,36 @@ function buildFrame(): string {
     put(lastInner + 1, modalC, $.bold + $.yellow + "╚" + "═".repeat(modalW - 2) + "╝" + $.reset)
   }
 
+  // ── Help overlay (slice D) ────────────────────────────────────────────────
+  // Floats over the FLOW + RECEIPT panel so the audit trail stays
+  // readable while the operator scans the palette. Anchored to the
+  // right half of the screen with a dimmed border to read as
+  // "informational, not modal" (the grant modal uses bold yellow for
+  // a real action; help uses dim-green for ambient guidance).
+  if (helpOverlayOpen) {
+    const helpBody = buildHelpLines()
+    // Compute width from the longest line (plus padding) but cap at
+    // the panel width so it never spills outside the FLOW column.
+    const longest = helpBody.reduce((m, ln) => Math.max(m, ln.length), 0)
+    const minW = Math.min(64, w - mid - 6)
+    const overlayW = Math.max(minW, Math.min(w - mid - 6, longest + 4))
+    const overlayH = helpBody.length + 2 // 2 = top + bottom border
+    const overlayC = Math.max(mid + 2, w - overlayW - 2)
+    const overlayR = Math.max(ROW_BOT_START() + 1, ROW_LOG() - overlayH - 1)
+    // Top border with title.
+    const title = '─ COMMAND HELP '
+    const topFill = '─'.repeat(Math.max(0, overlayW - title.length - 2))
+    put(overlayR, overlayC, $.dgreen + '┌' + title + topFill + '┐' + $.reset)
+    helpBody.forEach((ln, i) => {
+      const r = overlayR + 1 + i
+      // Pad to overlayW-2 to fully clear whatever pixels (FLOW glyphs)
+      // were underneath. Slice in case a line accidentally overruns.
+      const padded = pad(ln, overlayW - 2).slice(0, overlayW - 2)
+      put(r, overlayC, $.dgreen + '│' + $.reset + $.white + padded + $.reset + $.dgreen + '│' + $.reset)
+    })
+    put(overlayR + helpBody.length + 1, overlayC, $.dgreen + '└' + '─'.repeat(overlayW - 2) + '┘' + $.reset)
+  }
+
   return f
 }
 
@@ -597,6 +638,7 @@ function formatStaged(intent: IntentCommand): string {
   switch (intent.kind) {
     case 'audit': return `audit ${intent.target} (#${intent.tokenId})`
     case 'ask-oracle': return `ask oracle ${intent.raw} (topic=${intent.topic})`
+    case 'swap': return `swap ${intent.amount} ${intent.fromSym} → ${intent.toSym}`
     default: return '—'
   }
 }
@@ -616,59 +658,12 @@ function render() {
 }
 
 // ── Step logic ────────────────────────────────────────────────────────────────
-
-let packetInterval: ReturnType<typeof setInterval> | null = null
-
-function animatePacket(nodeIdx: number, done: () => void) {
-  let progress = 0
-  if (packetInterval) clearInterval(packetInterval)
-  packetInterval = setInterval(() => {
-    progress += 0.4
-    if (progress >= 1) {
-      clearInterval(packetInterval!)
-      packetInterval = null
-      flow.packet = null
-      done()
-      return
-    }
-    flow.packet = { nodeIdx, progress }
-    render()
-  }, 50)
-}
-
-function advance() {
-  if (flow.complete || flow.step >= FLOW_STEPS.length) return
-  const s = FLOW_STEPS[flow.step]!
-  const prevPacket = s.packet
-
-  flow.nodes    = [...s.nodes] as typeof flow.nodes
-  flow.rails    = { ...s.rails }
-  flow.log.push(s.log)
-  pushAudit('flow', s.log, s.log.includes('✓') ? 'ok' : s.log.includes('rejected') ? 'err' : 'info')
-  flow.step++
-  flow.complete = flow.step >= FLOW_STEPS.length
-
-  render()
-
-  if (prevPacket !== undefined) {
-    animatePacket(prevPacket, () => render())
-  }
-}
-
-// ── Auto-play ─────────────────────────────────────────────────────────────────
-
-let autoTimer: ReturnType<typeof setInterval> | null = null
-
-function setAuto(on: boolean) {
-  flow.autoPlay = on
-  if (autoTimer) { clearInterval(autoTimer); autoTimer = null }
-  if (on) {
-    autoTimer = setInterval(() => {
-      if (flow.complete) { setAuto(false); return }
-      advance()
-    }, 1800)
-  }
-}
+//
+// Slice C: the flow's only driver is now `applyOrchestratorStep`. The
+// previous synthetic FLOW_STEPS array, packet animation, and auto-play
+// timer were all removed because they animated state the orchestrator
+// never actually emitted — the demo now tells the truth or shows
+// nothing.
 
 // ── Orchestrator dispatch ────────────────────────────────────────────────────
 
@@ -685,25 +680,49 @@ function applyOrchestratorStep(step: TranscriptStep): void {
   const detail = step.detail ?? {}
   switch (step.name) {
     case 'oracle.payment.request':
+      // INTENT active. First emission per run — reset all downstream
+      // node + rail state so a fresh dispatch doesn't inherit prior run.
       pushAudit('orchestrator', `payment request: ${detail.amount ?? '—'} atomic`, 'info')
       flow.nodes = ['active', 'off', 'off', 'off']
+      flow.rails = { x402: 'off', direct_split: 'off' }
+      flow.settledRail = null
+      flow.complete = false
       break
     case 'oracle.spend_cap.check':
       pushAudit('spend-cap', `cap pre-flight ok (enforced=${detail.enforced ?? false} remaining=${detail.remaining ?? '—'})`, 'ok')
       flow.nodes = ['done', 'active', 'off', 'off']
       break
     case 'oracle.spend_cap.exceeded':
+      // POLICY rejected — whole flow halts. Cascade `rejected` to the
+      // downstream nodes so the operator sees the deliberate stop
+      // rather than "off" (which would imply "not yet evaluated").
       pushAudit('spend-cap', `BLOCKED: ${detail.reason ?? 'exceeded'}`, 'err')
+      flow.nodes = ['done', 'rejected', 'rejected', 'rejected']
+      flow.complete = true
       break
     case 'oracle.payment.settle': {
       const txHash = typeof detail.txHash === 'string' ? (detail.txHash as Hex) : null
       const rail = typeof detail.rail === 'string' ? detail.rail : '?'
       pushAudit('orchestrator', `settle rail=${rail} tx=${txHash ? shortHash(txHash) : '—'}`, 'ok')
-      flow.nodes = ['done', 'done', 'done', 'active']
-      // Reflect the truthful rail in the FLOW panel: only light up `x402`
-      // when the orchestrator actually used the facilitator path.
-      if (rail === 'x402') flow.rails = { x402: 'done', mpp: 'rejected', gas: 'rejected' }
-      else flow.rails = { x402: 'rejected', mpp: 'rejected', gas: 'rejected' }
+      // RAILS active (policy done). EXECUTE doesn't fire until
+      // `audit.start` — the settle leg only chose the rail; the
+      // ERC-8004 receipt write is a downstream step.
+      flow.nodes = ['done', 'done', 'active', 'off']
+      // Reflect the truthful rail in the FLOW panel: only light up the
+      // rail that the orchestrator actually used. Slice C narrowed the
+      // rail set to {x402, direct_split} — those are the only values
+      // `SettleOutput.rail` ever carries, so any other string falls
+      // through to "no rail lit" rather than fabricating a third option.
+      if (rail === 'x402') {
+        flow.rails = { x402: 'done', direct_split: 'rejected' }
+        flow.settledRail = 'x402'
+      } else if (rail === 'direct_split') {
+        flow.rails = { x402: 'rejected', direct_split: 'done' }
+        flow.settledRail = 'direct_split'
+      } else {
+        flow.rails = { x402: 'rejected', direct_split: 'rejected' }
+        flow.settledRail = null
+      }
       if (txHash && liveBundle) {
         liveBundle.receiptFeed
           .fetchSplit(txHash)
@@ -741,11 +760,19 @@ function applyOrchestratorStep(step: TranscriptStep): void {
       flow.complete = true
       break
     case 'audit.failed':
+      // EXECUTE rejected.
       pushAudit('audit-agent', `FAILED: ${detail.reason ?? 'unknown'}`, 'err')
+      flow.nodes = ['done', 'done', 'done', 'rejected']
+      flow.complete = true
       break
     case 'audit.receipt.post': {
+      // EXECUTE done — receipt posting is a terminal success signal.
+      // We honour whichever fires first (`audit.complete` or this);
+      // both stamp the EXECUTE node green.
       const txHash = typeof detail.txHash === 'string' ? (detail.txHash as Hex) : null
       pushAudit('erc-8004', `receipt posted tx=${txHash ? shortHash(txHash) : '—'}`, 'ok')
+      flow.nodes = ['done', 'done', 'done', 'done']
+      flow.complete = true
       if (txHash && liveBundle) {
         liveBundle.receiptFeed
           .fetchNewFeedback(txHash)
@@ -762,7 +789,14 @@ function applyOrchestratorStep(step: TranscriptStep): void {
       break
     }
     case 'audit.receipt.failed':
+      // EXECUTE rejected — only downgrade if EXECUTE hasn't already
+      // reached the `done` terminal (avoids overriding an earlier
+      // `audit.complete` that succeeded before the on-chain write).
       pushAudit('erc-8004', `receipt FAILED: ${detail.reason ?? 'unknown'}`, 'err')
+      if (flow.nodes[3] !== 'done') {
+        flow.nodes = ['done', 'done', 'done', 'rejected']
+        flow.complete = true
+      }
       break
     case 'audit.memory_root.pin':
       pushAudit('memory', `pin ok=${detail.ok ?? '?'} root=${detail.rootHash ? shortHash(String(detail.rootHash)) : '—'}`, detail.ok === true ? 'ok' : 'err')
@@ -953,6 +987,12 @@ process.stdin.resume()
 process.stdin.setEncoding("utf8")
 
 function handleIntentKey(key: string): boolean {
+  // `?` — toggle help overlay even while editing. Intent commands
+  // never contain `?`, so claiming the key here is unambiguous.
+  if (key === '?') {
+    helpOverlayOpen = !helpOverlayOpen
+    return true
+  }
   // Enter — parse + dispatch.
   if (key === '\r' || key === '\n') {
     const parsed = parseIntent(intentBuffer)
@@ -987,8 +1027,14 @@ function handleIntentKey(key: string): boolean {
     intentHint = ''
     return true
   }
-  // Esc — clear.
+  // Esc — close help overlay first, otherwise clear input. Two-step
+  // dismissal so the operator can read the overlay without losing
+  // their half-typed intent.
   if (key === '\x1b') {
+    if (helpOverlayOpen) {
+      helpOverlayOpen = false
+      return true
+    }
     intentBuffer = ''
     intentHint = ''
     stagedIntent = null
@@ -1043,20 +1089,23 @@ process.stdin.on("data", (key: string) => {
   if (key === 'q' || key === 'Q') {
     if (intentMode === 'idle') { cleanup(); process.exit(0) }
   }
-  if (key === '\t') {
+  if (key === '?') {
+    // `?` toggles the help overlay regardless of focus.
+    helpOverlayOpen = !helpOverlayOpen
+  } else if (key === '\x1b' && helpOverlayOpen) {
+    // Esc closes the overlay when in idle mode (handleIntentKey
+    // already handles the editing-mode case).
+    helpOverlayOpen = false
+  } else if (key === '\t') {
     intentMode = intentMode === 'editing' ? 'idle' : 'editing'
   } else if (key === 'g' || key === 'G') {
     openGrantModal()
-  } else if (key === ' ' || key === '\r' || key === '\n') {
-    if (intentMode === 'idle') {
-      setAuto(false); advance()
-    }
-  } else if (key === 'a' || key === 'A') {
-    if (intentMode === 'idle') { setAuto(!flow.autoPlay); render() }
   } else if (key === 'r' || key === 'R') {
+    // Reset the FLOW panel + audit trail. Slice C dropped the
+    // synthetic walkthrough (advance/setAuto), so this is the only
+    // surviving "back to a clean slate" hotkey. Idle-mode only — we
+    // don't want a stray `R` while typing an intent to wipe state.
     if (intentMode === 'idle') {
-      setAuto(false)
-      if (packetInterval) { clearInterval(packetInterval); packetInterval = null }
       flow = mkFlow()
       AUDIT.length = 0
       receiptEnvelope = EMPTY_RECEIPT
@@ -1071,8 +1120,6 @@ process.stdin.on("data", (key: string) => {
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
 function cleanup() {
-  if (autoTimer)    clearInterval(autoTimer)
-  if (packetInterval) clearInterval(packetInterval)
   if (renderTimer)  clearInterval(renderTimer)
   process.stdout.write(`${E}[?25h${E}[2J${E}[H`)
 }
@@ -1088,5 +1135,5 @@ renderTimer = setInterval(render, 1000)
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 process.stdout.write(`${E}[2J`)
-pushAudit('system', 'tui ready — type an intent below or SPACE for legacy demo', 'info')
+pushAudit('system', 'tui ready — type an intent below and Enter to dispatch', 'info')
 render()
