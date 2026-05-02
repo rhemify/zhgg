@@ -223,6 +223,66 @@ contract AgentReceiverWalletTest is Test {
         assertEq(solAddr, expected, "SOL Create2 drift from TS fixture");
     }
 
+    // ----- ERC-7710 delegation hooks -----
+
+    function test_setDelegationManager_onlyOwner() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NotOwner.selector, stranger, agentOwner)
+        );
+        w.setDelegationManager(address(0xCAFE));
+    }
+
+    function test_setDelegationManager_lockMakesItPermanent() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        vm.prank(agentOwner);
+        w.setDelegationManager(address(0xCAFE));
+        assertEq(w.delegationManager(), address(0xCAFE));
+
+        vm.prank(agentOwner);
+        w.lockDelegationManager();
+        assertTrue(w.delegationManagerLocked());
+
+        // Subsequent set must fail.
+        vm.prank(agentOwner);
+        vm.expectRevert(AgentReceiverWallet.DelegationManagerAlreadyLocked.selector);
+        w.setDelegationManager(address(0xBABE));
+    }
+
+    function test_lockDelegationManager_revertsIfManagerNotSet() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        vm.prank(agentOwner);
+        vm.expectRevert(AgentReceiverWallet.DelegationManagerNotSet.selector);
+        w.lockDelegationManager();
+    }
+
+    function test_executeViaDelegation_revertsForNonManager() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        vm.prank(agentOwner);
+        w.setDelegationManager(address(0xCAFE));
+
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NotDelegationManager.selector, stranger)
+        );
+        w.executeViaDelegation(address(0xDEAD), 0, hex"");
+    }
+
+    function test_executeViaDelegation_authorizedCallerSucceeds() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        // Use this contract as the manager — calls executeViaDelegation directly.
+        vm.prank(agentOwner);
+        w.setDelegationManager(address(this));
+
+        // Have the wallet call usdc.transfer(stranger, 50) — wallet sees itself as msg.sender.
+        usdc.mint(address(w), 100);
+        bytes memory data = abi.encodeCall(usdc.transfer, (stranger, 50));
+        w.executeViaDelegation(address(usdc), 0, data);
+        assertEq(usdc.balanceOf(stranger), 50);
+        assertEq(usdc.balanceOf(address(w)), 50);
+    }
+
     function test_erc1271_unmintedTokenReturnsFail() public {
         // Receiver wallets are CREATE2-addressable for any tokenId, so a
         // wallet can be deployed BEFORE its iNFT is minted (or after the

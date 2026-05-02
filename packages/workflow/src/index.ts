@@ -63,3 +63,13 @@ export type {
 export type { Action, ConfigField, IntegrationPlugin, OutputField } from './plugin-types.js';
 export { createMcpServer } from './mcp-server.js';
 export type { CreateMcpServerOptions } from './mcp-server.js';
+
+export {
+  DELEGATION_TYPES,
+  MODE_SINGLE_CALL,
+  delegationDigest,
+  encodeExecution,
+  encodePermissionContext,
+  signDelegation,
+} from './delegation.js';
+export type { Delegation, DelegationDomain, Execution } from './delegation.js';

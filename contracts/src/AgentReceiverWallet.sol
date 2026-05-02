@@ -44,17 +44,35 @@ contract AgentReceiverWallet is ReentrancyGuard {
     ///         external call to the splitter every `splitMyBalance`.
     uint256       public immutable minSplitAmount;
 
+    /// @notice Authorized DelegationManager — the only address allowed
+    ///         to invoke `executeViaDelegation`. Settable once by the
+    ///         current iNFT owner; afterwards immutable from the
+    ///         wallet's perspective. ERC-7710 redemptions route through
+    ///         this address and target contracts see THIS wallet as
+    ///         `msg.sender`, which is what lets pre-existing ERC-20
+    ///         approvals + SpendCap.spendPermission work without
+    ///         funneling funds through the manager.
+    address public delegationManager;
+    bool    public delegationManagerLocked;
+
     event BalanceSplit(address indexed asset, uint256 amount, address indexed ownerAtSplit, address indexed caller);
     event Withdrawn(address indexed asset, address indexed to, uint256 amount, address indexed owner);
     /// @notice Emitted when `splitMyBalance` is a no-op because the
     ///         current balance is below the splitter's minimum. Lets a
     ///         keeper bot distinguish "wait for more" from "broken".
     event BelowSplitThreshold(address indexed asset, uint256 balance, uint256 minSplitAmount);
+    event DelegationManagerSet(address indexed manager, address indexed setter);
+    event DelegationManagerLocked(address indexed setter);
+    event DelegationExecuted(address indexed target, uint256 value, bytes4 selector);
 
     error NotOwner(address caller, address owner);
     error NothingToSplit(address asset);
     error TokenBurnedOrUnminted(uint256 tokenId);
     error NativeSweepFailed();
+    error DelegationManagerNotSet();
+    error DelegationManagerAlreadyLocked();
+    error NotDelegationManager(address caller);
+    error DelegatedCallFailed(bytes returnData);
 
     constructor(address agentNft_, address feeSplitter_, uint256 tokenId_) {
         agentNft       = IAgentNFT(agentNft_);
@@ -149,5 +167,59 @@ contract AgentReceiverWallet is ReentrancyGuard {
         uint256 bal = address(this).balance;
         (bool ok, ) = to.call{value: bal}("");
         if (!ok) revert NativeSweepFailed();
+    }
+
+    // ---------------------------------------------------------------------
+    // ERC-7710 delegation execution
+    // ---------------------------------------------------------------------
+
+    /// @notice Owner sets which DelegationManager may invoke
+    ///         `executeViaDelegation`. Can be updated until
+    ///         `lockDelegationManager` is called, after which it's
+    ///         immutable. Lets owners migrate to a new manager
+    ///         (e.g. v2 with richer caveats) until they're confident
+    ///         the address is correct, then lock for safety.
+    function setDelegationManager(address manager) external {
+        address o = owner();
+        if (msg.sender != o) revert NotOwner(msg.sender, o);
+        if (delegationManagerLocked) revert DelegationManagerAlreadyLocked();
+        delegationManager = manager;
+        emit DelegationManagerSet(manager, o);
+    }
+
+    /// @notice Owner permanently locks `delegationManager`. Irreversible.
+    function lockDelegationManager() external {
+        address o = owner();
+        if (msg.sender != o) revert NotOwner(msg.sender, o);
+        if (delegationManager == address(0)) revert DelegationManagerNotSet();
+        delegationManagerLocked = true;
+        emit DelegationManagerLocked(o);
+    }
+
+    /// @notice ERC-7710 delegation execution path. ONLY the configured
+    ///         DelegationManager may call this. The manager validates
+    ///         the delegation off-call (signature, caveats, expiry,
+    ///         spend cap), then routes execution through this wallet so
+    ///         `target` sees this wallet as `msg.sender`. Required for
+    ///         pre-existing ERC-20 approvals and `SpendCap.spendPermission`
+    ///         to work without funneling funds through the manager.
+    /// @dev    `nonReentrant` is intentionally NOT applied here: the
+    ///         DelegationManager's `redeemDelegations` already holds
+    ///         the reentrancy lock on its side, and a single redemption
+    ///         legitimately calls back into this wallet twice (once for
+    ///         the SpendCap debit, once for the actual target call).
+    ///         Adding our own guard would deadlock that pattern.
+    function executeViaDelegation(address target, uint256 value, bytes calldata data)
+        external
+        returns (bytes memory)
+    {
+        if (msg.sender != delegationManager) revert NotDelegationManager(msg.sender);
+        // Audit hook — selector is 4 bytes when present, zero otherwise
+        // (e.g. plain ETH transfer with empty calldata).
+        bytes4 selector = data.length >= 4 ? bytes4(data[:4]) : bytes4(0);
+        emit DelegationExecuted(target, value, selector);
+        (bool ok, bytes memory ret) = target.call{value: value}(data);
+        if (!ok) revert DelegatedCallFailed(ret);
+        return ret;
     }
 }
