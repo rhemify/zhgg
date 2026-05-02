@@ -16,7 +16,12 @@
   },
   "dependencies": {
     "@opentui/core": "^0.1.103",
-    "@zhgg/router": "workspace:*"
+    "@zhgg/audit-agent": "workspace:*",
+    "@zhgg/oracle-agent": "workspace:*",
+    "@zhgg/oracle-data": "workspace:*",
+    "@zhgg/router": "workspace:*",
+    "@zhgg/workflow": "workspace:*",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/bun": "latest"

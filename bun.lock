@@ -48,8 +48,10 @@
         "@keeperhub/wallet": "^0.1.8",
         "@zhgg/audit-agent": "workspace:*",
         "@zhgg/oracle-agent": "workspace:*",
+        "@zhgg/oracle-data": "workspace:*",
         "@zhgg/router": "workspace:*",
         "@zhgg/workflow": "workspace:*",
+        "tui": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -71,11 +73,31 @@
         "typescript": "^5",
       },
     },
+    "apps/tee-verifier": {
+      "name": "tee-verifier",
+      "version": "0.0.1",
+      "dependencies": {
+        "@zhgg/workflow": "workspace:*",
+        "viem": "^2.21.0",
+      },
+      "devDependencies": {
+        "@my-better-t-app/config": "workspace:*",
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "apps/tui": {
       "name": "tui",
       "dependencies": {
         "@opentui/core": "^0.1.103",
+        "@zhgg/audit-agent": "workspace:*",
+        "@zhgg/oracle-agent": "workspace:*",
+        "@zhgg/oracle-data": "workspace:*",
         "@zhgg/router": "workspace:*",
+        "@zhgg/workflow": "workspace:*",
+        "viem": "^2.21.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -184,6 +206,18 @@
         "@types/react": "^19.2.10",
         "@types/react-dom": "catalog:",
         "tailwindcss": "^4.1.18",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/wallet-aa": {
+      "name": "@zhgg/wallet-aa",
+      "version": "0.0.1",
+      "dependencies": {
+        "viem": "^2.21.0",
+      },
+      "devDependencies": {
+        "@my-better-t-app/config": "workspace:*",
+        "@types/bun": "latest",
         "typescript": "catalog:",
       },
     },
@@ -713,6 +747,8 @@
     "@zhgg/oracle-data": ["@zhgg/oracle-data@workspace:packages/oracle-data"],
 
     "@zhgg/router": ["@zhgg/router@workspace:packages/router"],
+
+    "@zhgg/wallet-aa": ["@zhgg/wallet-aa@workspace:packages/wallet-aa"],
 
     "@zhgg/workflow": ["@zhgg/workflow@workspace:packages/workflow"],
 
@@ -1677,6 +1713,8 @@
     "tailwindcss": ["tailwindcss@4.2.4", "", {}, "sha512-HhKppgO81FQof5m6TEnuBWCZGgfRAWbaeOaGT00KOy/Pf/j6oUihdvBpA7ltCeAvZpFhW3j0PTclkxsd4IXYDA=="],
 
     "tapable": ["tapable@2.3.3", "", {}, "sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A=="],
+
+    "tee-verifier": ["tee-verifier@workspace:apps/tee-verifier"],
 
     "three": ["three@0.177.0", "", {}, "sha512-EiXv5/qWAaGI+Vz2A+JfavwYCMdGjxVsrn3oBwllUoqYeaBO75J63ZfyaQKoiLrqNHoTlUc6PFgMXnS0kI45zg=="],
 
