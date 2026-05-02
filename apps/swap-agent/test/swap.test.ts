@@ -14,7 +14,7 @@ import { WETH9_BASE_SEPOLIA } from '../src/wrap-fallback.js';
 
 const ACCOUNT: Address = '0x557E1E07652B75ABaA667223B11704165fC94d09';
 const POOL_500: Address = '0x94bfc0574FF48E92cE43d495376C477B1d0EEeC0';
-const FAKE_TX: Hex = '0xfeedface00000000000000000000000000000000000000000000000000000001';
+const STUB_TX_FOR_TEST: Hex = '0xfeedface00000000000000000000000000000000000000000000000000000001';
 const ZERO_ADDR: Address = '0x0000000000000000000000000000000000000000';
 
 interface MockState {
@@ -65,7 +65,7 @@ function freshState(overrides: Partial<MockState> = {}): MockState {
     simulateCalls: [],
     writeCallArgs: [],
     poolFor: () => POOL_500, // default: 500-tier pool exists
-    writeImpl: async () => FAKE_TX,
+    writeImpl: async () => STUB_TX_FOR_TEST,
     ...overrides,
   };
 }
@@ -115,7 +115,7 @@ describe('executeSwap — Uniswap V3 ETH → USDC', () => {
     const result = await executeSwap(clients, '0.001', 'ETH', 'USDC');
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
-    expect(result.value.txHash).toBe(FAKE_TX);
+    expect(result.value.txHash).toBe(STUB_TX_FOR_TEST);
     expect(result.value.route).toBe('uniswap_v3');
     expect(result.value.poolFee).toBe(500);
     expect(result.value.fromAmount).toBe(10n ** 15n); // 0.001 ETH = 1e15 wei

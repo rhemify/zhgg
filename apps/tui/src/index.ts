@@ -34,6 +34,7 @@ import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
 import { queryOracle } from '@zhgg/oracle-agent';
 import { executeSwap } from 'swap-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
+import { AGENT_REGISTRY } from './agent-registry.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
 import {
   createReceiptFeed,
@@ -110,18 +111,55 @@ const FLOW_STEP       = FLOW_NODE_H + FLOW_WIRE_H  // 4 rows per node+wire
 // Node absolute rows
 const nodeRow = (n: number) => ROW_BOT_START() + 1 + n * FLOW_STEP
 
-// ── Static mock data ──────────────────────────────────────────────────────────
+// ── Live-derived AGENTS + QUEUE rendering ─────────────────────────────────────
+//
+// The AGENTS panel reads from `agent-registry.ts` (the on-chain iNFTs we
+// minted on 0G Galileo) and reflects the current `runningCommand` state.
+// No more hardcoded ACTIVE/WATCHING/PENDING — status is what's actually
+// happening RIGHT NOW. The QUEUE panel only shows an entry when an
+// intent is staged (typed but not yet dispatched). When idle, both
+// panels show their empty state — never lie about activity that didn't
+// happen.
 
-const AGENTS = [
-  { name: "audit-agent",   scope: "[probe,read]",  status: "ACTIVE",   sc: $.green  },
-  { name: "oracle-agent",  scope: "[price,query]", status: "WATCHING", sc: $.yellow },
-  { name: "swap-agent",    scope: "[swap,read]",   status: "PENDING",  sc: $.amber  },
-]
+interface AgentRow { name: string; tokenId: bigint; scope: string }
 
-const QUEUE = [
-  { icon: "[!]", agent: "audit-agent",  action: "pay 0.1 USDC → oracle",  risk: "HIGH", approval: true  },
-  { icon: "[ ]", agent: "oracle-agent", action: "fetch ETH/USD via Pyth", risk: "LOW",  approval: false },
-]
+/// Compose the agent list from the registry. Scope strings mirror the
+/// per-tier capability manifests committed in apps/mint-agent/src/index.ts —
+/// they describe the iNFT's on-chain capability bytes, not aspirations.
+function liveAgents(): AgentRow[] {
+  const scopeFor = (name: string): string => {
+    if (name.startsWith('audit'))  return '[probe,tee_attestation]'
+    if (name.startsWith('oracle')) return '[pyth,eu-ai-act,usdc]'
+    if (name.startsWith('swap'))   return '[uniswap-v3,weth9]'
+    return '[?]'
+  }
+  return Object.entries(AGENT_REGISTRY).map(([ens, tokenId]) => ({
+    name: ens.replace(/\.zhgg\.eth$/, '-agent'),
+    tokenId,
+    scope: scopeFor(ens),
+  }))
+}
+
+/// Map runningCommand + stagedIntent to a per-agent status. Three states:
+///   running  → that agent is actively dispatching (green ●)
+///   staged   → an intent for this agent is staged but not dispatched
+///              (yellow ◎)
+///   idle     → no activity (dim ○)
+function agentStatus(row: AgentRow): { label: string; color: string; glyph: string } {
+  const stagedKind = stagedIntent?.kind
+  const stagedTokenForAudit = stagedIntent?.kind === 'audit' ? stagedIntent.tokenId : null
+  const matchesStaged =
+    (stagedKind === 'audit' && stagedTokenForAudit === row.tokenId) ||
+    (stagedKind === 'ask-oracle' && row.tokenId === 2n) ||
+    (stagedKind === 'swap' && row.tokenId === 3n)
+  const matchesRunning =
+    (runningCommand === 'audit' && row.tokenId === 1n) ||
+    (runningCommand === 'ask-oracle' && row.tokenId === 2n) ||
+    (runningCommand === 'swap' && row.tokenId === 3n)
+  if (matchesRunning) return { label: 'RUNNING', color: $.green, glyph: '●' }
+  if (matchesStaged)  return { label: 'STAGED',  color: $.yellow, glyph: '◎' }
+  return { label: 'IDLE', color: $.dwhite, glyph: '○' }
+}
 
 interface AuditRow { time: string; agent: string; event: string; ok: 'ok'|'err'|'info' }
 
@@ -320,34 +358,56 @@ function buildFrame(): string {
   put(ROW_TOP_START, mid + 2, $.dwhite + "  ACTION QUEUE" + $.reset)
   put(ROW_TOP_START, w, $.bold + $.green + "║" + $.reset)
 
-  // Agent rows
-  AGENTS.forEach((a, i) => {
+  // Agent rows — driven by agent-registry.ts (real iNFTs minted on 0G)
+  // and current dispatch state. No hardcoded statuses.
+  const agents = liveAgents()
+  agents.forEach((a, i) => {
     const r  = ROW_TOP_START + 1 + i
-    const sc = a.status === "ACTIVE" ? $.bold + $.green : a.status === "WATCHING" ? $.yellow : $.amber
-    const dot = a.status === "ACTIVE" ? "●" : a.status === "WATCHING" ? "◎" : "○"
+    const st = agentStatus(a)
     if (r <= topEnd) {
       put(r, 1, $.green + "║" + $.reset)
-      put(r, 3, sc + dot + " " + pad(a.name, 16) + " " + $.dwhite + pad(a.scope, 14) + " " + sc + a.status + $.reset)
+      put(
+        r, 3,
+        st.color + st.glyph + " " + pad(a.name, 14) + " " + $.dwhite + pad('#' + a.tokenId.toString(), 4) + " " +
+        $.dwhite + pad(a.scope, 26) + " " + st.color + st.label + $.reset,
+      )
       put(r, mid + 1, $.green + "║" + $.reset)
       put(r, w, $.green + "║" + $.reset)
     }
   })
 
-  // Queue rows (right panel, top section)
-  QUEUE.forEach((q, i) => {
-    const r1 = ROW_TOP_START + 1 + i * 2
+  // Action queue — only renders when an intent is staged (typed but not
+  // yet dispatched) or running. Empty otherwise; never invents a queue.
+  if (stagedIntent || runningCommand !== 'idle') {
+    const r1 = ROW_TOP_START + 1
     const r2 = r1 + 1
-    const rc = q.risk === "HIGH" ? $.red : $.green
-    const ic = q.approval ? $.red : $.dwhite
+    const headline =
+      runningCommand === 'audit' ? `audit-agent → running on token ${stagedIntent?.kind === 'audit' ? '#' + stagedIntent.tokenId.toString() : '?'}` :
+      runningCommand === 'ask-oracle' ? 'oracle-agent → query in flight' :
+      runningCommand === 'swap' ? 'swap-agent → swap in flight' :
+      stagedIntent?.kind === 'audit' ? `audit-agent → audit token #${stagedIntent.tokenId}` :
+      stagedIntent?.kind === 'ask-oracle' ? `oracle-agent → ${stagedIntent.topic}` :
+      stagedIntent?.kind === 'swap' ? `swap-agent → ${stagedIntent.amount} ${stagedIntent.fromSym}→${stagedIntent.toSym}` :
+      'idle'
+    const detail = runningCommand !== 'idle'
+      ? `      status=running   (await results in AUDIT TRAIL)`
+      : `      status=staged    [Enter] dispatch   [G] grant   [Esc] clear`
     if (r1 <= topEnd) {
-      put(r1, mid + 2, ic + "  " + q.icon + " " + $.white + q.agent + " → " + q.action + $.reset)
+      put(r1, mid + 2, $.white + '  ▸ ' + headline + $.reset)
       put(r1, w, $.green + "║" + $.reset)
     }
     if (r2 <= topEnd) {
-      put(r2, mid + 2, rc + "     risk=" + q.risk + (q.approval ? "  [A] approve  [D] deny" : "  ✓ auto") + $.reset)
+      const col = runningCommand !== 'idle' ? $.green : $.yellow
+      put(r2, mid + 2, col + detail + $.reset)
       put(r2, w, $.green + "║" + $.reset)
     }
-  })
+  } else {
+    const r1 = ROW_TOP_START + 1
+    if (r1 <= topEnd) {
+      put(r1, mid + 2, $.dwhite + '  (queue empty — type an intent below)' + $.reset)
+      put(r1, w, $.green + "║" + $.reset)
+    }
+  }
 
   // Borders & side bars for top section rows
   for (let r = ROW_TOP_START + 1; r <= topEnd; r++) {
