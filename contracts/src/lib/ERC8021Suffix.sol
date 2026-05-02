@@ -29,6 +29,15 @@ library ERC8021Suffix {
     uint256 internal constant MIN_SUFFIX_LEN = 18;
     uint256 internal constant MAGIC_LEN = 16;
 
+    /// @notice Caller appended an ERC-8021 suffix whose schemaId is not
+    ///         decodable by this library version. Per spec, an unknown
+    ///         schema is a contract-level error: the attribution tag the
+    ///         caller chose cannot be parsed, so silently dropping it
+    ///         would lose attribution. v1 only ships Schema 0 (canonical
+    ///         registry); Schemas 1 and 2 are recognised but rejected so
+    ///         callers learn the splitter does not yet understand them.
+    error UnsupportedSchema(uint8 schemaId);
+
     /// @notice Detect a valid ERC-8021 suffix at the end of `data`.
     /// @return found     True iff trailing 16 bytes match MAGIC and the
     ///                   declared body fits within `data` ahead of a
@@ -56,6 +65,15 @@ library ERC8021Suffix {
         // a valid call.
         if (data.length < MAGIC_LEN + 1 + bodyLen + 4) return (false, 0, "");
         uint256 suffixStart = data.length - MAGIC_LEN - 1 - bodyLen;
+
+        // v1 only decodes Schema 0. A real 8021 suffix (magic + selector
+        // headroom present) carrying any other schemaId is a caller
+        // mistake: their attribution intent cannot be parsed, so we
+        // refuse the call rather than silently dropping the tag.
+        // Schemas 1 (custom registry) and 2 (CBOR) are reserved by spec
+        // but not yet implemented here — opening the door to them
+        // requires explicit decoder code, not silent acceptance.
+        if (schemaId != 0) revert UnsupportedSchema(schemaId);
 
         body = data[suffixStart:data.length - MAGIC_LEN - 1];
         found = true;
