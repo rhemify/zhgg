@@ -1,22 +1,29 @@
-/// `GET /api/mcp/workflows` — public marketplace discovery.
+/// `GET /api/mcp/workflows` — MCP-callable marketplace discovery.
 ///
-/// Returns the catalog of workflows other orgs have listed publicly
-/// (`isListed=true` on their side). Each entry carries the full
+/// Returns the catalog of workflows orgs have listed AS MCP-callable —
+/// i.e. discoverable AND invokable via slug-based x402 calls at
+/// `/api/mcp/workflows/<slug>/call`. Each entry carries the full
 /// `inputSchema` JSON Schema, `priceUsdcPerCall` for x402 pricing, and
 /// metadata (`category`, `chain`, `workflowType`) for client-side
-/// filtering. As of 2026-05-02 the live deployment returns ~85 entries
-/// covering ARYA, Open Deal, Aave V3, Ajna, etc.
+/// filtering.
 ///
 /// This is the discovery rail that makes the marketplace ACTIONABLE
 /// from inside an agent: an iNFT can list available services, pick one
 /// matching its capability gap, and (in a future step) `kh hire <wfId>`
 /// to pay-and-trigger via the existing x402 path.
 ///
-/// We intentionally do NOT also wrap `/api/workflows/public` — both
-/// endpoints return overlapping data, but the `/api/mcp/workflows` shape
-/// is leaner (no full DAG `nodes` blob) and pre-shaped for MCP use.
-/// If a future use case needs the full node graph, layer a separate
-/// helper instead of overloading this one.
+/// IMPORTANT — two distinct endpoints exist (probed live 2026-05-02):
+///   - `/api/mcp/workflows`     27 entries, MCP-callable (this helper)
+///   - `/api/workflows/public`  85 entries, all public-readable (broader)
+///
+/// The MCP set is the right surface for "agents hiring agents" because
+/// callability is the MVP — a workflow that's public-readable but not
+/// MCP-exposed can be inspected but not paid-and-invoked. If you ever
+/// want the broader 85, layer a new helper rather than overloading this.
+///
+/// PAGINATION — server returns `{items, total, page, limit}` with a
+/// default limit of 20. We pass `?limit=100` so all current entries
+/// arrive in one request; revisit if KH starts paginating past 100.
 
 import type { KHClient } from '../client.js';
 import type { KHResult } from '../index.js';
@@ -72,7 +79,10 @@ export interface DiscoverFilters {
   category?: string;
   /// Exact-match against `chain` (e.g. "0g-galileo", "base-sepolia").
   chain?: string;
-  /// Limit returned entries (after filter). Defaults to 25.
+  /// Limit returned entries (after filter). Defaults to 100 — large
+  /// enough to surface the entire current catalog (~27) without
+  /// truncation. Pass an explicit smaller value if you only want the
+  /// top N for a TUI render.
   limit?: number;
 }
 
@@ -80,9 +90,14 @@ export async function discoverWorkflows(
   client: KHClient,
   filters: DiscoverFilters = {},
 ): Promise<KHResult<KHPublicWorkflow[]>> {
-  const r = await client.get<unknown>('/api/mcp/workflows');
+  // ?limit=100 — server default is 20; current catalog has 27 total so
+  // 100 fetches everything in one shot. If the catalog ever exceeds
+  // 100, we'd switch to a multi-page loop using the `total` + `page`
+  // fields the server returns alongside `items`.
+  const r = await client.get<unknown>('/api/mcp/workflows?limit=100');
   if (!r.ok) return r;
-  // Endpoint returns `{items: [...]}` — defend against shape drift.
+  // Endpoint returns `{items, total, page, limit}` — defend against
+  // shape drift but lean on the documented shape.
   const body = r.value;
   let items: unknown;
   if (Array.isArray(body)) {
@@ -120,7 +135,7 @@ export async function discoverWorkflows(
   if (filters.chain) {
     workflows = workflows.filter((w) => w.chain === filters.chain);
   }
-  const limit = filters.limit ?? 25;
+  const limit = filters.limit ?? 100;
   return { ok: true, value: workflows.slice(0, limit) };
 }
 

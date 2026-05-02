@@ -2177,7 +2177,7 @@ async function dispatchKHIntent(
     receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
   } else if (out.kind === 'discover') {
     const list = out.value
-    pushAudit('kh', `marketplace: ${list.length} workflows surfaced`, 'ok')
+    pushAudit('kh', `marketplace: ${list.length} MCP-callable workflows`, 'ok')
     for (const w of list.slice(0, 12)) {
       const price = w.priceUsdcPerCall ? `$${w.priceUsdcPerCall}` : 'free'
       pushAudit(
@@ -2187,6 +2187,7 @@ async function dispatchKHIntent(
       )
     }
     if (list.length > 12) pushAudit('kh', `  …+${list.length - 12} more (refine: kh discover <search>)`, 'info')
+    pushAudit('kh', `  (broader public-readable set: 85 via /api/workflows/public — not yet wired)`, 'info')
   } else if (out.kind === 'inspect') {
     const w = out.value
     if (!w) {
