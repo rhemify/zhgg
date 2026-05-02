@@ -294,6 +294,25 @@ contract AgentReceiverWallet is ReentrancyGuard {
         emit IdleRedeemed(address(yieldVault), yieldAsset, shares, assets);
     }
 
+    /// @notice Owner-only partial withdraw — pulls a specific
+    ///         `assets` amount of `yieldAsset` back from the vault.
+    ///         Useful when the owner wants to free a known amount
+    ///         (e.g. just enough to bring the wallet's raw balance
+    ///         above `minSplitAmount`) without unwinding the whole
+    ///         position. ERC-4626 vault burns the proportional share
+    ///         count corresponding to `assets` at current price-per-share,
+    ///         so the wallet captures pro-rata yield on the withdrawn slice.
+    /// @dev    No-op when no vault is set, mirroring `withdrawAllIdle`.
+    ///         `assets == 0` is a no-op (vault would burn zero shares).
+    function withdrawIdle(uint256 assets) external nonReentrant {
+        address o = owner();
+        if (msg.sender != o) revert NotOwner(msg.sender, o);
+        if (address(yieldVault) == address(0)) return;
+        if (assets == 0) return;
+        uint256 sharesBurned = yieldVault.withdraw(assets, address(this), address(this));
+        emit IdleRedeemed(address(yieldVault), yieldAsset, sharesBurned, assets);
+    }
+
     /// @dev Hot-path redemption — fails open. If the vault is paused,
     ///      reverts on redeem, or otherwise misbehaves, the split path
     ///      proceeds with whatever raw balance is in the wallet.

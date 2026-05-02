@@ -10,6 +10,8 @@ import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {AgentReceiverWallet} from "../src/AgentReceiverWallet.sol";
 import {AgentReceiverWalletFactory} from "../src/AgentReceiverWalletFactory.sol";
 import {IERC7857} from "../src/interfaces/IERC7857.sol";
+import {IERC4626} from "../src/interfaces/IERC4626.sol";
+import {MockERC4626} from "../src/mocks/MockERC4626.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
@@ -300,5 +302,123 @@ contract AgentReceiverWalletTest is Test {
 
         // Must return FAIL, not revert.
         assertEq(w.isValidSignature(hash, sig), bytes4(0xffffffff));
+    }
+
+    // ----- ERC-4626 idle-USDC parking end-to-end demo -----------------
+    //
+    // Proves the full Tier-1 path: park idle USDC in a configured 4626
+    // vault, simulate yield accrual, then partial-withdraw to capture
+    // principal + share-of-yield. Backstops the demo claim that
+    // AgentReceiverWallet's yield routing is wired (not just stubbed).
+
+    function test_parkAndPartialWithdraw_capturesShareOfYield() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        MockERC4626 vault = new MockERC4626(IERC20(address(usdc)));
+
+        // Wire the vault — must be the iNFT owner.
+        vm.prank(agentOwner);
+        w.setYieldVault(IERC4626(address(vault)));
+        assertEq(address(w.yieldVault()), address(vault), "vault not wired");
+        assertEq(w.yieldAsset(), address(usdc), "vault asset cache wrong");
+
+        // Fund the wallet with 100 USDC and park half.
+        usdc.mint(address(w), 100_000_000); // 100 USDC (6 decimals)
+        // Sanity: parkIdle parks the FULL idle balance — the wallet can't
+        // partial-park because parkIdle's purpose is yield-on-everything-
+        // sitting-around. Move 50 USDC out of the wallet first so only
+        // 50e6 is "idle" when we call parkIdle.
+        vm.prank(agentOwner);
+        w.withdraw(IERC20(address(usdc)), agentOwner); // sweep all 100e6 to owner
+        usdc.mint(address(w), 50_000_000);             // re-fund with 50 USDC
+
+        vm.prank(stranger); // permissionless — anyone may trigger parkIdle
+        w.parkIdle();
+
+        // Vault is empty before deposit, so 1:1 shares: 50e6 shares minted.
+        assertEq(usdc.balanceOf(address(w)), 0, "wallet still holds raw USDC");
+        assertEq(usdc.balanceOf(address(vault)), 50_000_000, "vault didn't receive USDC");
+        assertApproxEqAbs(
+            vault.balanceOf(address(w)),
+            50_000_000,
+            1, // tolerance: integer-rounding of 1:1 share math is exact, but be defensive
+            "wallet share balance != ~50e6"
+        );
+
+        // Simulate 5 USDC of yield accruing inside the vault (e.g. an
+        // Aave aToken's underlying interest). Direct mint-to-vault is the
+        // cleanest way to push price-per-share above 1.0 in a test.
+        usdc.mint(address(vault), 5_000_000);
+
+        // At this point: vault holds 55 USDC, total shares = 50.
+        //   pps = 55 / 50 = 1.1 USDC/share
+        //   wallet's 50 shares are now worth 55 USDC.
+        uint256 walletShareValue = vault.convertToAssets(vault.balanceOf(address(w)));
+        assertEq(walletShareValue, 55_000_000, "share-of-yield math wrong");
+
+        // Owner partial-withdraws their full pro-rata share (55 USDC).
+        // Stranger cannot — withdrawIdle is owner-gated.
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NotOwner.selector, stranger, agentOwner)
+        );
+        w.withdrawIdle(walletShareValue);
+
+        vm.prank(agentOwner);
+        w.withdrawIdle(walletShareValue);
+
+        // Wallet now holds principal + share-of-yield (50 + 5 = 55 USDC).
+        // Constraint says ">= 50 + share-of-yield" — strict equality is
+        // fine here because there are no other shareholders to dilute.
+        assertGe(
+            usdc.balanceOf(address(w)),
+            50_000_000 + 5_000_000,
+            "wallet didn't receive principal + share-of-yield"
+        );
+        assertEq(
+            usdc.balanceOf(address(w)),
+            55_000_000,
+            "wallet received unexpected amount"
+        );
+        // All shares burned — wallet's vault balance is empty.
+        assertEq(vault.balanceOf(address(w)), 0, "shares not fully burned");
+    }
+
+    function test_withdrawIdle_revertsForNonOwner() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        MockERC4626 vault = new MockERC4626(IERC20(address(usdc)));
+        vm.prank(agentOwner);
+        w.setYieldVault(IERC4626(address(vault)));
+
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(AgentReceiverWallet.NotOwner.selector, stranger, agentOwner)
+        );
+        w.withdrawIdle(1);
+    }
+
+    function test_withdrawIdle_isNoOpWhenNoVault() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        // No vault wired — owner call is a silent no-op (no revert, no
+        // state change). Mirrors `withdrawAllIdle`'s contract.
+        vm.prank(agentOwner);
+        w.withdrawIdle(123);
+        assertEq(usdc.balanceOf(address(w)), 0);
+    }
+
+    function test_withdrawIdle_zeroAmount_isNoOp() public {
+        AgentReceiverWallet w = AgentReceiverWallet(payable(factory.deploy(tokenId)));
+        MockERC4626 vault = new MockERC4626(IERC20(address(usdc)));
+        vm.prank(agentOwner);
+        w.setYieldVault(IERC4626(address(vault)));
+        usdc.mint(address(w), 50_000_000);
+        w.parkIdle();
+
+        // Zero-asset withdraw must not call into the vault (which would
+        // burn zero shares but still emit a redeem event). No-op keeps
+        // gas + event noise minimal.
+        uint256 sharesBefore = vault.balanceOf(address(w));
+        vm.prank(agentOwner);
+        w.withdrawIdle(0);
+        assertEq(vault.balanceOf(address(w)), sharesBefore, "shares changed on zero-amount withdraw");
     }
 }
