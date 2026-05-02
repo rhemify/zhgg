@@ -53,6 +53,7 @@ contract MockERC4626 is ERC20, IERC4626 {
         shares = convertToShares(assets);
         _asset.transferFrom(msg.sender, address(this), assets);
         _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
     }
 
     function withdraw(uint256 assets, address receiver, address owner_)
@@ -64,6 +65,7 @@ contract MockERC4626 is ERC20, IERC4626 {
         if (msg.sender != owner_) _spendAllowance(owner_, msg.sender, shares);
         _burn(owner_, shares);
         _asset.transfer(receiver, assets);
+        emit Withdraw(msg.sender, receiver, owner_, assets, shares);
     }
 
     function redeem(uint256 shares, address receiver, address owner_)
@@ -75,5 +77,6 @@ contract MockERC4626 is ERC20, IERC4626 {
         if (msg.sender != owner_) _spendAllowance(owner_, msg.sender, shares);
         _burn(owner_, shares);
         _asset.transfer(receiver, assets);
+        emit Withdraw(msg.sender, receiver, owner_, assets, shares);
     }
 }

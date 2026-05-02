@@ -8,6 +8,23 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         vaults, etc. Not the full standard — just the methods our
 ///         AgentReceiverWallet calls.
 interface IERC4626 is IERC20 {
+    /// @notice Emitted when assets are deposited and shares minted.
+    event Deposit(
+        address indexed sender,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+
+    /// @notice Emitted when shares are burned and assets withdrawn.
+    event Withdraw(
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
+
     function asset() external view returns (address);
     function convertToShares(uint256 assets) external view returns (uint256);
     function convertToAssets(uint256 shares) external view returns (uint256);

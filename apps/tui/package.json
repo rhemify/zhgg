@@ -15,7 +15,6 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "@opentui/core": "^0.1.103",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/oracle-data": "workspace:*",
