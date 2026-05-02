@@ -24,6 +24,9 @@ import {
   formatUnits,
   keccak256,
   toHex,
+  isAddress,
+  getAddress,
+  encodeFunctionData,
   type Account,
   type Address,
   type Chain,
@@ -71,6 +74,20 @@ import {
   dispatchAcpRelease,
   type AcpRow,
 } from './acp-intents.js';
+/// ERC-7710 helpers (Slice I): build, sign, and ABI-encode a real
+/// `Delegation` for `DelegationManager.redeemDelegations(...)`. The
+/// signature is verified on-chain via ERC-1271 against the delegator
+/// smart wallet (AgentReceiverWallet for the seed iNFT) — same code
+/// path the forge tests exercise.
+import {
+  MODE_SINGLE_CALL,
+  delegationDigest,
+  encodeExecution,
+  encodePermissionContext,
+  signDelegation,
+  type Delegation as ERC7710Delegation,
+} from '@zhgg/workflow';
+import { resolveRecipient } from '../../transfer-agent/src/resolve-recipient.js';
 
 // ── ANSI primitives ───────────────────────────────────────────────────────────
 
@@ -262,7 +279,8 @@ let runningCommand:
   | 'acp-create'
   | 'acp-release'
   | 'park'
-  | 'unpark' = 'idle'
+  | 'unpark'
+  | 'delegate' = 'idle'
 
 /// Cancellation flag — flipped on by the `cancel` intent (or Esc while
 /// a dispatch is running). Long-running dispatchers check this between
@@ -804,6 +822,7 @@ function formatStaged(intent: IntentCommand): string {
     case 'acp-release': return `acp release jobId=${intent.jobId}`
     case 'park': return `park ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`
     case 'unpark': return `unpark ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`
+    case 'delegate': return `delegate → ${intent.to} permId=${shortHash(intent.permissionId)}`
     default: return '—'
   }
 }
@@ -1439,6 +1458,282 @@ async function dispatchAxiomRevealIntent(
   }
 }
 
+// ── Delegation dispatcher (Slice I — ERC-7710) ───────────────────────────────
+//
+// Issues a real redeemable delegation via the deployed `DelegationManager`
+// on Base Sepolia (chainId 84532). The contract has a single redeemer
+// entry point — `redeemDelegations(bytes[], bytes32[], bytes[])` — and
+// the manager's "create" semantics are the act of (a) signing a
+// `Delegation` struct off-chain via EIP-712 and (b) redeeming it on
+// chain. We do BOTH atomically here so the operator types one line and
+// gets a real on-chain receipt (or a verbatim revert).
+//
+// Resolution rules for `<to>`:
+//   - 0x40-hex   → viem `getAddress` (any case accepted; checksummed).
+//   - `*.zhgg.eth` agent ENS → look up tokenId via agent-registry, then
+//     read AgentNFT.ownerOf(tokenId) on 0G Galileo (chainId 16602)
+//     using the bundle's `zgPub` client. Cross-chain: read on 0G,
+//     write on Base.
+//   - mainnet `*.eth` → reuse `resolveRecipient` from transfer-agent
+//     (same free public RPC chain; honours `ENS_RPC_URL`).
+//
+// Hardcoded caveats (matching the on-chain Delegation struct field-for-field):
+//   delegator        = the TUI's EOA (baseAccount). For a smart-wallet
+//                      delegator (AgentReceiverWallet) the manager's
+//                      ERC-1271 check passes; for a bare EOA the chain
+//                      reverts on `InvalidSignature` — that revert is
+//                      bubbled verbatim (per "real reverts bubble" rule).
+//   delegate         = resolved <to>.
+//   allowedTargets   = [SpendCap]    (only target the redemption may hit).
+//   maxValuePerCall  = 0             (no native ETH).
+//   expiresAt        = now + 1h      (DelegationExpired fires after).
+//   salt             = random 32B    (parallel-safe replay defense).
+//   spendCapAsset    = USDC          (debits the matching permissionId bucket).
+//   permissionId     = intent.permissionId (verbatim).
+//   maxAmountPerRedeem = 100_000     (0.1 USDC, 6dp).
+//
+// The redemption payload is a SpendCap.spendPermission call so the
+// auto-debit path is exercised; if the cap isn't granted the chain
+// reverts with `CapNotFound` and that's surfaced verbatim.
+
+const AGENT_NFT_OWNER_OF_ABI = parseAbi([
+  'function ownerOf(uint256 tokenId) view returns (address)',
+])
+
+/// Verbatim from `contracts/src/DelegationManager.sol::redeemDelegations`.
+/// Only the single function signature we call — keeping the surface tiny
+/// makes drift between the Solidity ABI and this clone easier to spot.
+const DELEGATION_MANAGER_ABI = parseAbi([
+  'function redeemDelegations(bytes[] permissionContexts, bytes32[] modes, bytes[] executionCallData) payable',
+])
+
+const SPEND_CAP_SPEND_ABI = parseAbi([
+  'function spendPermission(address account, address asset, bytes32 permissionId, uint128 amount)',
+])
+
+/// 0.1 USDC at 6dp — small enough to fit comfortably under any sane
+/// SpendCap bucket the operator pre-granted via the [G] modal.
+const DELEGATE_DEFAULT_DEBIT: bigint = 100_000n
+/// Delegation TTL — 1h from issuance. Manager rejects redeems after
+/// `expiresAt` with `DelegationExpired(expiresAt, nowTs)`.
+const DELEGATE_TTL_SECONDS: bigint = 3_600n
+
+/// Resolve `<to>` into a checksummed Address with a labelled source
+/// so the audit row can echo it ("via=address" / "via=agent_ens" /
+/// "via=mainnet_ens").
+type DelegateRecipient =
+  | { ok: true; address: Address; source: 'address' | 'agent_ens' | 'mainnet_ens' }
+  | { ok: false; reason: string }
+
+async function resolveDelegateTo(
+  to: string,
+  bundle: LiveBundle,
+): Promise<DelegateRecipient> {
+  const trimmed = to.trim()
+  if (isAddress(trimmed, { strict: false })) {
+    return { ok: true, address: getAddress(trimmed), source: 'address' }
+  }
+  // Agent ENS (`*.zhgg.eth`) takes precedence over generic mainnet ENS —
+  // these names aren't on mainnet and a stray mainnet probe would just
+  // return ens_unresolved with a confusing reason.
+  if (/\.zhgg\.eth$/i.test(trimmed)) {
+    if (!bundle.agentNft) {
+      return {
+        ok: false,
+        reason: `agent ENS "${trimmed}": AGENT_NFT_ADDRESS not set — cannot resolve owner`,
+      }
+    }
+    const tokenId = AGENT_REGISTRY[trimmed.toLowerCase()]
+    if (tokenId === undefined) {
+      return {
+        ok: false,
+        reason: `agent ENS "${trimmed}" not in agent-registry — mint first or pass a 0x address`,
+      }
+    }
+    try {
+      const owner = (await bundle.zgPub.readContract({
+        address: bundle.agentNft,
+        abi: AGENT_NFT_OWNER_OF_ABI,
+        functionName: 'ownerOf',
+        args: [tokenId],
+      })) as Address
+      return { ok: true, address: getAddress(owner), source: 'agent_ens' }
+    } catch (e) {
+      return {
+        ok: false,
+        reason: `AgentNFT.ownerOf(${tokenId}) on 0G failed: ${e instanceof Error ? e.message : String(e)}`,
+      }
+    }
+  }
+  if (/\.eth$/i.test(trimmed)) {
+    const r = await resolveRecipient(trimmed, { ensRpcUrl: process.env.ENS_RPC_URL })
+    if (!r.ok) {
+      return { ok: false, reason: `mainnet ENS "${trimmed}": ${r.error.kind} — ${r.error.reason}` }
+    }
+    return { ok: true, address: r.address, source: 'mainnet_ens' }
+  }
+  return { ok: false, reason: `delegate to "${trimmed}" — expected 0x-address or *.eth name` }
+}
+
+async function dispatchDelegate(
+  intent: Extract<IntentCommand, { kind: 'delegate' }>,
+): Promise<void> {
+  if (cancelRequested) {
+    cancelRequested = false
+    pushAudit('intent', 'delegate cancelled before dispatch', 'info')
+    return
+  }
+  cancelRequested = false
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit(
+      'intent',
+      `delegate blocked: ${liveBundleError ?? 'env-incomplete (BASE_SEPOLIA_RPC_URL or BASE_SEPOLIA_PRIVATE_KEY)'}`,
+      'err',
+    )
+    setToast('err', `env-incomplete: ${liveBundleError ?? 'BASE_SEPOLIA_PRIVATE_KEY/RPC_URL'}`)
+    return
+  }
+
+  const dmEnv = process.env.DELEGATION_MANAGER_ADDRESS
+  const delegationManager: Address | null =
+    dmEnv && /^0x[a-fA-F0-9]{40}$/.test(dmEnv) ? getAddress(dmEnv) : null
+  if (!delegationManager) {
+    pushAudit('delegate', 'DELEGATION_MANAGER_ADDRESS missing/invalid', 'err')
+    setToast('err', 'DELEGATION_MANAGER_ADDRESS required')
+    return
+  }
+  if (!bundle.spendCap) {
+    pushAudit('delegate', 'SPEND_CAP_ADDRESS not set — cannot wire delegation', 'err')
+    setToast('err', 'SPEND_CAP_ADDRESS required')
+    return
+  }
+
+  runningCommand = 'delegate'
+  pushAudit('delegate', `delegate.intent ${intent.to} ${intent.permissionId}`, 'info')
+  render()
+
+  // 1. Resolve <to>.
+  const recipient = await resolveDelegateTo(intent.to, bundle)
+  if (!recipient.ok) {
+    pushAudit('delegate', `delegate.resolve.failed ${recipient.reason}`.slice(0, 200), 'err')
+    setToast('err', 'delegate: recipient unresolved')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  pushAudit(
+    'delegate',
+    `delegate.resolve.ok via=${recipient.source} → ${shortHash(recipient.address)}`,
+    'ok',
+  )
+
+  // 2. Build the delegation. Salt is random per dispatch so repeated
+  //    calls with identical args don't collide on the manager's
+  //    `redeemed[(delegator, salt)]` map.
+  const saltBytes = new Uint8Array(32)
+  crypto.getRandomValues(saltBytes)
+  const salt = ('0x' +
+    Array.from(saltBytes).map((b) => b.toString(16).padStart(2, '0')).join('')) as Hex
+  const expiresAt = BigInt(Math.floor(Date.now() / 1000)) + DELEGATE_TTL_SECONDS
+
+  const delegator: Address = bundle.baseAccount.address
+  const delegation: ERC7710Delegation = {
+    delegator,
+    delegate: recipient.address,
+    allowedTargets: [bundle.spendCap],
+    maxValuePerCall: 0n,
+    expiresAt,
+    salt,
+    spendCapAsset: bundle.usdc,
+    permissionId: intent.permissionId,
+    maxAmountPerRedeem: DELEGATE_DEFAULT_DEBIT,
+  }
+
+  // 3. Compute the EIP-712 digest (= delegationHash on chain) and sign.
+  const domain = { chainId: 84532, verifyingContract: delegationManager }
+  const digest = delegationDigest(domain, delegation)
+  pushAudit('delegate', `delegate.digest ${digest}`, 'info')
+
+  let signature: Hex
+  try {
+    signature = await signDelegation(bundle.baseWallet, domain, delegation)
+  } catch (e) {
+    pushAudit(
+      'delegate',
+      `delegate.sign.failed ${e instanceof Error ? e.message : String(e)}`.slice(0, 200),
+      'err',
+    )
+    setToast('err', 'delegate: signing failed')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+
+  // 4. ABI-encode the redemption payload. The Execution targets
+  //    SpendCap.spendPermission with the same permissionId — the
+  //    manager will route it through the delegator's
+  //    `executeViaDelegation` so SpendCap sees the wallet as msg.sender
+  //    (which is what makes its `msg.sender == account` invariant hold).
+  const permissionContext = encodePermissionContext(delegation, signature)
+  const spendCalldata = encodeFunctionData({
+    abi: SPEND_CAP_SPEND_ABI,
+    functionName: 'spendPermission',
+    args: [delegator, bundle.usdc, intent.permissionId, DELEGATE_DEFAULT_DEBIT],
+  })
+  const execData = encodeExecution({
+    target: bundle.spendCap,
+    value: 0n,
+    data: spendCalldata,
+  })
+
+  // 5. Submit redeemDelegations. simulate first so any caveat revert
+  //    surfaces with its decoded error name (TargetNotAllowed,
+  //    InvalidSignature, CapNotFound, …) instead of a raw 0x selector.
+  pushAudit(
+    'delegate',
+    `delegate.tx submitting redeemDelegations to ${shortHash(delegationManager)}`,
+    'info',
+  )
+  render()
+  try {
+    const sim = await bundle.basePub.simulateContract({
+      account: bundle.baseAccount,
+      address: delegationManager,
+      abi: DELEGATION_MANAGER_ABI,
+      functionName: 'redeemDelegations',
+      args: [[permissionContext], [MODE_SINGLE_CALL], [execData]],
+    })
+    const txHash = await bundle.baseWallet.writeContract(sim.request)
+    pushAudit('delegate', `delegate.confirmed delegationHash=${digest} tx=${txHash}`, 'ok')
+    try {
+      const rcpt = await bundle.basePub.waitForTransactionReceipt({ hash: txHash })
+      pushAudit(
+        'receipt',
+        `delegate receipt status=${rcpt.status} blk=${rcpt.blockNumber} gas=${rcpt.gasUsed}`,
+        rcpt.status === 'success' ? 'ok' : 'err',
+      )
+    } catch (e) {
+      pushAudit(
+        'receipt',
+        `delegate receipt fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+        'err',
+      )
+    }
+  } catch (e) {
+    // Real chain reverts (LengthMismatch / WrongDelegate /
+    // InvalidSignature / TargetNotAllowed / ValueExceedsCap /
+    // DelegationExpired / EmptyAllowedTargets / CapNotFound) bubble
+    // verbatim. Slice keeps the audit row scannable; toast stays short.
+    const msg = e instanceof Error ? e.message : String(e)
+    pushAudit('delegate', `delegate.reverted ${msg}`.slice(0, 220), 'err')
+    setToast('err', `delegate reverted`)
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
 // ── Operator UX dispatchers (Phase 3) ────────────────────────────────────────
 //
 // Read-only inspections + the explicit `mint` write. None of these go
@@ -1851,6 +2146,8 @@ function handleIntentKey(key: string): boolean {
     // Slice H — AxiomCommit pre-commit / reveal log
     else if (parsed.kind === 'axiom-commit') void dispatchAxiomCommitIntent(parsed)
     else if (parsed.kind === 'axiom-reveal') void dispatchAxiomRevealIntent(parsed)
+    // Slice I — ERC-7710 redeemable delegation via DelegationManager
+    else if (parsed.kind === 'delegate') void dispatchDelegate(parsed)
     // Phase 3 operator UX
     else if (parsed.kind === 'agents') void dispatchOperatorAgents()
     else if (parsed.kind === 'balances') void dispatchOperatorBalances()
