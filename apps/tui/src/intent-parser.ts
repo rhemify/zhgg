@@ -1,9 +1,13 @@
 /// Tiny shell-style parser for the TUI's intent input.
 ///
 /// Recognised forms:
-///   `audit <ens-or-tokenid>`     → kick the cross-agent orchestrator
-///   `ask oracle <topic>`         → standalone oracle query
-///   `swap <amount> <from> <to>`  → real on-chain swap via swap-agent
+///   `audit <ens-or-tokenid>`              → kick the cross-agent orchestrator
+///   `ask oracle <topic>`                  → standalone oracle query
+///   `swap <amount> <from> <to>`           → real on-chain swap via swap-agent
+///   `transfer <amount> <token> to <addr>` → real ERC-20 / ETH transfer via
+///                                           transfer-agent. Recipient may
+///                                           be a 0x address or *.eth name
+///                                           (mainnet ENS resolution).
 ///
 /// Anything else returns `{ kind: 'unknown' }` so the caller can render
 /// a hint instead of dispatching. We deliberately avoid throwing on bad
@@ -40,6 +44,17 @@ export type IntentCommand =
       amount: string;
       fromSym: SwapSymbol;
       toSym: SwapSymbol;
+    }
+  | {
+      kind: 'transfer';
+      /// Decimal-string amount in the symbol's units. The transfer-agent
+      /// converts to atomic via parseUnits + TOKEN_DECIMALS.
+      amount: string;
+      symbol: SwapSymbol;
+      /// Raw recipient — 0x address OR *.eth name. The transfer-agent
+      /// validates / resolves; we keep the user's literal here for the
+      /// TUI label ("transferring 1 USDC → vitalik.eth").
+      recipient: string;
     }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
@@ -209,6 +224,61 @@ export function parseIntent(input: string): IntentCommand {
     };
   }
 
+  if (head === 'transfer' || head === 'send' || head === 'pay') {
+    // Form: `transfer <amount> <symbol> [to] <recipient>`
+    // Filler tokens like `to` / `into` / `→` are stripped so users can
+    // type the natural-language version. We also accept `send` and
+    // `pay` as aliases — same semantics, different vocabulary.
+    const FILLERS = new Set(['to', 'into', '->', '→']);
+    const tokens = parts.slice(1).filter((t) => !FILLERS.has(t.toLowerCase()));
+    if (tokens.length !== 3) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: 'transfer needs <amount> <symbol> <recipient> (e.g. "transfer 1 USDC vitalik.eth" or "transfer 0.001 ETH to 0xAbc…")',
+      };
+    }
+    const amount = tokens[0]!;
+    const symRaw = tokens[1]!;
+    const recipient = tokens[2]!;
+
+    if (!/^\d+(\.\d+)?$/.test(amount)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `transfer amount "${amount}" — expected decimal (e.g. 0.001, 5)`,
+      };
+    }
+    const symbol = symRaw.toUpperCase();
+    if (!SWAP_SYMBOLS.has(symbol as SwapSymbol)) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `transfer symbol "${symRaw}" — supported: ETH, WETH, USDC`,
+      };
+    }
+    // Cheap recipient sanity-check: 0x40-hex OR *.eth shape. Real
+    // validation/resolution happens inside the agent (viem getAddress +
+    // ENS lookup) — here we just reject obvious typos so the user gets
+    // immediate feedback before the dispatch round-trip.
+    const isAddrShape = /^0x[a-fA-F0-9]{40}$/.test(recipient);
+    const isEnsShape = /^[a-z0-9_-]+(\.[a-z0-9_-]+)+\.eth$/i.test(recipient) ||
+                       /^[a-z0-9_-]+\.eth$/i.test(recipient);
+    if (!isAddrShape && !isEnsShape) {
+      return {
+        kind: 'unknown',
+        raw: trimmed,
+        reason: `transfer recipient "${recipient}" — expected 0x-address or *.eth name`,
+      };
+    }
+    return {
+      kind: 'transfer',
+      amount,
+      symbol: symbol as SwapSymbol,
+      recipient,
+    };
+  }
+
   if (head === 'ask' && parts[1]?.toLowerCase() === 'oracle') {
     const tail = parts.slice(2).join(' ').trim();
     if (tail.length === 0) {
@@ -224,6 +294,6 @@ export function parseIntent(input: string): IntentCommand {
   return {
     kind: 'unknown',
     raw: trimmed,
-    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", or "swap <amount> <from> <to>"`,
+    reason: `unknown intent — try "audit <ens>", "ask oracle <topic>", "swap <amount> <from> <to>", or "transfer <amount> <token> to <recipient>"`,
   };
 }

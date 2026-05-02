@@ -1,0 +1,26 @@
+{
+  "name": "transfer-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./erc20": "./src/erc20.ts",
+    "./native": "./src/native.ts",
+    "./resolve-recipient": "./src/resolve-recipient.ts"
+  },
+  "scripts": {
+    "transfer": "bun run src/index.ts",
+    "check-types": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

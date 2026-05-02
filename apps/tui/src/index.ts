@@ -33,6 +33,7 @@ import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.j
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
 import { queryOracle } from '@zhgg/oracle-agent';
 import { executeSwap } from 'swap-agent';
+import { executeTransfer } from 'transfer-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { AGENT_REGISTRY } from './agent-registry.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
@@ -218,7 +219,7 @@ let intentBuffer = ''
 let intentMode: 'idle' | 'editing' = 'editing'
 let intentHint = ''
 let stagedIntent: IntentCommand | null = null
-let runningCommand: 'idle' | 'audit' | 'ask-oracle' | 'swap' = 'idle'
+let runningCommand: 'idle' | 'audit' | 'ask-oracle' | 'swap' | 'transfer' = 'idle'
 
 let grantModalOpen = false
 let grantModalLines: string[] = []
@@ -385,6 +386,7 @@ function buildFrame(): string {
       runningCommand === 'audit' ? `audit-agent → running on token ${stagedIntent?.kind === 'audit' ? '#' + stagedIntent.tokenId.toString() : '?'}` :
       runningCommand === 'ask-oracle' ? 'oracle-agent → query in flight' :
       runningCommand === 'swap' ? 'swap-agent → swap in flight' :
+      runningCommand === 'transfer' ? 'transfer-agent → tx in flight' :
       stagedIntent?.kind === 'audit' ? `audit-agent → audit token #${stagedIntent.tokenId}` :
       stagedIntent?.kind === 'ask-oracle' ? `oracle-agent → ${stagedIntent.topic}` :
       stagedIntent?.kind === 'swap' ? `swap-agent → ${stagedIntent.amount} ${stagedIntent.fromSym}→${stagedIntent.toSym}` :
@@ -700,6 +702,7 @@ function formatStaged(intent: IntentCommand): string {
     case 'audit': return `audit ${intent.target} (#${intent.tokenId})`
     case 'ask-oracle': return `ask oracle ${intent.raw} (topic=${intent.topic})`
     case 'swap': return `swap ${intent.amount} ${intent.fromSym} → ${intent.toSym}`
+    case 'transfer': return `transfer ${intent.amount} ${intent.symbol} → ${intent.recipient}`
     default: return '—'
   }
 }
@@ -1046,6 +1049,60 @@ async function dispatchSwapIntent(
   }
 }
 
+async function dispatchTransferIntent(
+  intent: Extract<IntentCommand, { kind: 'transfer' }>,
+): Promise<void> {
+  const bundle = tryBuildLiveBundle()
+  if (!bundle) {
+    pushAudit(
+      'intent',
+      `transfer blocked: ${liveBundleError ?? 'env-incomplete (BASE_SEPOLIA_RPC_URL or BASE_SEPOLIA_PRIVATE_KEY)'}`,
+      'err',
+    )
+    setToast('err', `env-incomplete: ${liveBundleError ?? 'BASE_SEPOLIA_PRIVATE_KEY/RPC_URL'}`)
+    return
+  }
+
+  runningCommand = 'transfer'
+  pushAudit('transfer-agent', `transfer.intent ${intent.amount} ${intent.symbol} → ${intent.recipient}`, 'info')
+  if (/\.eth$/i.test(intent.recipient)) {
+    pushAudit('transfer-agent', `transfer.resolve querying mainnet ENS for ${intent.recipient}`, 'info')
+  }
+  render()
+
+  try {
+    const result = await executeTransfer({
+      amount: intent.amount,
+      symbol: intent.symbol,
+      recipient: intent.recipient,
+      basePub: bundle.basePub,
+      baseWallet: bundle.baseWallet,
+      ensRpcUrl: process.env.ENS_RPC_URL,
+    })
+
+    if (!result.ok) {
+      const e = result.error
+      pushAudit('transfer-agent', `transfer.reverted ${e.kind}: ${e.reason}`.slice(0, 160), 'err')
+      setToast('err', `transfer ${e.kind}`.slice(0, 80))
+      return
+    }
+
+    const v = result.value
+    pushAudit(
+      'transfer-agent',
+      `transfer.confirmed ${v.amount} ${v.symbol} → ${shortHash(v.resolvedRecipient)} (${v.recipientSource}) tx=${shortHash(v.txHash)}`,
+      'ok',
+    )
+    pushAudit('receipt', `transfer receipt blk=${v.blockNumber} gas=${v.gasUsed}`, 'ok')
+    receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+  } catch (e) {
+    pushAudit('transfer-agent', `transfer.crash: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160), 'err')
+  } finally {
+    runningCommand = 'idle'
+    render()
+  }
+}
+
 // ── SpendCap [G] grant flow ──────────────────────────────────────────────────
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
@@ -1173,6 +1230,7 @@ function handleIntentKey(key: string): boolean {
     if (parsed.kind === 'audit') void dispatchAuditIntent(parsed)
     else if (parsed.kind === 'ask-oracle') void dispatchAskOracleIntent(parsed)
     else if (parsed.kind === 'swap') void dispatchSwapIntent(parsed)
+    else if (parsed.kind === 'transfer') void dispatchTransferIntent(parsed)
     return true
   }
   // Backspace (0x7f / 0x08).

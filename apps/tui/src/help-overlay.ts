@@ -55,6 +55,11 @@ export function buildHelpLines(): string[] {
   lines.push('           swap 0.001 ETH to USDC   (natural)');
   lines.push('           supported: ETH, WETH, USDC');
   lines.push('');
+  lines.push('  transfer <amount> <token> to <recipient>   send to address/ENS');
+  lines.push('     e.g.  transfer 1 USDC vitalik.eth');
+  lines.push('           transfer 0.001 ETH to 0xAbc…123');
+  lines.push('     aliases: send, pay');
+  lines.push('');
   for (const ln of buildAgentLines()) lines.push(ln);
   lines.push('');
   lines.push('  keys:  [G] grant SpendCap (required before first audit)');
