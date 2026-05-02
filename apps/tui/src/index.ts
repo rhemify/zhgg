@@ -1187,6 +1187,178 @@ async function dispatchTransferIntent(
   }
 }
 
+// ── Operator UX dispatchers (Phase 3) ────────────────────────────────────────
+//
+// Read-only inspections + the explicit `mint` write. None of these go
+// through the audit/payment FLOW panel — they don't exercise that
+// pipeline. Each helper from `operator-intents.ts` returns audit rows;
+// we just push them and update `runningCommand` for the agents panel.
+
+async function dispatchOperatorAgents(): Promise<void> {
+  runningCommand = 'audit' // light AGENTS panel briefly
+  const rows = await listAgents({
+    agentNftAddress: process.env.AGENT_NFT_ADDRESS as Address | undefined,
+    zgRpcUrl: process.env.ZG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai',
+  })
+  for (const r of rows) pushAudit(r.agent, r.event, r.ok)
+  runningCommand = 'idle'
+  render()
+}
+
+async function dispatchOperatorBalances(): Promise<void> {
+  // Build a Base Sepolia client from env directly when liveBundle is
+  // unavailable (e.g. user invoked `balances` before pasting all the
+  // deploy addresses). Falls back to the user's known wallet address.
+  const baseRpc = process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org'
+  const basePub = liveBundle?.basePub ?? createPublicClient({ transport: http(baseRpc) })
+  const acct = liveBundle?.baseAccount.address
+    ?? (process.env.MINT_AGENT_ADDRESS as Address | undefined)
+    ?? '0x557E1E07652B75ABaA667223B11704165fC94d09' as Address
+  const rows = await showBalances({
+    account: acct,
+    zgRpcUrl: process.env.ZG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai',
+    basePublicClient: basePub,
+  })
+  for (const r of rows) pushAudit(r.agent, r.event, r.ok)
+  render()
+}
+
+async function dispatchOperatorBlock(): Promise<void> {
+  const baseRpc = process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org'
+  const basePub = liveBundle?.basePub ?? createPublicClient({ transport: http(baseRpc) })
+  const rows = await showBlock({
+    zgRpcUrl: process.env.ZG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai',
+    basePublicClient: basePub,
+  })
+  for (const r of rows) pushAudit(r.agent, r.event, r.ok)
+  render()
+}
+
+async function dispatchOperatorMint(intent: Extract<IntentCommand, { kind: 'mint' }>): Promise<void> {
+  const pkRaw = process.env.MINT_AGENT_PRIVATE_KEY
+  if (!pkRaw || !/^0x[0-9a-fA-F]{64}$/.test(pkRaw)) {
+    pushAudit('mint', 'MINT_AGENT_PRIVATE_KEY missing/invalid', 'err')
+    return
+  }
+  runningCommand = 'audit'
+  pushAudit('mint', `minting ${intent.role}-agent iNFT on 0G…`, 'info')
+  render()
+
+  const account = privateKeyToAccount(pkRaw as Hex)
+  const zgRpc = process.env.ZG_RPC_URL ?? 'https://evmrpc-testnet.0g.ai'
+  const zgTransport = http(zgRpc)
+  const zgPub = createPublicClient({ transport: zgTransport })
+  const zgWallet = createWalletClient({ account, transport: zgTransport })
+
+  const r = await dispatchMint({
+    role: intent.role as Parameters<typeof dispatchMint>[0]['role'],
+    account: account.address,
+    agentNftAddress: process.env.AGENT_NFT_ADDRESS as Address | undefined,
+    zgPublicClient: zgPub,
+    zgWalletClient: zgWallet,
+    onProgress: (row: OpRow) => pushAudit(row.agent, row.event, row.ok),
+  })
+  if (!r.ok) {
+    pushAudit('mint', `mint failed: ${r.reason}`.slice(0, 160), 'err')
+  } else {
+    pushAudit('mint', `mint.confirmed tokenId=${r.result.tokenId} tx=${r.result.txHash.slice(0, 12)}…`, 'ok')
+  }
+  runningCommand = 'idle'
+  render()
+}
+
+async function dispatchOperatorCancel(): Promise<void> {
+  if (runningCommand === 'idle') {
+    pushAudit('cancel', 'no command in flight', 'info')
+    render()
+    return
+  }
+  pushAudit('cancel', `cancelling ${runningCommand} (in-flight tx will still mine if already submitted)`, 'info')
+  runningCommand = 'idle'
+  render()
+}
+
+// ── KeeperHub direct-API dispatcher (Phase 2) ────────────────────────────────
+//
+// Pure HTTPS path — does NOT require liveBundle. Auth is via KH_API_KEY
+// env. The dispatcher refuses with a real error when the key is missing
+// (no synthetic fallback) and surfaces real KH HTTP errors verbatim.
+
+async function dispatchKHIntent(
+  intent:
+    | Extract<IntentCommand, { kind: 'kh-trigger' }>
+    | Extract<IntentCommand, { kind: 'kh-status' }>
+    | Extract<IntentCommand, { kind: 'kh-runs' }>
+    | Extract<IntentCommand, { kind: 'kh-cap' }>,
+): Promise<void> {
+  const apiKey = process.env.KH_API_KEY
+  if (!apiKey || apiKey.length === 0) {
+    pushAudit('kh', 'KH_API_KEY missing — paste kh_… into .env, then restart TUI', 'err')
+    setToast('err', 'KH_API_KEY required')
+    return
+  }
+  const baseUrl = process.env.KEEPERHUB_API_URL && process.env.KEEPERHUB_API_URL.length > 0
+    ? process.env.KEEPERHUB_API_URL
+    : 'https://app.keeperhub.com'
+
+  // Build the typed call. Note: keeperhub-agent uses snake_case kinds
+  // (workflow_trigger, etc.) and returns a discriminated union with
+  // its own `kind` tag — different from the parser's `kh-trigger` shape.
+  const call: KHCall =
+    intent.kind === 'kh-trigger'
+      ? { kind: 'workflow_trigger', workflowId: intent.workflowId, inputs: intent.inputs }
+      : intent.kind === 'kh-status'
+        ? { kind: 'workflow_status', executionId: intent.executionId }
+        : intent.kind === 'kh-runs'
+          ? { kind: 'analytics_runs', status: intent.status, range: intent.range }
+          : { kind: 'spend_cap' }
+
+  const label = intent.kind.replace('kh-', '')
+  pushAudit('kh', `${label} call → ${baseUrl}`, 'info')
+  render()
+
+  // Override env so executeKHCall picks up the bearer + baseUrl from
+  // OUR validated values (we already refused above on missing key).
+  const result = await executeKHCall(call, {
+    env: { ...process.env, KH_API_KEY: apiKey, KEEPERHUB_API_URL: baseUrl } as NodeJS.ProcessEnv,
+  })
+
+  if (!result.ok) {
+    const e = result.error
+    pushAudit('kh', `${label} failed (${e.kind}): ${e.reason.slice(0, 140)}`, 'err')
+    setToast('err', `kh ${label} ${e.kind}`)
+    render()
+    return
+  }
+
+  // Discriminate on the result's kind (matches the call's kind 1:1).
+  const out = result.value
+  if (out.kind === 'spend_cap') {
+    const sc = out.value
+    pushAudit(
+      'kh',
+      `cap=${sc.capWei ?? '?'}  remaining=${sc.remainingWei ?? '?'}  reset=${sc.resetAt ?? '?'}`,
+      'ok',
+    )
+  } else if (out.kind === 'analytics_runs') {
+    const list = out.value
+    pushAudit('kh', `runs returned ${list.length} entries`, 'ok')
+    for (const r of list.slice(0, 5)) {
+      const txRaw = r.transactionHash
+      const tx = typeof txRaw === 'string' ? txRaw.slice(0, 12) + '…' : ''
+      pushAudit('kh', `  ${r.status.padEnd(9)} ${r.executionId.slice(0, 18)} ${tx}`, 'info')
+    }
+  } else if (out.kind === 'workflow_trigger') {
+    const t = out.value
+    pushAudit('kh', `triggered  executionId=${t.executionId ?? '?'} status=${t.status ?? '?'}`, 'ok')
+  } else if (out.kind === 'workflow_status') {
+    const s = out.value
+    pushAudit('kh', `status=${s.status ?? '?'} progress=${s.progress ?? '?'}%`, 'ok')
+    receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+  }
+  render()
+}
+
 // ── SpendCap [G] grant flow ──────────────────────────────────────────────────
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
@@ -1315,6 +1487,17 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'ask-oracle') void dispatchAskOracleIntent(parsed)
     else if (parsed.kind === 'swap') void dispatchSwapIntent(parsed)
     else if (parsed.kind === 'transfer') void dispatchTransferIntent(parsed)
+    // Phase 3 operator UX
+    else if (parsed.kind === 'agents') void dispatchOperatorAgents()
+    else if (parsed.kind === 'balances') void dispatchOperatorBalances()
+    else if (parsed.kind === 'block') void dispatchOperatorBlock()
+    else if (parsed.kind === 'mint') void dispatchOperatorMint(parsed)
+    else if (parsed.kind === 'cancel') void dispatchOperatorCancel()
+    // Phase 2 KH direct API — auth via KH_API_KEY env, no liveBundle gate
+    else if (parsed.kind === 'kh-trigger' || parsed.kind === 'kh-status'
+          || parsed.kind === 'kh-runs'    || parsed.kind === 'kh-cap') {
+      void dispatchKHIntent(parsed)
+    }
     return true
   }
   // Backspace (0x7f / 0x08).
