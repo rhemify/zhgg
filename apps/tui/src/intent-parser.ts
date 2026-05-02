@@ -93,6 +93,18 @@ export type IntentCommand =
   /// trigger via x402). `kh inspect` narrows to one entry for full detail.
   | { kind: 'kh-discover'; search?: string }
   | { kind: 'kh-inspect'; workflowId: string }
+  /// Slice X — `kh hire <slugOrId> [<jsonInputs>]`: closes the
+  /// agentic-commerce loop by paying via x402 and invoking the
+  /// MCP-callable workflow at `/api/mcp/workflows/<slug>/call`.
+  /// The dispatcher first runs `kh inspect <slugOrId>` to read the
+  /// workflow's `listedSlug`, `priceUsdcPerCall`, and `inputSchema`,
+  /// validates required[] keys, then settles via
+  /// `payViaKeeperHubMarketplace`. Refuses honestly when:
+  ///   - the workflow is discoverable but has `listedSlug === null`
+  ///     (not yet slug-callable),
+  ///   - any required input key is missing,
+  ///   - the buyer wallet config (Turnkey-custodied) is not set in env.
+  | { kind: 'kh-hire'; slugOrId: string; inputs?: Record<string, unknown> }
   /// Operator UX intents (Phase 3). Read-only inspections + the explicit
   /// `mint <role>` write. Each is dispatched directly from the TUI's
   /// keypress handler; none of them touches the orchestrator FLOW panel
@@ -835,6 +847,45 @@ export function parseIntent(input: string): IntentCommand {
       }
       return { kind: 'kh-inspect', workflowId };
     }
+    if (sub === 'hire') {
+      // `kh hire <slugOrId> [<jsonInputs>]` — the close-the-loop x402
+      // call. <slugOrId> may be the workflow's `listedSlug` (preferred,
+      // since it's the actual x402 path segment) or its `id` (the
+      // dispatcher resolves id → slug via `kh inspect` and refuses
+      // honestly when `listedSlug === null`). Inputs are an optional
+      // top-level JSON object — mirrors `kh trigger` parsing so users
+      // can type `kh hire mcp-test {"address":"0x…"}`.
+      const slugOrId = parts[2];
+      if (!slugOrId) {
+        return {
+          kind: 'unknown',
+          raw: trimmed,
+          reason: 'kh hire needs <slugOrId> [<jsonInputs>] (e.g. "kh hire mcp-test {\\"address\\":\\"0x…\\"}")',
+        };
+      }
+      let inputs: Record<string, unknown> | undefined;
+      if (parts.length > 3) {
+        const inputsRaw = parts.slice(3).join(' ');
+        try {
+          const v = JSON.parse(inputsRaw);
+          if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+            return {
+              kind: 'unknown',
+              raw: trimmed,
+              reason: `kh hire inputs must be a JSON object, got ${Array.isArray(v) ? 'array' : typeof v}`,
+            };
+          }
+          inputs = v as Record<string, unknown>;
+        } catch (e) {
+          return {
+            kind: 'unknown',
+            raw: trimmed,
+            reason: `kh hire inputs JSON parse error: ${(e as Error).message}`,
+          };
+        }
+      }
+      return { kind: 'kh-hire', slugOrId, inputs };
+    }
     if (sub === 'runs' || sub === 'cap') {
       // Endpoints documented in kh-api.md but NOT deployed for kh_ bearer
       // (verified live 2026-05-02 — both 401/404 on app.keeperhub.com).
@@ -848,7 +899,7 @@ export function parseIntent(input: string): IntentCommand {
     return {
       kind: 'unknown',
       raw: trimmed,
-      reason: `kh: unknown sub-verb "${sub}" — supported: discover, inspect, workflows, integrations, trigger, status`,
+      reason: `kh: unknown sub-verb "${sub}" — supported: discover, inspect, hire, workflows, integrations, trigger, status`,
     };
   }
 

@@ -39,6 +39,8 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { runCrossAgentDemo, type TranscriptStep } from '../../demo/src/cross-agent.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.js';
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
+import { payViaKeeperHubMarketplace } from '../../demo/src/keeperhub-marketplace.js';
+import { resolveCallableSlug, validateRequiredInputs } from './kh-hire-validate.js';
 import {
   commitPlan as axiomCommitCall,
   revealPlan as axiomRevealCall,
@@ -819,6 +821,7 @@ function formatStaged(intent: IntentCommand): string {
     case 'kh-integrations': return `kh integrations`
     case 'kh-discover': return `kh discover${intent.search ? ` "${intent.search}"` : ''}`
     case 'kh-inspect': return `kh inspect ${intent.workflowId}`
+    case 'kh-hire': return `kh hire ${intent.slugOrId}${intent.inputs ? ' (+inputs)' : ''}`
     case 'axiom-commit': return `commit ${intent.target} (#${intent.tokenId}) plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
     case 'axiom-reveal': return `reveal ${shortHash(intent.commitId)} plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
     case 'acp-create': return `acp create ${intent.target} (#${intent.tokenId}) ${intent.usdcAmount} USDC`
@@ -2214,6 +2217,190 @@ async function dispatchKHIntent(
   render()
 }
 
+// ── Slice X — `kh hire` close-the-loop dispatcher ───────────────────────────
+//
+// Closes the agentic-commerce loop: an iNFT in this TUI hires another
+// agent's MCP-callable workflow on KeeperHub via x402. NO MOCKS — the
+// path is:
+//   1. `kh inspect <slugOrId>` — fetches `listedSlug`, `priceUsdcPerCall`,
+//      `inputSchema` from `/api/mcp/workflows`. Refuses on `listedSlug ===
+//      null` (workflow is discoverable but not yet slug-callable).
+//   2. Validate required[] keys against operator-supplied JSON inputs;
+//      refuse with the first missing key surfaced by name.
+//   3. `payViaKeeperHubMarketplace` — the existing x402 round-trip.
+//      Settles EIP-3009 USDC on Base Sepolia via KH's facilitator (30%
+//      to KH, 70% to the workflow author). Returns the marketplace
+//      tx hash + the workflow's response body.
+//   4. Push three audit rows (intent, payment tx, truncated response)
+//      and surface the FULL response JSON in the receipt panel.
+//
+// Honest refusal contract: if any required env var is missing we surface
+// the EXACT names so the operator can fix .env and retry. We never
+// fabricate a tx hash or synthesise a successful response — every byte
+// comes off the wire.
+
+async function dispatchKHHireIntent(
+  intent: Extract<IntentCommand, { kind: 'kh-hire' }>,
+): Promise<void> {
+  const apiKey = process.env.KH_API_KEY
+  if (!apiKey || apiKey.length === 0) {
+    pushAudit('kh', 'KH_API_KEY missing — paste kh_… into .env, then restart TUI', 'err')
+    setToast('err', 'KH_API_KEY required')
+    render()
+    return
+  }
+  const baseUrl = process.env.KEEPERHUB_API_URL && process.env.KEEPERHUB_API_URL.length > 0
+    ? process.env.KEEPERHUB_API_URL
+    : 'https://app.keeperhub.com'
+
+  // Buyer wallet config — Turnkey-custodied agentic wallet. Same shape
+  // as the AUTHOR config (the only KH-provisioned wallet shape), so we
+  // reuse those env names. `KH_API_KEY` alone CANNOT pay — x402 needs a
+  // signing wallet. `BASE_SEPOLIA_PRIVATE_KEY` ALSO can't replace this:
+  // KH's signing service speaks HMAC over a Turnkey sub-org, not a raw
+  // EVM key. If the operator hasn't provisioned a wallet, we refuse
+  // honestly with the named missing keys (NEVER fall back synthetic).
+  const subOrgId = process.env.KH_AUTHOR_SUBORG_ID
+  const walletAddress = process.env.KH_AUTHOR_WALLET
+  const hmacSecret = process.env.KH_AUTHOR_HMAC_SECRET
+  const missing: string[] = []
+  if (!subOrgId || subOrgId.length === 0) missing.push('KH_AUTHOR_SUBORG_ID')
+  if (!walletAddress || walletAddress.length === 0) missing.push('KH_AUTHOR_WALLET')
+  if (!hmacSecret || hmacSecret.length === 0) missing.push('KH_AUTHOR_HMAC_SECRET')
+  if (missing.length > 0) {
+    pushAudit(
+      'kh',
+      `kh hire blocked — buyer wallet env missing: ${missing.join(', ')} (provision via 'npx @keeperhub/wallet add')`,
+      'err',
+    )
+    setToast('err', `missing: ${missing[0]}`)
+    render()
+    return
+  }
+  if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress!)) {
+    pushAudit('kh', `KH_AUTHOR_WALLET malformed — expected 0x + 40 hex chars`, 'err')
+    setToast('err', 'KH_AUTHOR_WALLET malformed')
+    render()
+    return
+  }
+
+  // ── Step 1: inspect <slugOrId> to discover listedSlug + price + schema ──
+  pushAudit('kh', `hire ${intent.slugOrId} → inspect (discover slug + price)`, 'info')
+  render()
+  const inspectResult = await executeKHCall(
+    { kind: 'inspect', workflowId: intent.slugOrId },
+    { env: { ...process.env, KH_API_KEY: apiKey, KEEPERHUB_API_URL: baseUrl } as NodeJS.ProcessEnv },
+  )
+  if (!inspectResult.ok) {
+    const e = inspectResult.error
+    pushAudit('kh', `hire failed (inspect ${e.kind}): ${e.reason.slice(0, 140)}`, 'err')
+    setToast('err', `kh hire ${e.kind}`)
+    render()
+    return
+  }
+  let workflow = inspectResult.value.kind === 'inspect' ? inspectResult.value.value : null
+
+  // The inspect helper looks up by `id`. If the operator passed a slug,
+  // it'll miss — fall back to a discover-then-find-by-listedSlug pass so
+  // both shapes (`kh hire <id>` and `kh hire <slug>`) work uniformly.
+  if (!workflow) {
+    const discoverResult = await executeKHCall(
+      { kind: 'discover', filters: { limit: 1000 } },
+      { env: { ...process.env, KH_API_KEY: apiKey, KEEPERHUB_API_URL: baseUrl } as NodeJS.ProcessEnv },
+    )
+    if (!discoverResult.ok) {
+      const e = discoverResult.error
+      pushAudit('kh', `hire failed (discover ${e.kind}): ${e.reason.slice(0, 140)}`, 'err')
+      setToast('err', `kh hire ${e.kind}`)
+      render()
+      return
+    }
+    if (discoverResult.value.kind === 'discover') {
+      const found = discoverResult.value.value.find(
+        (w) => w.listedSlug === intent.slugOrId || w.id === intent.slugOrId,
+      )
+      workflow = found ?? null
+    }
+  }
+
+  if (!workflow) {
+    pushAudit(
+      'kh',
+      `hire failed — workflow "${intent.slugOrId}" not in MCP-callable catalog (try 'kh discover')`,
+      'err',
+    )
+    setToast('err', 'workflow not found')
+    render()
+    return
+  }
+
+  // Honest refusal: discoverable but not slug-callable.
+  const slugResolution = resolveCallableSlug(workflow)
+  if (!slugResolution.ok) {
+    pushAudit(
+      'kh',
+      `hire refused — workflow ${slugResolution.workflowId.slice(0, 14)}… is discoverable but not yet slug-callable; register a slug on KH`,
+      'err',
+    )
+    setToast('err', 'no listedSlug — not callable')
+    render()
+    return
+  }
+  const slug = slugResolution.slug
+  const price = workflow.priceUsdcPerCall ?? '0'
+
+  // ── Step 2: validate required[] keys against operator-supplied inputs ──
+  const validation = validateRequiredInputs(workflow, intent.inputs)
+  if (!validation.ok) {
+    pushAudit(
+      'kh',
+      `hire refused — inputs missing required key "${validation.missing}" (schema requires: ${validation.required.join(', ')})`,
+      'err',
+    )
+    setToast('err', `missing input: ${validation.missing}`)
+    render()
+    return
+  }
+  const provided = intent.inputs ?? {}
+  const requiredCount = workflow.inputSchema?.required?.length ?? 0
+
+  // ── Step 3: real x402 settlement via KeeperHub marketplace ──
+  pushAudit('kh', `hire.intent ${slug} $${price} (${requiredCount} required keys validated)`, 'info')
+  render()
+  try {
+    const settlement = await payViaKeeperHubMarketplace(
+      {
+        subOrgId: subOrgId!,
+        walletAddress: walletAddress! as `0x${string}`,
+        hmacSecret: hmacSecret!,
+        marketplaceSlug: slug,
+        baseUrl,
+      },
+      provided,
+    )
+    pushAudit('kh', `hire.payment ${settlement.paymentTxHash} (${settlement.network})`, 'ok')
+
+    // Truncate the response to 160 chars in the audit row; the receipt
+    // panel keeps the full JSON below.
+    const responseJson = JSON.stringify(settlement.marketplaceResponse)
+    const truncated = responseJson.length > 160
+      ? `${responseJson.slice(0, 160)}…`
+      : responseJson
+    pushAudit('kh', `hire.response ${truncated}`, 'ok')
+
+    receiptEnvelope = {
+      ...receiptEnvelope,
+      status: 'settled',
+    }
+    setToast('ok', `kh hire ${slug} settled`)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    pushAudit('kh', `hire failed: ${msg.slice(0, 140)}`, 'err')
+    setToast('err', `kh hire failed`)
+  }
+  render()
+}
+
 // ── SpendCap [G] grant flow ──────────────────────────────────────────────────
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
@@ -2364,6 +2551,10 @@ function handleIntentKey(key: string): boolean {
           || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations'
           || parsed.kind === 'kh-discover' || parsed.kind === 'kh-inspect') {
       void dispatchKHIntent(parsed)
+    }
+    // Slice X — `kh hire`: pay-and-invoke via x402 (close-the-loop)
+    else if (parsed.kind === 'kh-hire') {
+      void dispatchKHHireIntent(parsed)
     }
     return true
   }
