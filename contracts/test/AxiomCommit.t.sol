@@ -17,7 +17,9 @@ contract AxiomCommitTest is Test {
     event PlanRevealed(uint256 indexed tokenId, bytes32 indexed commitId, bytes plan, bytes result);
 
     function setUp() public {
-        axiom = new AxiomCommit();
+        // Permissionless mode (agentNft = 0) preserves the existing
+        // test surface; iNFT-gated tests live in AxiomCommitGated.t.sol.
+        axiom = new AxiomCommit(address(0));
     }
 
     function _planHash() internal pure returns (bytes32) {

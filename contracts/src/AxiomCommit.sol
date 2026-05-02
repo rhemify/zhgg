@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+interface IAgentNFTOwner {
+    function ownerOf(uint256 tokenId) external view returns (address);
+}
+
 /// @title  AxiomCommit — pre-commit / reveal log for agent execution plans
 /// @notice Implements Steps 3 & 10 of the zhgg always-active audit loop.
 ///         An agent commits to a `planHash` BEFORE any external call (Step
@@ -17,7 +21,28 @@ pragma solidity ^0.8.24;
 ///         idempotent (RPC retry safe). Storage cost is one packed SSTORE
 ///         per commit (`committer` + `blockNumber` + `revealed` flag fit
 ///         in a single 256-bit slot; `planHash` is in a parallel mapping).
+///
+///         Permissioning: by default, ONLY the iNFT owner of `tokenId`
+///         (or an explicitly authorized operator) can `commitPlan` on
+///         that token. This stops the attribution-spam vector flagged
+///         in the Phase 13 review where any address could pre-commit
+///         garbage hashes against any popular agent's tokenId, polluting
+///         off-chain audit indexers. When `agentNft == address(0)`,
+///         the contract reverts to permissionless mode (useful for
+///         testnet bring-up before the iNFT contract is deployed) and
+///         emits `PermissionlessMode` once at deploy.
 contract AxiomCommit {
+    /// @notice The iNFT contract `commitPlan` queries for ownership.
+    ///         When zero, the contract is permissionless (early-deploy
+    ///         convenience).
+    IAgentNFTOwner public immutable agentNft;
+
+    /// @notice Per-tokenId operator allowlist. Owner can authorize an
+    ///         agent's runtime address (e.g. an EOA the audit agent
+    ///         signs from) to commit on the iNFT's behalf without
+    ///         transferring ownership. `operatorOf[tokenId][operator]
+    ///         = true` lets that operator call `commitPlan(tokenId, ...)`.
+    mapping(uint256 => mapping(address => bool)) public operatorOf;
     /// @notice Upper bound on `plan` and `result` bytes accepted by
     ///         `revealPlan`. Each is non-indexed in `PlanRevealed`, so
     ///         unbounded reveals can blow past block gas. 8 KB covers
@@ -59,12 +84,47 @@ contract AxiomCommit {
     error EmptyPlan();
     error PlanTooLarge(uint256 size, uint256 max);
     error ResultTooLarge(uint256 size, uint256 max);
+    error NotAuthorizedToCommit(uint256 tokenId, address caller);
+    error NotTokenOwner(uint256 tokenId, address caller);
 
-    /// @notice Commit to a plan hash for `tokenId`.
+    event OperatorSet(uint256 indexed tokenId, address indexed operator, bool allowed);
+    event PermissionlessMode(address indexed deployer);
+
+    constructor(address agentNft_) {
+        agentNft = IAgentNFTOwner(agentNft_);
+        if (agentNft_ == address(0)) emit PermissionlessMode(msg.sender);
+    }
+
+    /// @notice iNFT owner authorizes (or revokes) an operator address
+    ///         that may call `commitPlan` on this `tokenId`. Useful for
+    ///         agents whose runtime signer is distinct from the iNFT
+    ///         owner (the common case — owner is an EOA holding the
+    ///         iNFT, runtime is a hot key on the audit/oracle server).
+    function setOperator(uint256 tokenId, address operator, bool allowed) external {
+        if (address(agentNft) != address(0)) {
+            address tokenOwner = agentNft.ownerOf(tokenId);
+            if (msg.sender != tokenOwner) revert NotTokenOwner(tokenId, msg.sender);
+        }
+        operatorOf[tokenId][operator] = allowed;
+        emit OperatorSet(tokenId, operator, allowed);
+    }
+
+    /// @notice Commit to a plan hash for `tokenId`. Caller MUST be the
+    ///         iNFT owner OR an authorized operator (set via
+    ///         `setOperator`). When `agentNft == 0`, runs permissionlessly.
     /// @param  tokenId   iNFT whose agent is about to act.
     /// @param  planHash  keccak256(canonical plan bytes). Caller computes.
     /// @return commitId  Unique handle the caller passes back at reveal.
     function commitPlan(uint256 tokenId, bytes32 planHash) external returns (bytes32 commitId) {
+        if (address(agentNft) != address(0)) {
+            // Owner OR delegated operator OR self (in case wallet is
+            // both owner and committer). Reverting here is the only
+            // mutation gate — the rest of the flow is downstream.
+            address tokenOwner = agentNft.ownerOf(tokenId);
+            if (msg.sender != tokenOwner && !operatorOf[tokenId][msg.sender]) {
+                revert NotAuthorizedToCommit(tokenId, msg.sender);
+            }
+        }
         commitId = keccak256(abi.encodePacked(tokenId, planHash, msg.sender, block.number));
         Commit storage existing = _commits[commitId];
         // Idempotent in same block: re-committing the same (tokenId,

@@ -55,8 +55,9 @@ contract Deploy0GContracts is Script {
         // AxiomCommit lives on the same chain as the iNFT so an audit
         // agent can commit a plan hash and pin its memoryRoot in the
         // same wallet/chain context (Steps 3 + 9 of the always-active
-        // loop). Zero-arg constructor — append-only commit log.
-        axiom = new AxiomCommit();
+        // loop). Wired to the iNFT for owner-only `commitPlan` —
+        // operators authorized via `setOperator(tokenId, addr, true)`.
+        axiom = new AxiomCommit(address(nft));
 
         vm.stopBroadcast();
 
