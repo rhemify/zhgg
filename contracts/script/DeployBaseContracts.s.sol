@@ -5,6 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {SpendCap} from "../src/SpendCap.sol";
 import {FeeSplitter} from "../src/FeeSplitter.sol";
 import {AgentReceiverWalletFactory} from "../src/AgentReceiverWalletFactory.sol";
+import {OwnerMirror} from "../src/OwnerMirror.sol";
 
 /// @title  DeployBaseContracts
 /// @notice Deploys the Base Sepolia pair: SpendCap (ERC-7715-style cap
@@ -51,7 +52,8 @@ contract DeployBaseContracts is Script {
         returns (
             SpendCap spendCap,
             FeeSplitter feeSplitter,
-            AgentReceiverWalletFactory receiverFactory
+            AgentReceiverWalletFactory receiverFactory,
+            OwnerMirror ownerMirror
         )
     {
         require(block.chainid == 84532, "Wrong chain: expected Base Sepolia (84532)");
@@ -64,10 +66,19 @@ contract DeployBaseContracts is Script {
         require(zhgg != address(0), "ZHGG_TREASURY unset");
         require(commons != address(0), "COMMONS_TREASURY unset");
 
-        // Optional: only deploy the factory when the operator has a
-        // Base-resident `ownerOf(uint256)` source ready. Empty/zero
-        // skips it cleanly.
-        address agentNftMirror = vm.envOr("AGENT_NFT_BASE_MIRROR", address(0));
+        // OwnerMirror is the Base-resident `ownerOf(uint256)` source.
+        // The deployer is the initial attestor (typically the protocol
+        // multisig / hot wallet that ingests iNFT-side Transfer events
+        // on 0G Galileo and replays them onto Base via `setOwner`).
+        // The attestor address is overridable via env; defaults to the
+        // deployer.
+        address attestor = vm.envOr("OWNER_MIRROR_ATTESTOR", address(0));
+
+        // Whether to wire the receiver factory to the just-deployed
+        // OwnerMirror (default true) or skip it. Skipping is only
+        // useful for staged deploys where the factory will be deployed
+        // later against a different ownerOf source.
+        bool wireFactory = vm.envOr("DEPLOY_RECEIVER_FACTORY", true);
 
         uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
         address deployer;
@@ -81,8 +92,9 @@ contract DeployBaseContracts is Script {
 
         spendCap = new SpendCap();
         feeSplitter = new FeeSplitter(kh, zhgg, commons);
-        if (agentNftMirror != address(0)) {
-            receiverFactory = new AgentReceiverWalletFactory(agentNftMirror, address(feeSplitter));
+        ownerMirror = new OwnerMirror(attestor != address(0) ? attestor : deployer);
+        if (wireFactory) {
+            receiverFactory = new AgentReceiverWalletFactory(address(ownerMirror), address(feeSplitter));
         }
 
         vm.stopBroadcast();
@@ -97,11 +109,13 @@ contract DeployBaseContracts is Script {
         console2.log("  kh recipient :", kh);
         console2.log("  zhgg treas.  :", zhgg);
         console2.log("  commons rec. :", commons);
+        console2.log("OwnerMirror    :", address(ownerMirror));
+        console2.log("  attestor     :", attestor != address(0) ? attestor : deployer);
         if (address(receiverFactory) != address(0)) {
             console2.log("ReceiverFactory:", address(receiverFactory));
-            console2.log("  agentNft mirror:", agentNftMirror);
+            console2.log("  ownerOf src  :", address(ownerMirror));
         } else {
-            console2.log("ReceiverFactory: skipped (AGENT_NFT_BASE_MIRROR unset)");
+            console2.log("ReceiverFactory: skipped (DEPLOY_RECEIVER_FACTORY=false)");
         }
         console2.log("");
         console2.log("Explorer URLs:");
@@ -115,6 +129,7 @@ contract DeployBaseContracts is Script {
         console2.log("Save these as env vars:");
         console2.log("  SPEND_CAP_ADDRESS=%s", address(spendCap));
         console2.log("  FEE_SPLITTER_ADDRESS=%s", address(feeSplitter));
+        console2.log("  OWNER_MIRROR_ADDRESS=%s", address(ownerMirror));
         if (address(receiverFactory) != address(0)) {
             console2.log("  RECEIVER_FACTORY_ADDRESS=%s", address(receiverFactory));
         }
