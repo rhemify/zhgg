@@ -817,6 +817,8 @@ function formatStaged(intent: IntentCommand): string {
     case 'kh-status': return `kh status ${intent.executionId}`
     case 'kh-workflows': return `kh workflows`
     case 'kh-integrations': return `kh integrations`
+    case 'kh-discover': return `kh discover${intent.search ? ` "${intent.search}"` : ''}`
+    case 'kh-inspect': return `kh inspect ${intent.workflowId}`
     case 'axiom-commit': return `commit ${intent.target} (#${intent.tokenId}) plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
     case 'axiom-reveal': return `reveal ${shortHash(intent.commitId)} plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`
     case 'acp-create': return `acp create ${intent.target} (#${intent.tokenId}) ${intent.usdcAmount} USDC`
@@ -2098,7 +2100,9 @@ async function dispatchKHIntent(
     | Extract<IntentCommand, { kind: 'kh-trigger' }>
     | Extract<IntentCommand, { kind: 'kh-status' }>
     | Extract<IntentCommand, { kind: 'kh-workflows' }>
-    | Extract<IntentCommand, { kind: 'kh-integrations' }>,
+    | Extract<IntentCommand, { kind: 'kh-integrations' }>
+    | Extract<IntentCommand, { kind: 'kh-discover' }>
+    | Extract<IntentCommand, { kind: 'kh-inspect' }>,
 ): Promise<void> {
   const apiKey = process.env.KH_API_KEY
   if (!apiKey || apiKey.length === 0) {
@@ -2113,14 +2117,20 @@ async function dispatchKHIntent(
   // Build the typed call. Note: keeperhub-agent uses snake_case kinds
   // (workflow_trigger, etc.) and returns a discriminated union with
   // its own `kind` tag — different from the parser's `kh-trigger` shape.
-  const call: KHCall =
-    intent.kind === 'kh-trigger'
-      ? { kind: 'workflow_trigger', workflowId: intent.workflowId, inputs: intent.inputs }
-      : intent.kind === 'kh-status'
-        ? { kind: 'workflow_status', executionId: intent.executionId }
-        : intent.kind === 'kh-workflows'
-          ? { kind: 'list_workflows' }
-          : { kind: 'list_integrations' }
+  let call: KHCall
+  if (intent.kind === 'kh-trigger') {
+    call = { kind: 'workflow_trigger', workflowId: intent.workflowId, inputs: intent.inputs }
+  } else if (intent.kind === 'kh-status') {
+    call = { kind: 'workflow_status', executionId: intent.executionId }
+  } else if (intent.kind === 'kh-workflows') {
+    call = { kind: 'list_workflows' }
+  } else if (intent.kind === 'kh-integrations') {
+    call = { kind: 'list_integrations' }
+  } else if (intent.kind === 'kh-discover') {
+    call = { kind: 'discover', filters: intent.search ? { search: intent.search } : undefined }
+  } else {
+    call = { kind: 'inspect', workflowId: intent.workflowId }
+  }
 
   const label = intent.kind.replace('kh-', '')
   pushAudit('kh', `${label} call → ${baseUrl}`, 'info')
@@ -2165,6 +2175,40 @@ async function dispatchKHIntent(
     const s = out.value
     pushAudit('kh', `status=${s.status ?? '?'} progress=${s.progress ?? '?'}%`, 'ok')
     receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
+  } else if (out.kind === 'discover') {
+    const list = out.value
+    pushAudit('kh', `marketplace: ${list.length} workflows surfaced`, 'ok')
+    for (const w of list.slice(0, 12)) {
+      const price = w.priceUsdcPerCall ? `$${w.priceUsdcPerCall}` : 'free'
+      pushAudit(
+        'kh',
+        `  ${w.id.slice(0, 14).padEnd(14)} ${price.padStart(5)}  ${w.name.slice(0, 60)}`,
+        'info',
+      )
+    }
+    if (list.length > 12) pushAudit('kh', `  …+${list.length - 12} more (refine: kh discover <search>)`, 'info')
+  } else if (out.kind === 'inspect') {
+    const w = out.value
+    if (!w) {
+      pushAudit('kh', 'inspect: workflow not found in public catalog', 'err')
+    } else {
+      pushAudit('kh', `inspect ${w.id}: ${w.name}`, 'ok')
+      pushAudit('kh', `  price: ${w.priceUsdcPerCall ? '$' + w.priceUsdcPerCall + ' USDC/call' : 'free'}`, 'info')
+      const desc = (w.description ?? '').replace(/\s+/g, ' ').slice(0, 100)
+      if (desc) pushAudit('kh', `  ${desc}${(w.description ?? '').length > 100 ? '…' : ''}`, 'info')
+      const required = w.inputSchema?.required ?? []
+      const allProps = Object.keys(w.inputSchema?.properties ?? {})
+      pushAudit('kh', `  required (${required.length}): ${required.join(', ') || '—'}`, 'info')
+      const optionalProps = allProps.filter((p) => !required.includes(p))
+      if (optionalProps.length > 0) {
+        pushAudit('kh', `  optional (${optionalProps.length}): ${optionalProps.join(', ').slice(0, 80)}`, 'info')
+      }
+      // Receipt panel gets the full schema for copy-paste into kh trigger
+      receiptEnvelope = {
+        ...receiptEnvelope,
+        status: 'settled',
+      }
+    }
   }
   render()
 }
@@ -2316,7 +2360,8 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'acp-release') void dispatchAcpReleaseIntent(parsed)
     // Phase 2 KH direct API — auth via KH_API_KEY env, no liveBundle gate
     else if (parsed.kind === 'kh-trigger' || parsed.kind === 'kh-status'
-          || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations') {
+          || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations'
+          || parsed.kind === 'kh-discover' || parsed.kind === 'kh-inspect') {
       void dispatchKHIntent(parsed)
     }
     return true

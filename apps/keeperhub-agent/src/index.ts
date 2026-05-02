@@ -28,6 +28,12 @@ import { triggerWorkflow } from './endpoints/workflow-trigger.js';
 import { getWorkflowStatus } from './endpoints/workflow-status.js';
 import { listWorkflows, type KHWorkflowSummary } from './endpoints/list-workflows.js';
 import { listIntegrations, type KHIntegrationSummary } from './endpoints/list-integrations.js';
+import {
+  discoverWorkflows,
+  inspectWorkflow,
+  type DiscoverFilters,
+  type KHPublicWorkflow,
+} from './endpoints/discover.js';
 import type { KHWorkflowExecution } from './types.js';
 
 // ─── Result + error envelope ─────────────────────────────────────────────
@@ -69,13 +75,17 @@ export type KHCall =
   | { kind: 'workflow_trigger'; workflowId: string; inputs?: Record<string, unknown> }
   | { kind: 'workflow_status'; executionId: string }
   | { kind: 'list_workflows' }
-  | { kind: 'list_integrations' };
+  | { kind: 'list_integrations' }
+  | { kind: 'discover'; filters?: DiscoverFilters }
+  | { kind: 'inspect'; workflowId: string };
 
 export type KHCallResult =
   | { kind: 'workflow_trigger'; value: KHWorkflowExecution }
   | { kind: 'workflow_status'; value: KHWorkflowExecution }
   | { kind: 'list_workflows'; value: KHWorkflowSummary[] }
-  | { kind: 'list_integrations'; value: KHIntegrationSummary[] };
+  | { kind: 'list_integrations'; value: KHIntegrationSummary[] }
+  | { kind: 'discover'; value: KHPublicWorkflow[] }
+  | { kind: 'inspect'; value: KHPublicWorkflow | null };
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -122,6 +132,16 @@ export async function executeKHCall(
       const r = await listIntegrations(client);
       if (!r.ok) return r;
       return { ok: true, value: { kind: 'list_integrations', value: r.value } };
+    }
+    case 'discover': {
+      const r = await discoverWorkflows(client, call.filters);
+      if (!r.ok) return r;
+      return { ok: true, value: { kind: 'discover', value: r.value } };
+    }
+    case 'inspect': {
+      const r = await inspectWorkflow(client, call.workflowId);
+      if (!r.ok) return r;
+      return { ok: true, value: { kind: 'inspect', value: r.value } };
     }
   }
 }
@@ -182,6 +202,7 @@ export type {
 } from './types.js';
 export type { KHWorkflowSummary } from './endpoints/list-workflows.js';
 export type { KHIntegrationSummary, KHIntegrationType } from './endpoints/list-integrations.js';
+export type { KHPublicWorkflow, DiscoverFilters } from './endpoints/discover.js';
 
 // ─── CLI entrypoint (one-shot) ───────────────────────────────────────────
 
@@ -224,8 +245,18 @@ async function main(): Promise<void> {
     call = { kind: 'list_workflows' };
   } else if (sub === 'integrations') {
     call = { kind: 'list_integrations' };
+  } else if (sub === 'discover') {
+    const search = rest.join(' ').trim() || undefined;
+    call = { kind: 'discover', filters: search ? { search } : undefined };
+  } else if (sub === 'inspect') {
+    const [workflowId] = rest;
+    if (!workflowId) {
+      console.error('usage: bun run keeperhub-agent inspect <workflowId>');
+      process.exit(2);
+    }
+    call = { kind: 'inspect', workflowId };
   } else {
-    console.error(`unknown subcommand: ${sub} — try trigger|status|workflows|integrations`);
+    console.error(`unknown subcommand: ${sub} — try trigger|status|workflows|integrations|discover|inspect`);
     process.exit(2);
   }
 

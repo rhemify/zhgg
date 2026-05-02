@@ -101,11 +101,15 @@ export function buildHelpLines(): string[] {
   lines.push('  cancel                  abort the in-flight dispatch');
   lines.push('  mint <role>             mint a new iNFT (audit|oracle|swap)');
   lines.push('');
+  lines.push('  kh discover [search]         browse public KH marketplace (≈85 wfs)');
+  lines.push('  kh inspect <wfId>            full inputSchema + price for one workflow');
   lines.push('  kh workflows                 list workflows visible to your org');
   lines.push('  kh integrations              list connected integrations (web3, etc)');
   lines.push('  kh trigger <wfId> [<json>]   fire saved KeeperHub workflow');
   lines.push('  kh status <executionId>      poll workflow run state');
-  lines.push('     e.g.  kh trigger wf-42 {"amount":"0.1"}');
+  lines.push('     e.g.  kh discover aave           → 6 Aave-related workflows');
+  lines.push('           kh inspect zaajy1vtnd…     → schema + price metadata');
+  lines.push('           kh trigger wf-42 {"x":1}');
   lines.push('     requires KH_API_KEY (kh_…); KEEPERHUB_API_URL optional');
   lines.push('');
   for (const ln of buildAgentLines()) lines.push(ln);

@@ -85,6 +85,14 @@ export type IntentCommand =
   | { kind: 'kh-status'; executionId: string }
   | { kind: 'kh-workflows' }
   | { kind: 'kh-integrations' }
+  /// Marketplace discovery — `/api/mcp/workflows` returns all publicly-
+  /// listed workflows across every KH org. As of probe 2026-05-02 this
+  /// surfaces ≈85 entries with full inputSchema + price metadata, which
+  /// turns the TUI into a discovery + delegation surface (an iNFT can
+  /// list services, pick one matching its capability gap, and pay-and-
+  /// trigger via x402). `kh inspect` narrows to one entry for full detail.
+  | { kind: 'kh-discover'; search?: string }
+  | { kind: 'kh-inspect'; workflowId: string }
   /// Operator UX intents (Phase 3). Read-only inspections + the explicit
   /// `mint <role>` write. Each is dispatched directly from the TUI's
   /// keypress handler; none of them touches the orchestrator FLOW panel
@@ -810,6 +818,23 @@ export function parseIntent(input: string): IntentCommand {
       }
       return { kind: 'kh-integrations' };
     }
+    if (sub === 'discover') {
+      // `kh discover` (no args) → list all. `kh discover aave` → search
+      // both name and description for "aave". The agent does the filter
+      // client-side after pulling all 85 entries.
+      const search = parts.slice(2).join(' ').trim();
+      return { kind: 'kh-discover', search: search.length > 0 ? search : undefined };
+    }
+    if (sub === 'inspect') {
+      const workflowId = parts[2];
+      if (!workflowId) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh inspect needs <workflowId>' };
+      }
+      if (parts.length > 3) {
+        return { kind: 'unknown', raw: trimmed, reason: 'kh inspect takes exactly one argument' };
+      }
+      return { kind: 'kh-inspect', workflowId };
+    }
     if (sub === 'runs' || sub === 'cap') {
       // Endpoints documented in kh-api.md but NOT deployed for kh_ bearer
       // (verified live 2026-05-02 — both 401/404 on app.keeperhub.com).
@@ -823,7 +848,7 @@ export function parseIntent(input: string): IntentCommand {
     return {
       kind: 'unknown',
       raw: trimmed,
-      reason: `kh: unknown sub-verb "${sub}" — supported: trigger, status, workflows, integrations`,
+      reason: `kh: unknown sub-verb "${sub}" — supported: discover, inspect, workflows, integrations, trigger, status`,
     };
   }
 
