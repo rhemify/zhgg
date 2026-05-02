@@ -192,18 +192,29 @@ export async function executePark(input: ParkInput): Promise<ParkResult> {
     return { ok: false, rows };
   }
   if (idle < requestedAtomic) {
+    // Reviewer flagged: parkIdle() deposits the FULL idle balance, but
+    // the operator typed a specific amount. Previously we'd warn-then-
+    // proceed, but that disconnected the user's stated intent from the
+    // on-chain effect. Refuse instead and surface the exact unblock —
+    // top up the receiver so idle ≥ requested, then re-dispatch.
     rows.push({
       agent: 'yield',
-      event: `park warn: receiver idle=${formatUnits(idle, decimals)} ${symbol} < requested ${amount} — parking ${formatUnits(idle, decimals)} (parkIdle deposits FULL idle)`,
-      ok: 'info',
+      event: `park blocked: receiver idle=${formatUnits(idle, decimals)} ${symbol} < requested ${amount} ${symbol}`,
+      ok: 'err',
     });
-  } else {
+    const shortBy = formatUnits(requestedAtomic - idle, decimals);
     rows.push({
       agent: 'yield',
-      event: `park.precheck idle=${formatUnits(idle, decimals)} ${symbol} (parkIdle deposits FULL idle)`,
+      event: `  unblock: transfer ${shortBy} ${symbol} ${receiver}, then re-run`,
       ok: 'info',
     });
+    return { ok: false, rows };
   }
+  rows.push({
+    agent: 'yield',
+    event: `park.precheck idle=${formatUnits(idle, decimals)} ${symbol} ≥ ${amount} ${symbol} requested (parkIdle deposits FULL idle)`,
+    ok: 'info',
+  });
 
   // 4. parkIdle is permissionless. Sim first to surface a pre-flight
   //    revert cleanly, then submit the real tx.

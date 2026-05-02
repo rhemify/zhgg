@@ -62,6 +62,7 @@ const AGENT_NFT_OWNER_ABI = parseAbi([
 
 const ERC20_APPROVE_ABI = parseAbi([
   'function approve(address spender, uint256 value) returns (bool)',
+  'function decimals() view returns (uint8)',
 ]);
 
 // ─── Shared types ───────────────────────────────────────────────────────
@@ -140,19 +141,41 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
     ok: 'info',
   });
 
-  // 2. Convert decimal amount to atomic. The mission specifies 6
-  //    decimals (USDC convention) verbatim — we don't probe decimals()
-  //    because that would silently accept a non-USDC token and produce
-  //    a wrong escrow budget. Operators wiring a non-6-decimals token
-  //    must adjust at the env layer.
+  // 2. Convert decimal amount to atomic. Probe the token's actual
+  //    decimals() at runtime so a non-USDC ERC-20 (8dp WBTC, 18dp DAI,
+  //    etc.) doesn't silently produce an escrow budget that's off by
+  //    orders of magnitude. The previous version hardcoded 6dp on the
+  //    USDC-only assumption — flagged by review as a footgun for any
+  //    operator who ever points ACP_PAYMENT_TOKEN at a different asset.
+  let tokenDecimals: number;
+  try {
+    tokenDecimals = (await input.zgPublicClient.readContract({
+      address: input.paymentToken,
+      abi: ERC20_APPROVE_ABI,
+      functionName: 'decimals',
+    })) as number;
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    emit({
+      agent: 'acp',
+      event: `acp.create.failed decimals() probe on ${shortAddr(input.paymentToken)}: ${reason}`.slice(0, 160),
+      ok: 'err',
+    });
+    return { ok: false, reason };
+  }
   let budgetAtomic: bigint;
   try {
-    budgetAtomic = parseUnits(input.usdcAmount, 6);
+    budgetAtomic = parseUnits(input.usdcAmount, tokenDecimals);
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     emit({ agent: 'acp', event: `acp.create.parse: ${reason}`.slice(0, 160), ok: 'err' });
     return { ok: false, reason };
   }
+  emit({
+    agent: 'acp',
+    event: `acp.create.budget ${input.usdcAmount} → ${budgetAtomic} atomic (${tokenDecimals}dp)`,
+    ok: 'info',
+  });
 
   // 3. createJob — evaluator passed as 0x0 so the contract rewrites it
   //    to msg.sender (per Solidity source line 147). This makes the
@@ -188,10 +211,12 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
       emit({ agent: 'acp', event: `acp.create.failed ${reason}`, ok: 'err' });
       return { ok: false, reason };
     }
-    // Recover jobId from the JobCreated event — sim.result returns the
-    // bigint directly but only via simulate; the real tx requires log
-    // parsing. We do BOTH (sim.result is a fast-path; logs are the
-    // ground truth) and trust the logs when they disagree.
+    // Recover jobId from the JobCreated event — the ONLY ground truth.
+    // We deliberately do NOT fall back to sim.result: simulation runs
+    // against pre-tx state, so a concurrent createJob landing between
+    // simulate and write would record the wrong jobId here, and the
+    // subsequent fund() call would target a stranger's job. Refuse loud
+    // if the log is missing rather than guessing — flagged by review.
     let parsedJobId: bigint | null = null;
     for (const log of rcpt.logs) {
       if (log.address.toLowerCase() !== input.acpAddress.toLowerCase()) continue;
@@ -209,7 +234,12 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
         // not a JobCreated topic — skip silently
       }
     }
-    jobId = parsedJobId ?? (sim.result as bigint);
+    if (parsedJobId === null) {
+      const reason = `createJob tx mined but no JobCreated log emitted by ${shortAddr(input.acpAddress)} — refusing rather than trusting sim.result (race-prone)`;
+      emit({ agent: 'acp', event: `acp.create.failed ${reason}`.slice(0, 220), ok: 'err' });
+      return { ok: false, reason };
+    }
+    jobId = parsedJobId;
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
     emit({ agent: 'acp', event: `acp.create.reverted createJob: ${reason}`.slice(0, 160), ok: 'err' });
