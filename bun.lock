@@ -178,6 +178,23 @@
         "web-vitals": "^5.2.0",
       },
     },
+    "apps/zhgg-mcp-adapter": {
+      "name": "zhgg-mcp-adapter",
+      "version": "0.0.1",
+      "dependencies": {
+        "@zhgg/audit-agent": "workspace:*",
+        "@zhgg/oracle-agent": "workspace:*",
+        "@zhgg/workflow": "workspace:*",
+        "swap-agent": "workspace:*",
+        "viem": "^2.21.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "packages/config": {
       "name": "@my-better-t-app/config",
       "version": "0.0.0",
@@ -1765,6 +1782,8 @@
     "yocto-spinner": ["yocto-spinner@1.1.0", "", { "dependencies": { "yoctocolors": "^2.1.1" } }, "sha512-/BY0AUXnS7IKO354uLLA2eRcWiqDifEbd6unXCsOxkFDAkhgUL3PH9X2bFoaU0YchnDXsF+iKleeTLJGckbXfA=="],
 
     "yoctocolors": ["yoctocolors@2.1.2", "", {}, "sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug=="],
+
+    "zhgg-mcp-adapter": ["zhgg-mcp-adapter@workspace:apps/zhgg-mcp-adapter"],
 
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
 
