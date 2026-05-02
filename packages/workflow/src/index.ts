@@ -73,3 +73,23 @@ export {
   signDelegation,
 } from './delegation.js';
 export type { Delegation, DelegationDomain, Execution } from './delegation.js';
+
+export {
+  PAYMENT_INTENT_TYPES,
+  createInMemoryNonceStore,
+  feeSplitterExecutor,
+  paymentIntentDigest,
+  relayPaymentIntent,
+} from './multi-leg-relay.js';
+export type {
+  ChainExecutor,
+  InMemoryNonceStore,
+  IntentDomain,
+  NonceStore,
+  PaymentIntent,
+  PaymentLeg,
+  RelayDeps,
+  RelayError,
+  RelayLegResult,
+  RelayOutcome,
+} from './multi-leg-relay.js';
