@@ -161,7 +161,13 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
   // responses are prefixed with `0x6d6f636b` ("mock" in ASCII) so any
   // observer can spot them instantly.
   const inferImpl: AuditDeps['infer'] = cfg.zgRouterKey
-    ? ((prompt, opts) => inferZG(prompt, { apiKey: opts.apiKey }))
+    ? ((prompt, opts) =>
+        inferZG(prompt, {
+          apiKey: opts.apiKey,
+          // Real TEE verification on every probe — router does the
+          // on-chain signature check and returns trace.tee_verified.
+          verifyTee: true,
+        }))
     : (async (_prompt, _opts) => {
         let probeIndex = 0;
         const findings = [

@@ -56,7 +56,7 @@ describe('inferZG', () => {
     await inferZG('hello', { apiKey: FAKE_KEY, fetchImpl, model: 'glm-5-fp8' });
 
     expect(captured).not.toBeNull();
-    expect(captured!.url).toBe('https://router-api.0g.ai/v1/chat/completions');
+    expect(captured!.url).toBe('https://router-api-testnet.integratenetwork.work/v1/chat/completions');
     expect(captured!.headers.get('authorization')).toBe(`Bearer ${FAKE_KEY}`);
     const parsed = JSON.parse(captured!.body);
     expect(parsed.model).toBe('glm-5-fp8');
