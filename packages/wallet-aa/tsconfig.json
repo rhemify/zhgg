@@ -1,0 +1,7 @@
+{
+  "extends": "@my-better-t-app/config/tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "@types/bun"]
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
