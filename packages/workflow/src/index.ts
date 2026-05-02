@@ -81,6 +81,24 @@ export {
   paymentIntentDigest,
   relayPaymentIntent,
 } from './multi-leg-relay.js';
+
+export {
+  SPOKE_POOL,
+  SPOKE_POOL_ABI,
+  bridgeViaAcross,
+  caip2ToChainId,
+  spokePoolFor,
+  waitForFill,
+} from './across.js';
+export type {
+  BridgeArgs,
+  BridgeError,
+  BridgeOutcome,
+  BridgeResult,
+  WaitForFillArgs,
+  WaitForFillError,
+  WaitForFillOutcome,
+} from './across.js';
 export type {
   ChainExecutor,
   InMemoryNonceStore,
