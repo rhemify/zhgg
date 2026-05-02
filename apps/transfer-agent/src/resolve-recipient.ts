@@ -59,7 +59,11 @@ export async function resolveRecipient(
     return { ok: false, error: { kind: 'invalid_recipient', reason: 'empty' } };
   }
 
-  if (isAddress(trimmed)) {
+  // strict:false → accepts any 40-hex regardless of case. Mixed-case
+  // addresses still get checksum-normalised below via getAddress; we
+  // just don't reject the user for casing typos a wallet copy-paste
+  // can introduce.
+  if (isAddress(trimmed, { strict: false })) {
     return { ok: true, address: getAddress(trimmed), source: 'address' };
   }
 
@@ -82,12 +86,25 @@ export async function resolveRecipient(
     try {
       resolved = await client.getEnsAddress({ name: normalized });
     } catch (e) {
+      // Classify between "name doesn't exist / no resolver" (caller's
+      // problem) vs "RPC unreachable" (infra problem). viem throws
+      // ContractFunctionExecutionError when the resolver call reverts —
+      // that's typically a non-existent name on UniversalResolver, not
+      // a network issue.
+      const msg = e instanceof Error ? e.message : String(e);
+      const looksLikeNoSuchName =
+        /reverted|resolver|not.*found|no record|0x0{40}/i.test(msg);
       return {
         ok: false,
-        error: {
-          kind: 'ens_lookup_failed',
-          reason: `mainnet ENS lookup via ${rpcUrl} failed: ${e instanceof Error ? e.message : String(e)}`,
-        },
+        error: looksLikeNoSuchName
+          ? {
+              kind: 'ens_unresolved',
+              reason: `${trimmed} — name does not exist or has no addr record (mainnet)`,
+            }
+          : {
+              kind: 'ens_lookup_failed',
+              reason: `mainnet ENS lookup via ${rpcUrl} failed: ${msg.slice(0, 200)}`,
+            },
       };
     }
     if (resolved === null) {
