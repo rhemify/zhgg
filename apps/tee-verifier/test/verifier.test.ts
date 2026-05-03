@@ -10,6 +10,10 @@ import { verifyTdxQuote } from '../src/verifier.js';
 function buildQuote(args: {
   qeVendor: string;
   signingAddress: string;
+  /// Optional 32-byte hex request nonce. When supplied, written into
+  /// report_data[32..64] — the binding the verifier checks against
+  /// `req.request_nonce` (matches LLM-format envelope layout).
+  requestNonce?: string;
   mrTd?: string;
   mrSeam?: string;
   teeTcbSvn?: string;
@@ -42,9 +46,14 @@ function buildQuote(args: {
   // mr_td (48 bytes)
   if (args.mrTd) u8.set(hexToBytes(args.mrTd).slice(0, 48), tdrStart + 184);
 
-  // report_data (64 bytes) — first 20 bytes are signing_address.
+  // report_data (64 bytes) — first 20 bytes are signing_address; bytes
+  // [20..32] are NUL padding (zero-init); bytes [32..64] are nonce
+  // (LLM-format binding per llm_attestation_report.json).
   const addr = hexToBytes(args.signingAddress);
   u8.set(addr.slice(0, 20), tdrStart + 520);
+  if (args.requestNonce) {
+    u8.set(hexToBytes(args.requestNonce).slice(0, 32), tdrStart + 520 + 32);
+  }
 
   // signature data length = 100
   view.setUint32(48 + 584, 100, true);
@@ -163,5 +172,48 @@ describe('verifyTdxQuote', () => {
     expect(r.measurements?.mrTd.toLowerCase()).toBe(mrTd);
     expect(r.measurements?.mrSeam.toLowerCase()).toBe(mrSeam);
     expect(r.measurements?.teeTcbSvn.toLowerCase()).toBe(teeTcbSvn);
+  });
+
+  describe('request_nonce binding (LLM-format report_data[32..64])', () => {
+    const NONCE = '0x' + '034b9c390f073a9c8f8a1b50e537342fff3952bf2f32f145174e8d87588ed2da'.toLowerCase();
+
+    it('accepts a quote whose report_data[32..64] matches request_nonce', () => {
+      const q = buildQuote({
+        qeVendor: INTEL_QE_VENDOR_ID,
+        signingAddress: TEST_ADDR,
+        requestNonce: NONCE,
+      });
+      const r = verifyTdxQuote({
+        intel_quote: q,
+        signing_address: TEST_ADDR,
+        request_nonce: NONCE,
+      });
+      expect(r.valid).toBe(true);
+      expect(r.verdict).toBe('structural');
+    });
+
+    it('rejects when request_nonce is supplied but report_data[32..64] does not match', () => {
+      const q = buildQuote({
+        qeVendor: INTEL_QE_VENDOR_ID,
+        signingAddress: TEST_ADDR,
+        requestNonce: NONCE,
+      });
+      const tampered = '0x' + 'ee'.repeat(32);
+      const r = verifyTdxQuote({
+        intel_quote: q,
+        signing_address: TEST_ADDR,
+        request_nonce: tampered,
+      });
+      expect(r.valid).toBe(false);
+      expect(r.reason).toContain('nonce_mismatch');
+    });
+
+    it('skips the nonce check when request_nonce is absent (backward compatible)', () => {
+      // report_data[32..64] are zero (buildQuote leaves them uninitialized);
+      // verifier must NOT compare when the request omits request_nonce.
+      const q = buildQuote({ qeVendor: INTEL_QE_VENDOR_ID, signingAddress: TEST_ADDR });
+      const r = verifyTdxQuote({ intel_quote: q, signing_address: TEST_ADDR });
+      expect(r.valid).toBe(true);
+    });
   });
 });

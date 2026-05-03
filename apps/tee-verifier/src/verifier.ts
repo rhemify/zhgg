@@ -97,6 +97,24 @@ export function verifyTdxQuote(req: VerifyRequest): VerifyResponse {
     };
   }
 
+  // 4. Optional bind: bytes [32..64] of report_data carry the 32-byte
+  //    request_nonce (verified against the LLM-format envelope at
+  //    `0g-compute-ts-sdk/llm_attestation_report.json` — bytes [20..32]
+  //    are NUL pad, [32..64] is the nonce). Skip when the caller
+  //    didn't supply request_nonce (server.ts treats it as optional).
+  //    NOTE: this layout is LLM-format only; broker reports use ASCII
+  //    binding and SHOULD route through a different verifier path.
+  if (req.request_nonce) {
+    const expectedNonce = req.request_nonce.toLowerCase().replace(/^0x/, '');
+    const reportNonce = q.reportData.slice(2 + 64, 2 + 128).toLowerCase();
+    if (reportNonce !== expectedNonce) {
+      return {
+        valid: false,
+        reason: `nonce_mismatch: report_data[32..64]=${reportNonce} request_nonce=${expectedNonce}`,
+      };
+    }
+  }
+
   return {
     valid: true,
     verdict: 'structural',
