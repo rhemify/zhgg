@@ -305,7 +305,7 @@ function HomeComponent() {
       <footer className="border-t border-zinc-900 px-8 py-6 flex flex-wrap items-center justify-between gap-4 text-[10px] text-zinc-700">
         <span>zhgg · ETHGlobal OpenAgents 2026</span>
         <div className="flex items-center gap-6">
-          {["x402", "MPP", "MCP", "Virtuals ACP", "Gensyn AXL", "EIP-7702"].map((t) => (
+          {["x402", "MPP", "MCP", "Gensyn AXL", "EIP-7702"].map((t) => (
             <span key={t} className="uppercase tracking-widest">
               {t}
             </span>

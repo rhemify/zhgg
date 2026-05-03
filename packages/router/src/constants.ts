@@ -29,7 +29,6 @@ const envSchema = z.object({
   KEEPERHUB_MCP_ENDPOINT: z.string().url().default(DEFAULT_KEEPERHUB_MCP_ENDPOINT),
 
   AGENT_NFT_ADDRESS: z.string().regex(HEX_ADDRESS).optional(),
-  ACP_STUB_ADDRESS: z.string().regex(HEX_ADDRESS).optional(),
 });
 
 export type RouterEnv = z.infer<typeof envSchema>;

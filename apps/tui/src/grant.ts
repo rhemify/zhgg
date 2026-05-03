@@ -8,7 +8,7 @@
 
 import { keccak256, parseAbi, toHex, type Hex } from 'viem';
 import type { IntentCommand } from './intent-parser.js';
-import { tryBuildLiveBundle, getLiveBundleError } from './live-bundle.js';
+import { tryBuildLiveBundle, getLiveBundleError, type LiveBundle } from './live-bundle.js';
 import { pushAudit } from './audit-trail.js';
 import { shortHash } from './format.js';
 
@@ -22,8 +22,30 @@ const ONE_DAY_SECONDS  = 86_400n;
 
 function parseCapAtomic(capStr: string): bigint {
   const usdc = parseFloat(capStr);
-  if (isNaN(usdc) || usdc <= 0) return 500_000n; // fall back to 0.5 USDC
+  if (!isFinite(usdc) || usdc <= 0) return 500_000n; // fall back to 0.5 USDC
   return BigInt(Math.round(usdc * 1_000_000));
+}
+
+export function buildGrantLines(
+  bundle: LiveBundle,
+  permissionId: Hex,
+  bucketLabel: string,
+  capStr: string,
+): string[] {
+  const capAtomic = parseCapAtomic(capStr);
+  const displayVal = capStr || '0.5';
+  return [
+    `Grant ${displayVal} USDC spend cap  [${bucketLabel}]`,
+    ``,
+    `  account       = ${bundle.baseAccount.address}`,
+    `  asset         = ${bundle.usdc}`,
+    `  permissionId  = ${permissionId}`,
+    `  maxPerPeriod  = ${capAtomic}   (${displayVal} USDC, atomic)`,
+    `  periodLength  = 3600s    expiresAt = now + 86400s`,
+    `  spendCap      = ${bundle.spendCap}`,
+    ``,
+    `  Amount: [${displayVal}] USDC  ← type to edit, [Enter] confirm, [Esc] cancel`,
+  ];
 }
 
 export function permissionIdFor(intent: IntentCommand): Hex | null {
@@ -34,36 +56,16 @@ export function permissionIdFor(intent: IntentCommand): Hex | null {
 
 export interface GrantEnv {
   stagedIntent: IntentCommand | null;
-  /// Current cap amount string — editable by the user while the modal is open.
+  /// Editable spend cap string (e.g. '0.5'). Operator types a new value
+  /// while the modal is open; confirmGrant parses it to atomic units.
   capStr: string;
+  /// Surface a toast (success / failure / pre-flight refusal).
   setToast: (kind: 'ok' | 'err' | 'info', text: string) => void;
   setGrantModal: (lines: string[], open: boolean) => void;
   render: () => void;
 }
 
 const DEFAULT_AUDIT_PERMISSION_ID = keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
-
-export function buildGrantLines(
-  bundle: ReturnType<typeof tryBuildLiveBundle>,
-  permissionId: Hex,
-  bucketLabel: string,
-  capStr: string,
-): string[] {
-  const capAtomic = parseCapAtomic(capStr);
-  const displayVal = capStr || '0';
-  return [
-    `Grant ${displayVal} USDC spend cap  [${bucketLabel}]`,
-    ``,
-    `  account       = ${bundle!.baseAccount.address}`,
-    `  asset         = ${bundle!.usdc}`,
-    `  permissionId  = ${permissionId}`,
-    `  maxPerPeriod  = ${capAtomic}   (${displayVal} USDC, atomic)`,
-    `  periodLength  = 3600s    expiresAt = now + 86400s`,
-    `  spendCap      = ${bundle!.spendCap}`,
-    ``,
-    `  Amount: [${displayVal}] USDC  ← type to edit, [Enter] confirm, [Esc] cancel`,
-  ];
-}
 
 export function openGrantModal(env: GrantEnv): void {
   const { stagedIntent, capStr, setToast, setGrantModal } = env;
@@ -91,6 +93,23 @@ export function openGrantModal(env: GrantEnv): void {
     ? `${stagedIntent.kind} workflow`
     : 'audit (eu-ai-act) — default bucket';
   setGrantModal(buildGrantLines(bundle, permissionId, bucketLabel, capStr), true);
+}
+
+export function rebuildGrantLines(env: GrantEnv): string[] | null {
+  const { stagedIntent, capStr } = env;
+  let permissionId: Hex | null = null;
+  if (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown') {
+    permissionId = permissionIdFor(stagedIntent);
+    if (!permissionId) return null;
+  } else {
+    permissionId = DEFAULT_AUDIT_PERMISSION_ID;
+  }
+  const bundle = tryBuildLiveBundle();
+  if (!bundle?.spendCap) return null;
+  const bucketLabel = (stagedIntent && permissionId !== DEFAULT_AUDIT_PERMISSION_ID)
+    ? `${stagedIntent.kind} workflow`
+    : 'audit (eu-ai-act) — default bucket';
+  return buildGrantLines(bundle, permissionId, bucketLabel, capStr);
 }
 
 export async function confirmGrant(env: GrantEnv): Promise<void> {

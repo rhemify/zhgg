@@ -105,38 +105,6 @@ export type IntentCommand =
   | { kind: 'block' }
   | { kind: 'cancel' }
   | { kind: 'mint'; role: MintRole }
-  /// ACP / ERC-8183 escrow intents (Slice J). Both fire REAL on-chain
-  /// transactions against the deployed AgenticCommerce contract on 0G
-  /// Galileo (chainId 16602). `acp create` opens a job AND funds it in
-  /// three txs (createJob → approve → fund); the user is the client and
-  /// is set as the evaluator too (self-evaluating workflow allowed by
-  /// the contract — evaluator==zero is rewritten to msg.sender). The
-  /// provider is resolved from AgentNFT.ownerOf(tokenId). `acp release`
-  /// calls AgenticCommerce.complete(jobId, reason) — only the evaluator
-  /// may call, so the same wallet that created the job must release it.
-  ///
-  /// Amount semantics: `usdcAmount` is decimal-string in the payment
-  /// token's units (parsed via parseUnits with 6 decimals — matches the
-  /// USDC convention; the actual ACP_PAYMENT_TOKEN address is read from
-  /// env at dispatch time and any 6-decimals ERC-20 will work).
-  | {
-      kind: 'acp-create';
-      /// Either an agent role name (e.g. `oracle`) or a numeric tokenId.
-      /// We keep both so the dispatcher can label the audit row with the
-      /// operator's input verbatim while feeding the canonical bigint to
-      /// AgentNFT.ownerOf.
-      target: string;
-      tokenId: bigint;
-      /// Decimal-string amount (e.g. "10", "0.5"). The dispatcher
-      /// converts to atomic units via parseUnits(amount, 6).
-      usdcAmount: string;
-    }
-  | {
-      kind: 'acp-release';
-      /// uint256 jobId. Bare digits only — jobIds are monotonic counters
-      /// scoped to AgenticCommerce and don't naturally map to a name.
-      jobId: bigint;
-    }
   /// AxiomCommit intents (Slice H). Both fire REAL on-chain
   /// `commitPlan` / `revealPlan` calls against the deployed contract on
   /// 0G Galileo (chainId 16602). The `tokenId` is parsed identically to

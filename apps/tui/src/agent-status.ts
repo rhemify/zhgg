@@ -48,8 +48,6 @@ export type RunningCommand =
   | 'mint'
   | 'axiom-commit'
   | 'axiom-reveal'
-  | 'acp-create'
-  | 'acp-release'
   | 'park'
   | 'unpark'
   | 'delegate';
