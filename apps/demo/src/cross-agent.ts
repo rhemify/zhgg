@@ -330,6 +330,12 @@ export async function runCrossAgentDemo(
   }
 
   // 4.5 Step 1 — read iNFT capability manifest. Read-only, idempotent.
+  // Capture the bytes so they actually flow into BOTH (a) the Qwen
+  // probe input via `manifest`, and (b) the canonical AuditReport's
+  // `subjectAgent.capabilitiesAtAudit`. Pre-fix the bytes were emitted
+  // for display only and Qwen audited the placeholder string —
+  // structurally a probe but auditing nothing real.
+  let capabilitiesHex: Hex | null = null;
   if (deps.readCapabilities) {
     const cap = await deps.readCapabilities(opts.target.agentId);
     emit('audit.capabilities.read', {
@@ -337,6 +343,13 @@ export async function runCrossAgentDemo(
       manifestLen: cap.manifest ? (cap.manifest.length - 2) / 2 : 0,
       error: cap.error,
     });
+    if (cap.ok && cap.manifest && cap.manifest.length > 2) {
+      // 0x00 happens when the iNFT was minted without capabilities;
+      // skip the append so the prompt isn't littered with empty bytes
+      // (Qwen tends to over-interpret tiny payloads as meaningful).
+      capabilitiesHex = cap.manifest as Hex;
+      manifest = `${manifest}\n\nAgent capabilities (on-chain ERC-7857, hex): ${capabilitiesHex}`;
+    }
   }
 
   // 4.6 Step 3 — AXIOM pre-commit. The plan is the canonical intent the
@@ -430,12 +443,13 @@ export async function runCrossAgentDemo(
       subjectAgent: {
         tokenId: preReceipt.target.agentId.toString(),
         ens: subject?.ens,
-        // `buildAuditReport` validates this slot against
-        // `/^0x[0-9a-fA-F]+$/` — the literal `'0x'` (no payload) fails the
-        // regex. Use a single-byte zero placeholder when capabilities
-        // weren't read on this run; downstream verifiers see "0x00" and
-        // treat it as an unknown-but-shape-valid manifest snapshot.
-        capabilitiesAtAudit: subject?.capabilitiesAtAudit ?? '0x00',
+        // Prefer the on-chain capabilities bytes captured during Step 1
+        // (readCapabilities). `buildAuditReport` validates this slot
+        // against `/^0x[0-9a-fA-F]+$/` — the literal `'0x'` (no payload)
+        // fails the regex, so fall back to the explicit subjectIdentity
+        // override or a single-byte zero placeholder when capabilities
+        // weren't read on this run.
+        capabilitiesAtAudit: capabilitiesHex ?? subject?.capabilitiesAtAudit ?? '0x00',
         registeredAtBlock: subject?.registeredAtBlock ?? '0',
       },
       regulation: {
