@@ -27,6 +27,11 @@ export function parseAa(parts: string[], trimmed: string): IntentCommand {
     return parseAaSend(parts, trimmed);
   }
 
+  // Subcommand: `aa deploy <owner> [salt]` — alias for `aa <owner> [salt]`
+  if (parts[1]?.toLowerCase() === 'deploy') {
+    return parseAa(['aa', ...parts.slice(2)], trimmed);
+  }
+
   // Default: `aa <owner> [salt]` (deploy)
   const owner = parts[1] ?? '';
   if (!ADDRESS_RE.test(owner)) {

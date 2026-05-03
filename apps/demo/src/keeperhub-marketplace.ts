@@ -41,6 +41,8 @@ export interface KeeperHubMarketplaceConfig {
   marketplaceSlug: string;
   /// Override base URL — default `https://app.keeperhub.com`.
   baseUrl?: string;
+  /// Optional callback to surface x402 diagnostics (headers/body on 402).
+  onDiag?: (msg: string) => void;
 }
 
 export interface MarketplaceSettlement {
@@ -79,14 +81,18 @@ export async function payViaKeeperHubMarketplace(
   // Intercept fetch so we can log 402 headers — the payment challenge
   // lives in PAYMENT-REQUIRED (x402) or WWW-Authenticate (MPP). If those
   // are absent the signer bails and we need to see exactly what KH sent.
+  const diag = cfg.onDiag ?? ((msg: string) => console.warn('[kh-x402]', msg));
   const interceptFetch = (async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
     const res = await globalThis.fetch(input, init);
     if (res.status === 402) {
       const hdrs: Record<string, string> = {};
       res.headers.forEach((v, k) => { hdrs[k] = v; });
       const body = await res.clone().text().catch(() => '<no body>');
-      console.warn('[kh-x402] 402 response headers:', JSON.stringify(hdrs));
-      console.warn('[kh-x402] 402 response body:', body);
+      diag(`402 hdrs: ${JSON.stringify(hdrs)}`);
+      // Log the full body split into 300-char chunks so nothing is truncated.
+      for (let i = 0; i < body.length; i += 300) {
+        diag(`402 body[${i}]: ${body.slice(i, i + 300)}`);
+      }
     }
     return res;
   }) as typeof fetch;
@@ -114,9 +120,16 @@ export async function payViaKeeperHubMarketplace(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    // Include key headers in the error so the operator can diagnose x402 issues.
-    const paymentHdr = res.headers.get('payment-required') ?? res.headers.get('www-authenticate') ?? '(none)';
-    throw new Error(`KH marketplace call failed: HTTP ${res.status} — ${text} | payment-hdr: ${paymentHdr}`);
+    const rawHdr = res.headers.get('payment-required') ?? res.headers.get('www-authenticate') ?? '';
+    // Decode the base64 x402 error so the operator sees the actual rejection reason.
+    let paymentDetail = rawHdr || '(none)';
+    if (rawHdr) {
+      try {
+        const decoded = JSON.parse(Buffer.from(rawHdr, 'base64').toString('utf-8')) as Record<string, unknown>;
+        paymentDetail = JSON.stringify(decoded);
+      } catch { /* leave as raw */ }
+    }
+    throw new Error(`KH marketplace call failed: HTTP ${res.status} — ${text} | x402: ${paymentDetail}`);
   }
 
   const paymentTxHash = extractSettlementTx(res);
