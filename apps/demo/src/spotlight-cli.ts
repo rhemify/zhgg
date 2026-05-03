@@ -220,6 +220,21 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
 
   const events = new EventEmitter();
 
+  // Optional event tracing — set SPOTLIGHT_DEBUG=1 to surface every
+  // orchestrator event on stderr so the operator can see which step the
+  // run died at when nothing reaches the audit phase. Off by default
+  // because it would otherwise clutter the cinema.
+  if (process.env.SPOTLIGHT_DEBUG === '1') {
+    const onAny = (name: string, payload: unknown) => {
+      process.stderr.write(`[spotlight] ${name} ${JSON.stringify(payload)}\n`);
+    };
+    const origEmit = events.emit.bind(events);
+    events.emit = ((name: string | symbol, ...args: unknown[]) => {
+      if (typeof name === 'string') onAny(name, args[0]);
+      return origEmit(name as never, ...(args as never[]));
+    }) as typeof events.emit;
+  }
+
   // Wrap infer to inject per-probe events
   const wrappedInfer = buildSpotlightInfer(bundle.deps.auditDeps.infer, events);
   const wrappedDeps: CrossAgentDemoDeps = {
@@ -321,10 +336,41 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
     }
   });
 
+  /// Fires when the audit verdict landed but the on-chain ERC-8004
+  /// receipt write failed (postReceipt returned null). Shown so the
+  /// operator knows the verdict was computed but never anchored — the
+  /// orchestrator's `auditReceiptTx` is null in that case.
+  events.on('audit.receipt.failed', (step: TranscriptStep) => {
+    const reason = (step.detail?.reason as string | undefined) ?? 'unknown';
+    if (state.phase === 'complete') {
+      writeKv('Receipt', `failed (${reason})`);
+    }
+  });
+
   events.on('oracle.payment.settle', (step: TranscriptStep) => {
     const txHash = (step.detail?.txHash as string | undefined) ?? '';
     if (!txHash) return;
     state = reduce(state, { type: 'oracle.payment.settle', txHash });
+  });
+
+  // The orchestrator early-returns on spend-cap rejection — without
+  // this handler the spotlight would see no audit events and the
+  // operator would stare at a blank screen wondering why nothing
+  // happened. Surface the rejection as a failure with the actionable
+  // cause + remediation pointer.
+  events.on('oracle.spend_cap.exceeded', (step: TranscriptStep) => {
+    const reason = (step.detail?.reason as string | undefined) ?? 'unknown';
+    const remaining = (step.detail?.remaining as string | null | undefined) ?? null;
+    const requested = (step.detail?.requested as string | null | undefined) ?? null;
+    const detail =
+      reason === 'cap_not_found'
+        ? 'no SpendCap granted for this wallet — open the TUI and press [G] to grant, or unset SPEND_CAP_ADDRESS to skip the gate'
+        : reason === 'cap_revoked'
+          ? 'SpendCap was revoked — re-grant via the TUI [G] modal'
+          : `cap exceeded — remaining=${remaining ?? '?'} requested=${requested ?? '?'}`;
+    state = reduce(state, { type: 'audit.failed', reason: `spend-cap: ${detail}` });
+    repaintVerdict();
+    out.write(`\n\n${C_DIM}  ${detail}${C_RESET}\n`);
   });
 
   // SIGINT — restore the cursor color and exit cleanly.
