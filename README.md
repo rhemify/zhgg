@@ -381,9 +381,10 @@ No Python, no Redis, no OPA, no Macaroons, no paywall server.
 **zhgg** — Bidirectional Agentic Commerce Runtime
 
 ### Team
-- **Sean Hoe Kai Zher** — Full-stack / Smart contracts
-- Contact: sean@teelapp.io
-- GitHub: [github.com/LingSiewWin/zhgg](https://github.com/LingSiewWin/zhgg)
+- **Sean Hoe Kai Zher** (X:https://x.com/Sean_Hoee, Telegram:@seanhoe)
+- **Ling Siew Win** (X:https://x.com/siewwwin, Telegram:@siewwwin)
+- **Tan wei Hup** (X:https://x.com/_weihup, Telegram:@weihup)
+
 
 ### Working demo
 
