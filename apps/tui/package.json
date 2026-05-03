@@ -10,8 +10,6 @@
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",
-    "flow": "bun run src/payment-flow.ts",
-    "router": "bun run src/router-tui.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
