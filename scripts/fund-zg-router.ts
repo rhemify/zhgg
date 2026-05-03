@@ -7,11 +7,20 @@
 /// wallet address.
 ///
 /// USAGE:
-///   bun run scripts/fund-zg-router.ts                # deposits 0.05 0G
-///   bun run scripts/fund-zg-router.ts 0.1            # deposits 0.1 0G
+///   bun run scripts/fund-zg-router.ts                # deposits 3 0G (default floor)
+///   bun run scripts/fund-zg-router.ts 5              # deposits 5 0G
 ///   bun run scripts/fund-zg-router.ts --balance      # just shows balance
 ///
-/// Requires MINT_AGENT_PRIVATE_KEY in .env (already set).
+/// REQUIRES the wallet behind MINT_AGENT_PRIVATE_KEY to ALSO be the wallet
+/// associated with the `ZG_ROUTER_KEY` (sk-…) used at runtime — the on-chain
+/// ledger is keyed by the depositing EOA. If they differ, the router will
+/// 402 even after a successful deposit because it's looking up balance
+/// under a different address. (See docs/0g.md.)
+///
+/// Default of 3 OG is the documented ledger floor in `docs/0g.md:73-78` —
+/// any deposit below this leaves the ledger in a zombie state where the
+/// SDK reports a balance but the router rejects with HTTP 402. Pre-Commit-8
+/// the default was 0.05 OG which silently produced this failure mode.
 
 import 'dotenv/config';
 import { ethers } from 'ethers';
@@ -26,7 +35,17 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const balanceOnly = args.includes('--balance');
   const amountArg = args.find((a) => !a.startsWith('--'));
-  const amount = amountArg ? Number(amountArg) : 0.05;
+  // 3 OG is the documented ledger floor (docs/0g.md:73-78). Going below
+  // this used to silently leave the ledger underfunded — SDK reports a
+  // positive balance but the router 402s. Default to the floor so a
+  // first-time `bun run scripts/fund-zg-router.ts` (no args) lands a
+  // working ledger instead of a zombie one.
+  const amount = amountArg ? Number(amountArg) : 3;
+  if (amountArg && Number(amountArg) < 3) {
+    console.warn(
+      `warn: depositing ${amountArg} OG is below the 3 OG ledger floor; the router may 402 until topped up.`
+    );
+  }
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const wallet = new ethers.Wallet(pk, provider);
