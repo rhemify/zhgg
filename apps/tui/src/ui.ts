@@ -51,6 +51,10 @@ let helpBox:        BoxRenderable;
 let helpText:       TextRenderable;
 let grantBox:       BoxRenderable;
 let grantText:      TextRenderable;
+let auditOverlay:   BoxRenderable;
+let auditOverlayText: TextRenderable;
+let flowOverlay:    BoxRenderable;
+let flowOverlayText:  TextRenderable;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -211,6 +215,42 @@ function buildLayout(): void {
   grantText = T('grant-text');
   grantBox.add(grantText);
   root.add(grantBox);
+
+  // ── Audit full-screen overlay [Z] ────────────────────────────────────────
+  auditOverlay = B('audit-overlay', {
+    position: 'absolute',
+    top: 3, left: 0,
+    width: '100%', height: '85%',
+    zIndex: 25,
+    visible: false,
+    border: true, borderStyle: 'single', borderColor: '#00c8dc',
+    backgroundColor: '#080e16',
+    title: ' ◈ AUDIT TRAIL  [Z to close] ',
+    titleAlignment: 'left',
+    paddingX: 1,
+    overflow: 'hidden',
+  });
+  auditOverlayText = T('audit-overlay-text');
+  auditOverlay.add(auditOverlayText);
+  root.add(auditOverlay);
+
+  // ── Flow full-screen overlay [X] ─────────────────────────────────────────
+  flowOverlay = B('flow-overlay', {
+    position: 'absolute',
+    top: 3, left: 0,
+    width: '100%', height: '85%',
+    zIndex: 25,
+    visible: false,
+    border: true, borderStyle: 'single', borderColor: '#00c8dc',
+    backgroundColor: '#080e16',
+    title: ' ◈ PAYMENT FLOW + RECEIPT  [X to close] ',
+    titleAlignment: 'left',
+    paddingX: 1,
+    overflow: 'hidden',
+  });
+  flowOverlayText = T('flow-overlay-text');
+  flowOverlay.add(flowOverlayText);
+  root.add(flowOverlay);
 }
 
 // ── Styled text helpers ───────────────────────────────────────────────────────
@@ -456,6 +496,15 @@ export function updateUI(state: FrameState): void {
   grantBox.visible = state.grantModalOpen;
   if (state.grantModalOpen && state.grantModalLines.length > 0) {
     grantText.content = joinLines(state.grantModalLines.map(l => t`${DWHITE(l)}`));
+  }
+
+  // Panel zoom overlays [Z] = audit, [X] = flow
+  auditOverlay.visible = state.panelOverlay === 'audit';
+  flowOverlay.visible  = state.panelOverlay === 'flow';
+  if (state.panelOverlay === 'audit') {
+    auditOverlayText.content = buildAudit();
+  } else if (state.panelOverlay === 'flow') {
+    flowOverlayText.content = buildFlow(state);
   }
 
   renderer.requestRender();
