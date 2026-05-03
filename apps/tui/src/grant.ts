@@ -13,49 +13,61 @@ import { pushAudit } from './audit-trail.js';
 import { shortHash } from './format.js';
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
-// The default-bucket alias `grant(...)` would also work but we use the
-// per-permission API so the typed intent's hashed topic scopes the cap
-// (matches what `cross-agent.ts` reads on the spend leg).
 const SPENDCAP_ABI = parseAbi([
   'function grantPermission(address account, address asset, bytes32 permissionId, uint128 maxPerPeriod, uint64 periodLength, uint64 expiresAt)',
 ]);
 
-const HALF_USDC_ATOMIC = 500_000n; // 0.5 USDC at 6 decimals
 const ONE_HOUR_SECONDS = 3600n;
 const ONE_DAY_SECONDS  = 86_400n;
 
+function parseCapAtomic(capStr: string): bigint {
+  const usdc = parseFloat(capStr);
+  if (isNaN(usdc) || usdc <= 0) return 500_000n; // fall back to 0.5 USDC
+  return BigInt(Math.round(usdc * 1_000_000));
+}
+
 export function permissionIdFor(intent: IntentCommand): Hex | null {
-  // Same hash recipe the orchestrator uses (see cross-agent.ts comment
-  // "Per-workflow ERC-7715 scope") so the grant we issue here matches
-  // the bucket the next audit run will read.
   if (intent.kind === 'audit') return keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
   if (intent.kind === 'ask-oracle') return keccak256(toHex(`zhgg.oracle.${intent.topic}.v1`));
   return null;
 }
 
 export interface GrantEnv {
-  /// The currently-staged intent (typed but not yet dispatched). Reads
-  /// only — neither the modal opener nor the confirmer mutate this.
   stagedIntent: IntentCommand | null;
-  /// Surface a toast (success / failure / pre-flight refusal).
+  /// Current cap amount string — editable by the user while the modal is open.
+  capStr: string;
   setToast: (kind: 'ok' | 'err' | 'info', text: string) => void;
-  /// Set the modal lines + open flag. The render loop reads these on
-  /// next tick.
   setGrantModal: (lines: string[], open: boolean) => void;
-  /// Re-paint the frame after a state change (the on-chain confirm
-  /// flow flips the modal closed and pushes audit rows mid-flight).
   render: () => void;
 }
 
-// Default permissionId used when no intent is staged — matches the audit
-// workflow bucket so [G] works at any time without requiring a staged intent.
 const DEFAULT_AUDIT_PERMISSION_ID = keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
 
-export function openGrantModal(env: GrantEnv): void {
-  const { stagedIntent, setToast, setGrantModal } = env;
+export function buildGrantLines(
+  bundle: ReturnType<typeof tryBuildLiveBundle>,
+  permissionId: Hex,
+  bucketLabel: string,
+  capStr: string,
+): string[] {
+  const capAtomic = parseCapAtomic(capStr);
+  const displayVal = capStr || '0';
+  return [
+    `Grant ${displayVal} USDC spend cap  [${bucketLabel}]`,
+    ``,
+    `  account       = ${bundle!.baseAccount.address}`,
+    `  asset         = ${bundle!.usdc}`,
+    `  permissionId  = ${permissionId}`,
+    `  maxPerPeriod  = ${capAtomic}   (${displayVal} USDC, atomic)`,
+    `  periodLength  = 3600s    expiresAt = now + 86400s`,
+    `  spendCap      = ${bundle!.spendCap}`,
+    ``,
+    `  Amount: [${displayVal}] USDC  ← type to edit, [Enter] confirm, [Esc] cancel`,
+  ];
+}
 
-  // Resolve permissionId from staged intent, or fall back to the audit bucket
-  // so [G] works at any time — no need to stage an intent first.
+export function openGrantModal(env: GrantEnv): void {
+  const { stagedIntent, capStr, setToast, setGrantModal } = env;
+
   let permissionId: Hex | null = null;
   if (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown') {
     permissionId = permissionIdFor(stagedIntent);
@@ -78,29 +90,21 @@ export function openGrantModal(env: GrantEnv): void {
   const bucketLabel = (stagedIntent && permissionId !== DEFAULT_AUDIT_PERMISSION_ID)
     ? `${stagedIntent.kind} workflow`
     : 'audit (eu-ai-act) — default bucket';
-  const lines = [
-    `Grant 0.5 USDC spend cap  [${bucketLabel}]`,
-    ``,
-    `  account       = ${bundle.baseAccount.address}`,
-    `  asset         = ${bundle.usdc}`,
-    `  permissionId  = ${permissionId}`,
-    `  maxPerPeriod  = 500000   (0.5 USDC, atomic)`,
-    `  periodLength  = 3600s    expiresAt = now + 86400s`,
-    `  spendCap      = ${bundle.spendCap}`,
-  ];
-  setGrantModal(lines, true);
+  setGrantModal(buildGrantLines(bundle, permissionId, bucketLabel, capStr), true);
 }
 
 export async function confirmGrant(env: GrantEnv): Promise<void> {
-  const { stagedIntent, setToast, setGrantModal, render } = env;
+  const { stagedIntent, capStr, setToast, setGrantModal, render } = env;
   setGrantModal([], false);
   const bundle = tryBuildLiveBundle();
   if (!bundle || !bundle.spendCap) { setToast('err', 'live env unavailable'); return; }
   const permissionId = (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown')
     ? permissionIdFor(stagedIntent) ?? DEFAULT_AUDIT_PERMISSION_ID
     : DEFAULT_AUDIT_PERMISSION_ID;
+  const capAtomic = parseCapAtomic(capStr);
+  const capDisplay = capStr || '0.5';
   const expiresAt = BigInt(Math.floor(Date.now() / 1000)) + ONE_DAY_SECONDS;
-  pushAudit('spend-cap', 'grant tx submitting…', 'info');
+  pushAudit('spend-cap', `grant tx submitting… (${capDisplay} USDC)`, 'info');
   render();
   try {
     const sim = await bundle.basePub.simulateContract({
@@ -112,7 +116,7 @@ export async function confirmGrant(env: GrantEnv): Promise<void> {
         bundle.baseAccount.address,
         bundle.usdc,
         permissionId,
-        HALF_USDC_ATOMIC,
+        capAtomic,
         ONE_HOUR_SECONDS,
         expiresAt,
       ],
@@ -120,7 +124,7 @@ export async function confirmGrant(env: GrantEnv): Promise<void> {
     const txHash = await bundle.baseWallet.writeContract(sim.request);
     await bundle.basePub.waitForTransactionReceipt({ hash: txHash });
     setToast('ok', `grant ok tx=${shortHash(txHash)}`);
-    pushAudit('spend-cap', `granted 0.5 USDC tx=${shortHash(txHash)}`, 'ok');
+    pushAudit('spend-cap', `granted ${capDisplay} USDC tx=${shortHash(txHash)}`, 'ok');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setToast('err', `grant failed: ${msg}`.slice(0, 120));

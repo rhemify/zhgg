@@ -72,6 +72,7 @@ import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
 import {
   openGrantModal as openGrantModalImpl,
   confirmGrant as confirmGrantImpl,
+  buildGrantLines,
 } from './grant.js';
 import {
   dispatchMint,
@@ -194,6 +195,7 @@ let cancelRequested = false
 
 let grantModalOpen = false
 let grantModalLines: string[] = []
+let grantCapInput = '0.5'
 
 /// Help overlay (slice D). Toggled by `?` and dismissed by `?` or Esc.
 /// While open, the overlay floats above the FLOW panel; intent input
@@ -2178,6 +2180,22 @@ pushAudit('system', 'tui ready — type an intent below and Enter to dispatch', 
 // up-to-date between explicit render() calls triggered by dispatchers.
 tuiRenderer.setFrameCallback(async () => { updateUI(getState()); });
 
+// Rebuild the grant modal lines in-place when the user edits the cap amount.
+function rebuildGrantModal(): void {
+  const bundle = tryBuildLiveBundle()
+  if (!bundle || !bundle.spendCap) return
+  const permissionId = (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown')
+    ? (stagedIntent.kind === 'audit' || stagedIntent.kind === 'ask-oracle'
+        ? keccak256(toHex(stagedIntent.kind === 'audit' ? 'zhgg.oracle.eu-ai-act.v1' : `zhgg.oracle.${stagedIntent.topic}.v1`))
+        : null)
+    : keccak256(toHex('zhgg.oracle.eu-ai-act.v1'))
+  if (!permissionId) return
+  const bucketLabel = (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown' && (stagedIntent.kind === 'audit' || stagedIntent.kind === 'ask-oracle'))
+    ? `${stagedIntent.kind} workflow`
+    : 'audit (eu-ai-act) — default bucket'
+  grantModalLines = buildGrantLines(bundle, permissionId, bucketLabel, grantCapInput)
+}
+
 // ── Keyboard wiring ───────────────────────────────────────────────────────────
 
 tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
@@ -2191,13 +2209,27 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
     if (ev.name === 'return') {
       void confirmGrantImpl({
         stagedIntent,
+        capStr: grantCapInput,
         setToast,
         setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
         render,
       }).then(() => render())
-    } else if (ev.name === 'escape' || key === 'q' || key === 'Q' || (ev.ctrl && ev.name === 'c')) {
+    } else if (ev.name === 'escape' || (ev.ctrl && ev.name === 'c')) {
       grantModalOpen = false
       if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
+    } else if (ev.name === 'backspace') {
+      grantCapInput = grantCapInput.slice(0, -1)
+      rebuildGrantModal()
+    } else {
+      // Accept digits and a single dot
+      const ch = key && key.length === 1 ? key : ''
+      if (/[\d.]/.test(ch)) {
+        // Prevent double dots
+        if (ch !== '.' || !grantCapInput.includes('.')) {
+          grantCapInput += ch
+          rebuildGrantModal()
+        }
+      }
     }
     render()
     return
@@ -2246,8 +2278,10 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
   } else if (ev.name === 'tab') {
     intentMode = intentMode === 'editing' ? 'idle' : 'editing'
   } else if (key === 'g' || key === 'G') {
+    grantCapInput = '0.5'
     openGrantModalImpl({
       stagedIntent,
+      capStr: grantCapInput,
       setToast,
       setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
       render,
