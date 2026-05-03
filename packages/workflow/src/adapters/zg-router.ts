@@ -97,6 +97,10 @@ export interface ZGRouterOptions {
   /// missing-envelope cases set the field to `null` with an honest
   /// `tee_verifier_reason` — never throws, never fakes a verified result.
   teeVerifierUrl?: string;
+  /// Abort the inference fetch after this many ms. Defaults to 60 000 (60s).
+  /// Set lower (e.g. 30 000) for pre-payment audit probes where the caller
+  /// prefers a fast fail-open over a long hang.
+  timeoutMs?: number;
 }
 
 interface OpenAIChoice {
@@ -129,6 +133,10 @@ export async function inferZG(
     return { ok: false, error: { kind: 'config', reason: 'apiKey is empty' } };
   }
 
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const start = Date.now();
   let res: Response;
   try {
@@ -143,9 +151,15 @@ export async function inferZG(
         messages: [{ role: 'user', content: prompt }],
         ...(opts.verifyTee ? { verify_tee: true } : {}),
       }),
+      signal: controller.signal,
     });
   } catch (e) {
-    return { ok: false, error: { kind: 'transport', reason: errorMessage(e) } };
+    const reason = e instanceof Error && e.name === 'AbortError'
+      ? `timed out after ${timeoutMs}ms`
+      : errorMessage(e);
+    return { ok: false, error: { kind: 'transport', reason } };
+  } finally {
+    clearTimeout(timer);
   }
 
   if (!res.ok) {

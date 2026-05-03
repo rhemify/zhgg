@@ -205,6 +205,9 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
           // Real TEE verification on every probe — router does the
           // on-chain signature check and returns trace.tee_verified.
           verifyTee: true,
+          // 45s per probe — generous enough for cold 0G Compute starts
+          // but tight enough to unblock the kh hire flow on a hung node.
+          timeoutMs: 45_000,
         }))
     : syntheticInferImpl;
   const auditDeps: AuditDeps = {

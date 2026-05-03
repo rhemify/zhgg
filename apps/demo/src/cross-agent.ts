@@ -619,7 +619,10 @@ export async function runCrossAgentDemo(
         canonicalAuditReport,
         auditReport.receiptTxHash
       );
-    } else {
+    } else if (!opts.auditWorkflowOnly) {
+      // Only emit receipt.failed for full runs — when auditWorkflowOnly is set,
+      // skipReceiptPost:true intentionally produces receiptTxHash=null (the
+      // workflow subject isn't in AgentRegistry, giveFeedback would revert).
       emit('audit.receipt.failed', { reason: auditReport.receiptError ?? 'postReceipt returned null' });
     }
   } catch (e) {
