@@ -120,11 +120,27 @@ export function createZGStorageClient(opts: ZGStorageClientOptions): Storage0GCl
         if (tx === null || tx === undefined) {
           throw new Error('upload failed: SDK returned [null, null]');
         }
-        const hash = (tx as { hash?: unknown }).hash;
-        if (typeof hash !== 'string') {
-          throw new Error('upload result missing string hash field');
+        // SDK 1.2.x returns either single-result {txHash, rootHash, txSeq} or
+        // multi-result {txHashes[], rootHashes[], txSeqs[]} for sharded uploads.
+        // We only ever upload single small AuditReport bytes, so the single-result
+        // shape is the live path. Old adapter looked for `tx.hash` which never
+        // existed in the published SDK type.
+        const txAny = tx as {
+          txHash?: unknown;
+          txHashes?: unknown;
+        };
+        const rawTxHash =
+          typeof txAny.txHash === 'string'
+            ? txAny.txHash
+            : Array.isArray(txAny.txHashes) && typeof txAny.txHashes[0] === 'string'
+              ? (txAny.txHashes[0] as string)
+              : null;
+        if (rawTxHash === null) {
+          throw new Error(
+            `upload result missing txHash/txHashes string (got keys: ${Object.keys(tx as object).join(',')})`
+          );
         }
-        const txHash = ensureHex(hash, 'txHash');
+        const txHash = ensureHex(rawTxHash, 'txHash');
 
         return { rootHash, txHash };
       } finally {

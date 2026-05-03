@@ -523,8 +523,18 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
       ? (needHex('AXIOM_COMMIT_ADDRESS', 40) as unknown as Address)
       : undefined,
     zgStorageEnabled: process.env.ZG_STORAGE_ENABLED !== '0',
-    zgIndexerRpc: process.env.ZG_INDEXER_RPC,
-    zgRouterUrl: process.env.ZG_ROUTER_URL,
-    walletCode: process.env.WALLET_CODE,
+    // `??` only triggers on null/undefined — an empty env var (`KEY=`) is
+    // a string, so it passes through and breaks downstream defaults that
+    // use `?? DEFAULT`. Coalesce empty/whitespace to undefined so the
+    // workflow + 0G SDK defaults kick in properly.
+    zgIndexerRpc: emptyToUndef(process.env.ZG_INDEXER_RPC),
+    zgRouterUrl: emptyToUndef(process.env.ZG_ROUTER_URL),
+    walletCode: emptyToUndef(process.env.WALLET_CODE),
   };
+}
+
+function emptyToUndef(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  const trimmed = v.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
 }

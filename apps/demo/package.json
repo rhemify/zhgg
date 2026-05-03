@@ -10,6 +10,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@0gfoundation/0g-ts-sdk": "^1.2.8",
     "@keeperhub/wallet": "^0.1.8",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
@@ -17,6 +18,7 @@
     "@zhgg/router": "workspace:*",
     "@zhgg/tui": "workspace:*",
     "@zhgg/workflow": "workspace:*",
+    "ethers": "^6.16.0",
     "ox": "^0.14.20",
     "viem": "^2.21.0"
   },

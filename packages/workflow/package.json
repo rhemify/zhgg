@@ -13,8 +13,10 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@0gfoundation/0g-ts-sdk": "^1.2.8",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "@zhgg/oracle-data": "workspace:*",
+    "ethers": "^6.16.0",
     "viem": "^2.21.0",
     "zod": "catalog:"
   },
