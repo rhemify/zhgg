@@ -65,7 +65,7 @@ export function buildFrame(state: FrameState): string {
   const put = (r: number, c: number, s: string): void => { f += at(r, c) + s; };
 
   // ── Header ────────────────────────────────────────────────────────────────
-  put(ROW_HEADER_TOP, 1, $.bold + $.green + '╔' + '═'.repeat(w - 2) + '╗' + $.reset);
+  put(ROW_HEADER_TOP, 1, $.bold + $.cyan + '╔' + '═'.repeat(w - 2) + '╗' + $.reset);
 
   // header content row — MODE pill reflects ground truth, no aspirational
   // labels. Three states:
@@ -86,19 +86,19 @@ export function buildFrame(state: FrameState): string {
   const hLeft  = '  zhgg runtime';
   const hRight = `${modeText}  │  ${now}  `;
   const hPad   = ' '.repeat(Math.max(0, w - hLeft.length - hRight.length - 2));
-  put(2, 1, $.bold + $.green + '║' + $.reset);
+  put(2, 1, $.bold + $.cyan + '║' + $.reset);
   put(2, 2, $.bold + $.white + hLeft + $.reset + $.dwhite + hPad + $.reset + modeColor + modeText + $.reset + $.dwhite + `  │  ${now}  ` + $.reset);
-  put(2, w, $.bold + $.green + '║' + $.reset);
+  put(2, w, $.bold + $.cyan + '║' + $.reset);
 
-  put(ROW_HEADER_BOT, 1, $.bold + $.green + '╠' + '═'.repeat(mid - 1) + '╦' + '═'.repeat(w - mid - 2) + '╣' + $.reset);
+  put(ROW_HEADER_BOT, 1, $.bold + $.cyan + '╠' + '═'.repeat(mid - 1) + '╦' + '═'.repeat(w - mid - 2) + '╣' + $.reset);
 
   // ── Top section titles ────────────────────────────────────────────────────
   const topEnd = ROW_TOP_END();
-  put(ROW_TOP_START, 1, $.bold + $.green + '║' + $.reset);
-  put(ROW_TOP_START, 2, $.dwhite + '  ACTIVE AGENTS' + $.reset);
-  put(ROW_TOP_START, mid + 1, $.bold + $.green + '║' + $.reset);
-  put(ROW_TOP_START, mid + 2, $.dwhite + '  ACTION QUEUE' + $.reset);
-  put(ROW_TOP_START, w, $.bold + $.green + '║' + $.reset);
+  put(ROW_TOP_START, 1, $.bold + $.cyan + '║' + $.reset);
+  put(ROW_TOP_START, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'ACTIVE AGENTS' + $.reset);
+  put(ROW_TOP_START, mid + 1, $.bold + $.cyan + '║' + $.reset);
+  put(ROW_TOP_START, mid + 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'ACTION QUEUE' + $.reset);
+  put(ROW_TOP_START, w, $.bold + $.cyan + '║' + $.reset);
 
   // Agent rows — driven by agent-registry.ts (real iNFTs minted on 0G)
   // and current dispatch state. No hardcoded statuses.
@@ -107,14 +107,14 @@ export function buildFrame(state: FrameState): string {
     const r  = ROW_TOP_START + 1 + i;
     const st = agentStatus(a, stagedIntent, runningCommand);
     if (r <= topEnd) {
-      put(r, 1, $.green + '║' + $.reset);
+      put(r, 1, $.cyan + '║' + $.reset);
       put(
         r, 3,
         st.color + st.glyph + ' ' + pad(a.name, 14) + ' ' + $.dwhite + pad('#' + a.tokenId.toString(), 4) + ' ' +
         $.dwhite + pad(a.scope, 26) + ' ' + st.color + st.label + $.reset,
       );
-      put(r, mid + 1, $.green + '║' + $.reset);
-      put(r, w, $.green + '║' + $.reset);
+      put(r, mid + 1, $.cyan + '║' + $.reset);
+      put(r, w, $.cyan + '║' + $.reset);
     }
   });
 
@@ -137,38 +137,38 @@ export function buildFrame(state: FrameState): string {
       : `      status=staged    [Enter] dispatch   [G] grant   [Esc] clear`;
     if (r1 <= topEnd) {
       put(r1, mid + 2, $.white + '  ▸ ' + headline + $.reset);
-      put(r1, w, $.green + '║' + $.reset);
+      put(r1, w, $.cyan + '║' + $.reset);
     }
     if (r2 <= topEnd) {
       const col = runningCommand !== 'idle' ? $.green : $.yellow;
       put(r2, mid + 2, col + detail + $.reset);
-      put(r2, w, $.green + '║' + $.reset);
+      put(r2, w, $.cyan + '║' + $.reset);
     }
   } else {
     const r1 = ROW_TOP_START + 1;
     if (r1 <= topEnd) {
       put(r1, mid + 2, $.dwhite + '  (queue empty — type an intent below)' + $.reset);
-      put(r1, w, $.green + '║' + $.reset);
+      put(r1, w, $.cyan + '║' + $.reset);
     }
   }
 
   // Borders & side bars for top section rows
   for (let r = ROW_TOP_START + 1; r <= topEnd; r++) {
-    put(r, 1, $.green + '║' + $.reset);
-    put(r, mid + 1, $.dgray + '│' + $.reset);
-    put(r, w, $.green + '║' + $.reset);
+    put(r, 1, $.cyan + '║' + $.reset);
+    put(r, mid + 1, $.gray + '│' + $.reset);
+    put(r, w, $.cyan + '║' + $.reset);
   }
 
   // ── Mid divider ───────────────────────────────────────────────────────────
   const midDiv = ROW_MID_DIV();
-  put(midDiv, 1, $.green + '╠' + '─'.repeat(mid - 1) + '╪' + '─'.repeat(w - mid - 2) + '╣' + $.reset);
+  put(midDiv, 1, $.cyan + '╠' + '─'.repeat(mid - 1) + '╪' + '─'.repeat(w - mid - 2) + '╣' + $.reset);
 
   // ── Bottom section titles ─────────────────────────────────────────────────
   const botStart = ROW_BOT_START();
-  put(botStart, 1, $.green + '║' + $.reset);
-  put(botStart, 2, $.dwhite + '  AUDIT TRAIL' + $.reset);
-  put(botStart, mid + 1, $.green + '║' + $.reset);
-  put(botStart, mid + 2, $.dwhite + '  PAYMENT FLOW + RECEIPT' + $.reset);
+  put(botStart, 1, $.cyan + '║' + $.reset);
+  put(botStart, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'AUDIT TRAIL' + $.reset);
+  put(botStart, mid + 1, $.cyan + '║' + $.reset);
+  put(botStart, mid + 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'PAYMENT FLOW + RECEIPT' + $.reset);
   // RAIL pill — visible badge in the FLOW panel header showing the actual
   // settled rail (truthful: only set after `oracle.payment.settle` lands).
   // Lives just to the right of the panel title so judges can see at a
@@ -179,14 +179,14 @@ export function buildFrame(state: FrameState): string {
       ? ' RAIL: direct_split '
       : ' RAIL: — ';
   const railPillColor = flow.settledRail === null
-    ? $.dgray
+    ? $.gray
     : $.bold + $.green + $.bgNode;
   put(botStart, mid + 28, railPillColor + railPillText + $.reset);
   // Controls hint (right-aligned in header). SPACE/A removed since the
   // mock walk-through was deleted in Slice C.
   const hint = ' ?·R·G·TAB·Q ';
-  put(botStart, w - hint.length, $.dgray + hint + $.reset);
-  put(botStart, w, $.green + '║' + $.reset);
+  put(botStart, w - hint.length, $.gray + hint + $.reset);
+  put(botStart, w, $.cyan + '║' + $.reset);
 
   // Audit trail (live AUDIT array, sticky-bottom).
   const logEnd = ROW_LOG() - 1;
@@ -196,20 +196,20 @@ export function buildFrame(state: FrameState): string {
     const r = botStart + 1 + i;
     if (r > logEnd) return;
     const ec = e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite;
-    put(r, 1, $.green + '║' + $.reset);
+    put(r, 1, $.cyan + '║' + $.reset);
     const line = e.time + ' ' + pad(e.agent, 16) + ' ' + e.event;
     put(r, 3, ec + line.slice(0, mid - 4) + $.reset);
   });
   // Empty hint when no events yet
   if (AUDIT.length === 0 && botStart + 1 <= logEnd) {
-    put(botStart + 1, 3, $.dgray + '(no events — type an intent below and Enter to dispatch)' + $.reset);
+    put(botStart + 1, 3, $.dwhite + '(no events — type an intent below and Enter to dispatch)' + $.reset);
   }
 
   // Side bars for bottom section
   for (let r = botStart + 1; r <= logEnd; r++) {
-    put(r, 1, $.green + '║' + $.reset);
-    put(r, mid + 1, $.dgray + '│' + $.reset);
-    put(r, w, $.green + '║' + $.reset);
+    put(r, 1, $.cyan + '║' + $.reset);
+    put(r, mid + 1, $.gray + '│' + $.reset);
+    put(r, w, $.cyan + '║' + $.reset);
   }
 
   // ── Payment flow node diagram ─────────────────────────────────────────────
@@ -286,7 +286,7 @@ export function buildFrame(state: FrameState): string {
   const receiptCol = fc;
   const receiptWidth = w - receiptCol - 2;
   if (receiptPaneTop <= receiptPaneBottom && receiptWidth > 8) {
-    put(receiptPaneTop, receiptCol, $.dgreenb + '─ RECEIPT (on-chain) ' + '─'.repeat(Math.max(0, receiptWidth - 21)) + $.reset);
+    put(receiptPaneTop, receiptCol, $.gray + '─ RECEIPT (on-chain) ' + '─'.repeat(Math.max(0, receiptWidth - 21)) + $.reset);
     const json = envelopeJson(receiptEnvelope);
     const lines = json.split('\n').slice(0, Math.max(0, receiptPaneBottom - receiptPaneTop));
     lines.forEach((ln, i) => {
@@ -298,22 +298,22 @@ export function buildFrame(state: FrameState): string {
 
   // ── Log row (last legacy-flow log line) ───────────────────────────────────
   const logRow = ROW_LOG();
-  put(logRow, 1, $.green + '╠' + '═'.repeat(w - 2) + '╣' + $.reset);
+  put(logRow, 1, $.cyan + '╠' + '═'.repeat(w - 2) + '╣' + $.reset);
 
   // ── Receipt status row ────────────────────────────────────────────────────
   const receiptRow = ROW_RECEIPT();
-  put(receiptRow, 1, $.green + '║' + $.reset);
+  put(receiptRow, 1, $.cyan + '║' + $.reset);
   let receiptStatus: string;
   if (receiptEnvelope.status === 'no settlement yet') {
-    receiptStatus = $.dgray + 'receipt: no settlement yet — dispatch an intent or grant + run --live' + $.reset;
+    receiptStatus = $.dwhite + 'receipt: no settlement yet — dispatch an intent or grant + run --live' + $.reset;
   } else if (receiptEnvelope.split) {
     const s = receiptEnvelope.split;
     receiptStatus = $.dgreen + `Split  blk=${s.blockNumber}  total=${s.totalAmount}  owner=${s.ownerCut}  k=${s.keeperCut}  z=${s.zhggCut}  c=${s.commonsCut}  tx=${shortHash(s.txHash)}` + $.reset;
   } else {
-    receiptStatus = $.dgray + 'receipt: pending decode' + $.reset;
+    receiptStatus = $.dwhite + 'receipt: pending decode' + $.reset;
   }
   put(receiptRow, 3, receiptStatus.slice(0, w * 4));
-  put(receiptRow, w, $.green + '║' + $.reset);
+  put(receiptRow, w, $.cyan + '║' + $.reset);
 
   // ── Persistent hint row (slice D) ─────────────────────────────────────────
   // Always visible — eliminates the "what can I type" confusion the
@@ -321,20 +321,20 @@ export function buildFrame(state: FrameState): string {
   // overlay (toggled via `?`) carries the full palette; this row is
   // the breadcrumb that points at it.
   const hintRow = ROW_HINT();
-  put(hintRow, 1, $.green + '║' + $.reset);
-  put(hintRow, 3, $.dgray + PERSISTENT_HINT + $.reset);
-  put(hintRow, w, $.green + '║' + $.reset);
+  put(hintRow, 1, $.cyan + '║' + $.reset);
+  put(hintRow, 3, $.dwhite + PERSISTENT_HINT + $.reset);
+  put(hintRow, w, $.cyan + '║' + $.reset);
 
   // ── Intent input row ──────────────────────────────────────────────────────
   const intentRow = ROW_INTENT();
-  put(intentRow, 1, $.green + '║' + $.reset);
+  put(intentRow, 1, $.cyan + '║' + $.reset);
   const focused = intentMode === 'editing';
-  const prompt = focused ? $.bold + $.green + 'intent> ' + $.reset : $.dgray + 'intent> ' + $.reset;
+  const prompt = focused ? $.bold + $.cyan + 'intent> ' + $.reset : $.dwhite + 'intent> ' + $.reset;
   let body: string;
   if (intentBuffer.length === 0) {
     body = focused
-      ? $.dgray + 'try: "audit oracle.zhgg.eth"  or  "ask oracle ETH/USD"' + $.reset
-      : $.dgray + '(TAB to edit)' + $.reset;
+      ? $.dwhite + 'try: "audit 1"  or  "audit 2"  or  "ask oracle ETH/USD"' + $.reset
+      : $.dwhite + '(TAB to edit)' + $.reset;
   } else {
     body = $.white + intentBuffer + $.reset + (focused ? $.bold + $.green + '█' + $.reset : '');
   }
@@ -344,7 +344,7 @@ export function buildFrame(state: FrameState): string {
     trail = '  ' + $.dgreen + 'staged: ' + formatStaged(stagedIntent) + ' [G] grant' + $.reset;
   }
   put(intentRow, 3, prompt + body + trail);
-  put(intentRow, w, $.green + '║' + $.reset);
+  put(intentRow, w, $.cyan + '║' + $.reset);
 
   // ── Status / footer ───────────────────────────────────────────────────────
   const statusRow = ROW_STATUS();
@@ -353,27 +353,27 @@ export function buildFrame(state: FrameState): string {
   // shows whichever node was last moved by a real orchestrator emission.
   // No auto-play, no SPACE-driven mock advance.
   const phaseInfo =
-    flow.nodes[3] === 'rejected' ? $.red + 'EXECUTE rejected' + $.reset + $.dgray :
-    flow.nodes[3] === 'done'     ? $.green + 'EXECUTE done' + $.reset + $.dgray :
-    flow.nodes[3] === 'active'   ? $.amber + 'EXECUTE active' + $.reset + $.dgray :
-    flow.nodes[2] === 'rejected' ? $.red + 'RAILS rejected' + $.reset + $.dgray :
-    flow.nodes[2] === 'active'   ? $.amber + 'RAILS active' + $.reset + $.dgray :
-    flow.nodes[2] === 'done'     ? $.green + 'RAILS done' + $.reset + $.dgray :
-    flow.nodes[1] === 'rejected' ? $.red + 'POLICY rejected' + $.reset + $.dgray :
-    flow.nodes[1] === 'active'   ? $.amber + 'POLICY active' + $.reset + $.dgray :
-    flow.nodes[1] === 'done'     ? $.green + 'POLICY done' + $.reset + $.dgray :
-    flow.nodes[0] === 'active'   ? $.amber + 'INTENT active' + $.reset + $.dgray :
-    flow.nodes[0] === 'done'     ? $.green + 'INTENT done' + $.reset + $.dgray :
-                                   $.dgray + 'WAITING (no intent dispatched)' + $.reset + $.dgray;
-  const runInfo   = runningCommand === 'idle' ? '' : '  ' + $.amber + 'running ' + runningCommand + '…' + $.reset + $.dgray;
-  put(statusRow, 1, $.green + '║' + $.reset);
-  const left = $.dgray + 'FLOW: ' + phaseInfo + runInfo + $.reset;
-  const right = $.dgray + '[?] help  [Enter] dispatch  [G] grant  [TAB] focus  [Q] quit' + $.reset;
+    flow.nodes[3] === 'rejected' ? $.red + 'EXECUTE rejected' + $.reset :
+    flow.nodes[3] === 'done'     ? $.green + 'EXECUTE done' + $.reset :
+    flow.nodes[3] === 'active'   ? $.amber + 'EXECUTE active' + $.reset :
+    flow.nodes[2] === 'rejected' ? $.red + 'RAILS rejected' + $.reset :
+    flow.nodes[2] === 'active'   ? $.amber + 'RAILS active' + $.reset :
+    flow.nodes[2] === 'done'     ? $.green + 'RAILS done' + $.reset :
+    flow.nodes[1] === 'rejected' ? $.red + 'POLICY rejected' + $.reset :
+    flow.nodes[1] === 'active'   ? $.amber + 'POLICY active' + $.reset :
+    flow.nodes[1] === 'done'     ? $.green + 'POLICY done' + $.reset :
+    flow.nodes[0] === 'active'   ? $.amber + 'INTENT active' + $.reset :
+    flow.nodes[0] === 'done'     ? $.green + 'INTENT done' + $.reset :
+                                   $.dwhite + 'WAITING (no intent dispatched)' + $.reset;
+  const runInfo   = runningCommand === 'idle' ? '' : '  ' + $.amber + 'running ' + runningCommand + '…' + $.reset;
+  put(statusRow, 1, $.cyan + '║' + $.reset);
+  const left = $.dwhite + 'FLOW: ' + phaseInfo + runInfo + $.reset;
+  const right = $.dwhite + '[?] help  [Enter] dispatch  [G] grant  [TAB] focus  [Q] quit' + $.reset;
   // Leave room for left + right; toast (if any) takes the centre.
   put(statusRow, 3, left);
   put(statusRow, Math.max(3, w - 70), right);
-  put(statusRow, w, $.green + '║' + $.reset);
-  put(ROW_FOOTER(), 1, $.green + '╚' + '═'.repeat(w - 2) + '╝' + $.reset);
+  put(statusRow, w, $.cyan + '║' + $.reset);
+  put(ROW_FOOTER(), 1, $.cyan + '╚' + '═'.repeat(w - 2) + '╝' + $.reset);
 
   // ── Toast overlay (centred above the status row) ──────────────────────────
   if (toast) {
