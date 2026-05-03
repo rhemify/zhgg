@@ -86,7 +86,7 @@ export interface SpendCapCheckResult {
 export interface CrossAgentDemoDeps {
   /// Settle a payment for the oracle leg. Returns null if settlement is
   /// disabled in this run (e.g. dry-run mode).
-  settleOraclePayment: (req: PaymentRequirements) => Promise<SettleOutput | null>;
+  settleOraclePayment: (req: PaymentRequirements, agentName: string) => Promise<SettleOutput | null>;
   /// audit's runtime — injected so the orchestrator never imports inferZG /
   /// postReceipt directly.
   auditDeps: AuditDeps;
@@ -306,7 +306,7 @@ export async function runCrossAgentDemo(
   // payment payload's `fingerprint` before calling settle). The
   // orchestrator only knows about the result, not the signed payload, so
   // there's no honest fingerprint to compute here.
-  const settle = await deps.settleOraclePayment(requirements);
+  const settle = await deps.settleOraclePayment(requirements, opts.target.agentName);
   emit('oracle.payment.settle', {
     txHash: settle?.txHash ?? null,
     network: settle?.network ?? null,

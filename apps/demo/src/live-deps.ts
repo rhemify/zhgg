@@ -205,14 +205,14 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
   //                                       30/70 split, real EIP-3009)
   //  - else            → `direct_split` (caller-funded FeeSplitter, full
   //                                       85/5/5/5 — NOT x402 protocol)
-  const settleOraclePayment: CrossAgentDemoDeps['settleOraclePayment'] = async () => {
+  const settleOraclePayment: CrossAgentDemoDeps['settleOraclePayment'] = async (_req, agentName) => {
     if (cfg.keeperhub) {
       // Real marketplace path — KH facilitator settles EIP-3009 on Base,
       // takes 30%, sends 70% to keeperhub.walletAddress (Turnkey custody).
       // The 85/5/5/5 sub-split on the 70% is a documented manual step
       // for V1 since the receiving wallet is server-custodied.
       const settlement = await payViaKeeperHubMarketplace(cfg.keeperhub, {
-        topic: 'oracle.query',
+        agentName,
       });
       return {
         txHash: settlement.paymentTxHash,
