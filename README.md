@@ -1,6 +1,6 @@
 # zhgg
 
-**Bidirectional agentic-commerce runtime with a Terminal User Interface (TUI), allowing your agents to  hire third-party KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
+On-chain AI agents that audit compliance on 0G and trade workflows over KeeperHub with a Terminal User Interface (TUI), allowing your agents to  hire third-party KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
 the same MCP-callable HTTP surface. Every audit produces a tamper-proof
 EU AI Act evidence chain anchored on 0G Storage + ERC-8004.**
 
