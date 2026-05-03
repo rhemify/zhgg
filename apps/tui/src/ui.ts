@@ -51,6 +51,7 @@ let helpBox:        BoxRenderable;
 let helpText:       TextRenderable;
 let grantBox:       BoxRenderable;
 let grantText:      TextRenderable;
+let grantFooter:    TextRenderable;
 let auditOverlay:   BoxRenderable;
 let auditOverlayText: TextRenderable;
 let flowOverlay:    BoxRenderable;
@@ -214,6 +215,10 @@ function buildLayout(): void {
   });
   grantText = T('grant-text');
   grantBox.add(grantText);
+  grantFooter = T('grant-footer');
+  grantFooter.content = t`${GRAY('─'.repeat(40))}
+${DWHITE('[Enter]')} ${GRAY('confirm')}   ${DWHITE('[Esc]')} ${GRAY('cancel')}   ${GRAY('(edit amount above)')}`;
+  grantBox.add(grantFooter);
   root.add(grantBox);
 
   // ── Audit full-screen overlay [Z] ────────────────────────────────────────

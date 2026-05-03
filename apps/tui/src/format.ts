@@ -29,8 +29,6 @@ export function formatStaged(intent: IntentCommand): string {
     case 'kh-hire': return `kh hire ${intent.slugOrId}${intent.inputs ? ' (+inputs)' : ''}`;
     case 'axiom-commit': return `commit ${intent.target} (#${intent.tokenId}) plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`;
     case 'axiom-reveal': return `reveal ${shortHash(intent.commitId)} plan=${intent.plan.slice(0, 24)}${intent.plan.length > 24 ? '…' : ''}`;
-    case 'acp-create': return `acp create ${intent.target} (#${intent.tokenId}) ${intent.usdcAmount} USDC`;
-    case 'acp-release': return `acp release jobId=${intent.jobId}`;
     case 'park': return `park ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`;
     case 'unpark': return `unpark ${intent.amount} ${intent.symbol} (#${intent.tokenId} receiver)`;
     case 'delegate': return `delegate → ${intent.to} permId=${shortHash(intent.permissionId)}`;

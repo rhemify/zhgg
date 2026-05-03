@@ -32,7 +32,6 @@ export function buildHelpLines(): HelpLine[] {
   const mintPk       = env('MINT_AGENT_PRIVATE_KEY');
   const axiom        = env('AXIOM_COMMIT_ADDRESS') && env('MINT_AGENT_PRIVATE_KEY');
   const delegation   = env('DELEGATION_MANAGER_ADDRESS') && env('SPEND_CAP_ADDRESS');
-  const acp          = env('ACP_ADDRESS') && env('AGENT_NFT_ADDRESS') && env('ACP_PAYMENT_TOKEN');
   const yieldVault   = env('YIELD_VAULT_ADDRESS');
 
   const agents = Object.entries(AGENT_REGISTRY).map(([n, id]) => `${n} #${id}`).join('  ·  ');
@@ -117,12 +116,6 @@ export function buildHelpLines(): HelpLine[] {
     lines.push(ok('  delegate <to> <permId>      ERC-7710 redeemable delegation (Base)'));
   } else {
     lines.push(warn(`  delegate  ~  needs: ${miss('DELEGATION_MANAGER_ADDRESS','SPEND_CAP_ADDRESS').join(', ')}`));
-  }
-  if (acp) {
-    lines.push(ok('  acp create <tokenId> <amt>  open + fund EIP-8183 escrow job (0G)'));
-    lines.push(ok('  acp release <jobId>         release escrow → provider'));
-  } else {
-    lines.push(warn(`  acp  ~  needs: ${miss('ACP_ADDRESS','AGENT_NFT_ADDRESS','ACP_PAYMENT_TOKEN').join(', ')}`));
   }
   if (yieldVault) {
     lines.push(ok('  park <amt> <USDC|WETH>      deposit into ERC-4626 yield vault'));
