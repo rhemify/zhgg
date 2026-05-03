@@ -19,7 +19,6 @@ import { parseAudit } from './parsers/audit.js';
 import { parseAxiomCommit, parseAxiomReveal } from './parsers/axiom.js';
 import { parseDelegate } from './parsers/delegate.js';
 import { parsePark } from './parsers/park.js';
-import { parseAcp } from './parsers/acp.js';
 import { parseSwap } from './parsers/swap.js';
 import { parseTransfer } from './parsers/transfer.js';
 import { parseAskOracle } from './parsers/ask-oracle.js';
@@ -55,9 +54,6 @@ export function parseIntent(input: string): IntentCommand {
 
   // ── Yield-vault intents (Slice K — ERC-4626) ─────────────────────────
   if (head === 'park' || head === 'unpark') return parsePark(head, parts, trimmed);
-
-  // ── ACP / EIP-8183 escrow intents (Slice J) ──────────────────────────
-  if (head === 'acp') return parseAcp(parts, trimmed);
 
   if (head === 'swap') return parseSwap(parts, trimmed);
 

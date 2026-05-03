@@ -76,11 +76,27 @@ export async function payViaKeeperHubMarketplace(
     ? cfg.baseUrl
     : 'https://app.keeperhub.com';
 
+  // Intercept fetch so we can log 402 headers — the payment challenge
+  // lives in PAYMENT-REQUIRED (x402) or WWW-Authenticate (MPP). If those
+  // are absent the signer bails and we need to see exactly what KH sent.
+  const interceptFetch = (async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+    const res = await globalThis.fetch(input, init);
+    if (res.status === 402) {
+      const hdrs: Record<string, string> = {};
+      res.headers.forEach((v, k) => { hdrs[k] = v; });
+      const body = await res.clone().text().catch(() => '<no body>');
+      console.warn('[kh-x402] 402 response headers:', JSON.stringify(hdrs));
+      console.warn('[kh-x402] 402 response body:', body);
+    }
+    return res;
+  }) as typeof fetch;
+
   // Inject the wallet via walletLoader + clientFactory so we don't touch
   // ~/.keeperhub/wallet.json and KeeperHubClient uses our resolved baseUrl.
   const signer = createPaymentSigner({
     walletLoader: async () => wallet,
     clientFactory: (w) => new KeeperHubClient(w, { baseUrl }),
+    fetchImpl: interceptFetch,
   });
   const resourceUrl = `${baseUrl.replace(/\/$/, '')}/api/mcp/workflows/${encodeURIComponent(cfg.marketplaceSlug)}/call`;
 
@@ -98,7 +114,9 @@ export async function payViaKeeperHubMarketplace(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`KH marketplace call failed: HTTP ${res.status} — ${text}`);
+    // Include key headers in the error so the operator can diagnose x402 issues.
+    const paymentHdr = res.headers.get('payment-required') ?? res.headers.get('www-authenticate') ?? '(none)';
+    throw new Error(`KH marketplace call failed: HTTP ${res.status} — ${text} | payment-hdr: ${paymentHdr}`);
   }
 
   const paymentTxHash = extractSettlementTx(res);

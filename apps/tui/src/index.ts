@@ -72,6 +72,7 @@ import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
 import {
   openGrantModal as openGrantModalImpl,
   confirmGrant as confirmGrantImpl,
+  rebuildGrantLines,
 } from './grant.js';
 import {
   dispatchMint,
@@ -80,11 +81,6 @@ import {
   showBlock,
   type OpRow,
 } from './operator-intents.js';
-import {
-  dispatchAcpCreate,
-  dispatchAcpRelease,
-  type AcpRow,
-} from './acp-intents.js';
 /// ERC-7710 helpers (Slice I): build, sign, and ABI-encode a real
 /// `Delegation` for `DelegationManager.redeemDelegations(...)`. The
 /// signature is verified on-chain via ERC-1271 against the delegator
@@ -194,6 +190,7 @@ let cancelRequested = false
 
 let grantModalOpen = false
 let grantModalLines: string[] = []
+let grantCapStr = '0.5'
 
 /// Help overlay (slice D). Toggled by `?` and dismissed by `?` or Esc.
 /// While open, the overlay floats above the FLOW panel; intent input
@@ -1554,114 +1551,6 @@ async function dispatchUnparkIntent(
   }
 }
 
-// ── ACP / EIP-8183 escrow dispatchers (Slice J) ──────────────────────────────
-//
-// `acp create` and `acp release` both target the deployed AgenticCommerce
-// contract on 0G Galileo (chainId 16602). The user wallet (liveBundle's
-// zgAccount) is the client AND evaluator on every job — we set
-// evaluator=0x0 at create-time so the contract rewrites it to msg.sender,
-// which then makes `acp release` callable by the same key. Reverts bubble
-// verbatim — typical paths the operator will hit:
-//
-//   "ContractFunctionExecutionError: ... reverted with NotEvaluator(0x..)"
-//     → tried to release a job created by a different wallet
-//   "... WrongState(jobId, Submitted, Funded)"
-//     → release before provider has called submit() — wait for delivery
-//   "... InvalidJobId(N)" → typo in the jobId
-//
-// Required env: ACP_ADDRESS, AGENT_NFT_ADDRESS, ACP_PAYMENT_TOKEN,
-// ZG_RPC_URL, MINT_AGENT_PRIVATE_KEY (or ZG_PRIVATE_KEY). Without these
-// the dispatcher refuses cleanly — no synthetic fallback.
-
-async function dispatchAcpCreateIntent(
-  intent: Extract<IntentCommand, { kind: 'acp-create' }>,
-): Promise<void> {
-  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'acp create cancelled before dispatch', 'info'); return }
-  cancelRequested = false
-  const bundle = tryBuildLiveBundle()
-  if (!bundle) {
-    pushAudit('intent', `acp create blocked: ${getLiveBundleError() ?? 'env-incomplete'}`, 'err')
-    setToast('err', `env-incomplete: ${getLiveBundleError() ?? '?'}`)
-    return
-  }
-  // Three contract addresses from env — none have safe defaults so we
-  // refuse on missing rather than guess. ACP_ADDRESS is the deployed
-  // AgenticCommerce (chain 16602); ACP_PAYMENT_TOKEN is the ERC-20
-  // accepted as escrow; AGENT_NFT_ADDRESS is the iNFT for ownerOf().
-  const acpAddrRaw = process.env.ACP_ADDRESS
-  const tokenRaw = process.env.ACP_PAYMENT_TOKEN
-  if (!acpAddrRaw || !/^0x[a-fA-F0-9]{40}$/.test(acpAddrRaw)) {
-    pushAudit('acp', 'ACP_ADDRESS missing or invalid in env', 'err')
-    setToast('err', 'ACP_ADDRESS missing')
-    return
-  }
-  if (!bundle.agentNft) {
-    pushAudit('acp', 'AGENT_NFT_ADDRESS missing — needed to resolve provider via ownerOf', 'err')
-    setToast('err', 'AGENT_NFT_ADDRESS missing')
-    return
-  }
-  if (!tokenRaw || !/^0x[a-fA-F0-9]{40}$/.test(tokenRaw)) {
-    pushAudit('acp', 'ACP_PAYMENT_TOKEN missing or invalid (ERC-20 address on 0G)', 'err')
-    setToast('err', 'ACP_PAYMENT_TOKEN missing')
-    return
-  }
-
-  runningCommand = 'acp-create'
-  render()
-  const r = await dispatchAcpCreate({
-    tokenId: intent.tokenId,
-    target: intent.target,
-    usdcAmount: intent.usdcAmount,
-    acpAddress: acpAddrRaw as Address,
-    agentNftAddress: bundle.agentNft,
-    paymentToken: tokenRaw as Address,
-    zgPublicClient: bundle.zgPub,
-    zgWalletClient: bundle.zgWallet,
-    callerAddress: bundle.zgAccount.address,
-    onProgress: (row: AcpRow) => pushAudit(row.agent, row.event, row.ok),
-  })
-  if (!r.ok) {
-    setToast('err', `acp create failed`.slice(0, 80))
-  }
-  runningCommand = 'idle'
-  render()
-}
-
-async function dispatchAcpReleaseIntent(
-  intent: Extract<IntentCommand, { kind: 'acp-release' }>,
-): Promise<void> {
-  if (cancelRequested) { cancelRequested = false; pushAudit('intent', 'acp release cancelled before dispatch', 'info'); return }
-  cancelRequested = false
-  const bundle = tryBuildLiveBundle()
-  if (!bundle) {
-    pushAudit('intent', `acp release blocked: ${getLiveBundleError() ?? 'env-incomplete'}`, 'err')
-    setToast('err', `env-incomplete: ${getLiveBundleError() ?? '?'}`)
-    return
-  }
-  const acpAddrRaw = process.env.ACP_ADDRESS
-  if (!acpAddrRaw || !/^0x[a-fA-F0-9]{40}$/.test(acpAddrRaw)) {
-    pushAudit('acp', 'ACP_ADDRESS missing or invalid in env', 'err')
-    setToast('err', 'ACP_ADDRESS missing')
-    return
-  }
-
-  runningCommand = 'acp-release'
-  render()
-  const r = await dispatchAcpRelease({
-    jobId: intent.jobId,
-    acpAddress: acpAddrRaw as Address,
-    zgPublicClient: bundle.zgPub,
-    zgWalletClient: bundle.zgWallet,
-    callerAddress: bundle.zgAccount.address,
-    onProgress: (row: AcpRow) => pushAudit(row.agent, row.event, row.ok),
-  })
-  if (!r.ok) {
-    setToast('err', `acp release failed`.slice(0, 80))
-  }
-  runningCommand = 'idle'
-  render()
-}
-
 // ── KeeperHub direct-API dispatcher (Phase 2) ────────────────────────────────
 //
 // Pure HTTPS path — does NOT require liveBundle. Auth is via KH_API_KEY
@@ -2056,9 +1945,6 @@ function handleIntentKey(key: string): boolean {
     // Slice K — yield vault park / unpark
     else if (parsed.kind === 'park') void dispatchParkIntent(parsed)
     else if (parsed.kind === 'unpark') void dispatchUnparkIntent(parsed)
-    // Slice J — ACP / EIP-8183 escrow create + release
-    else if (parsed.kind === 'acp-create') void dispatchAcpCreateIntent(parsed)
-    else if (parsed.kind === 'acp-release') void dispatchAcpReleaseIntent(parsed)
     // Phase 2 KH direct API — auth via KH_API_KEY env, no liveBundle gate
     else if (parsed.kind === 'kh-trigger' || parsed.kind === 'kh-status'
           || parsed.kind === 'kh-workflows' || parsed.kind === 'kh-integrations'
@@ -2109,6 +1995,9 @@ function handleIntentKey(key: string): boolean {
   // we already partial-match above.
   // Multi-char: paste arrives as a single data chunk. Accept all printable
   // ASCII + basic Unicode (quotes, curly braces, etc. from JSON paste).
+  // Global hotkeys (G, R, Z, X, TAB, Q) fall through to the global handler
+  // even while editing so they remain accessible from the first keystroke.
+  if (key.length === 1 && (key === 'g' || key === 'G')) return false
   if (key.length >= 1) {
     let added = false
     for (const ch of key) {
@@ -2191,6 +2080,7 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
     if (ev.name === 'return') {
       void confirmGrantImpl({
         stagedIntent,
+        capStr: grantCapStr,
         setToast,
         setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
         render,
@@ -2198,6 +2088,17 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
     } else if (ev.name === 'escape' || key === 'q' || key === 'Q' || (ev.ctrl && ev.name === 'c')) {
       grantModalOpen = false
       if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
+    } else if (ev.name === 'backspace' || key === '\x7f' || key === '\b') {
+      grantCapStr = grantCapStr.slice(0, -1) || '0'
+      const rebuilt = rebuildGrantLines({ stagedIntent, capStr: grantCapStr, setToast, setGrantModal: (l, o) => { grantModalLines = l; grantModalOpen = o }, render })
+      if (rebuilt) grantModalLines = rebuilt
+    } else if (key && /^[0-9.]$/.test(key)) {
+      // Prevent multiple dots or leading zeros (allow '0.' start)
+      if (key === '.' && grantCapStr.includes('.')) { render(); return }
+      if (key !== '.' && grantCapStr === '0') grantCapStr = key
+      else grantCapStr += key
+      const rebuilt = rebuildGrantLines({ stagedIntent, capStr: grantCapStr, setToast, setGrantModal: (l, o) => { grantModalLines = l; grantModalOpen = o }, render })
+      if (rebuilt) grantModalLines = rebuilt
     }
     render()
     return
@@ -2246,8 +2147,10 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
   } else if (ev.name === 'tab') {
     intentMode = intentMode === 'editing' ? 'idle' : 'editing'
   } else if (key === 'g' || key === 'G') {
+    grantCapStr = '0.5'
     openGrantModalImpl({
       stagedIntent,
+      capStr: grantCapStr,
       setToast,
       setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
       render,
