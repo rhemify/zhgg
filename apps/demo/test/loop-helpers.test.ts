@@ -24,6 +24,7 @@ type MockPublicStub = {
   readContract: ReturnType<typeof mock>;
   simulateContract: ReturnType<typeof mock>;
   waitForTransactionReceipt: ReturnType<typeof mock>;
+  getTransactionReceipt: ReturnType<typeof mock>;
 };
 type MockWalletStub = {
   account: { address: Address };
@@ -34,16 +35,21 @@ function mockPublic(
   read: unknown,
   receiptOverride?: { blockNumber?: bigint; logs?: unknown[] }
 ): MockPublicStub & LoopPublicClient {
+  // commitPlan now uses pollReceipt → getTransactionReceipt (post team's
+  // pollReceipt rewrite that bypasses viem's blockTimestamp:"0x0" rejection
+  // on 0G Galileo). Mock both for back-compat with any helper that still
+  // touches waitForTransactionReceipt; getTransactionReceipt is what the
+  // commit/reveal path actually calls.
+  const receiptShape = {
+    blockNumber: receiptOverride?.blockNumber ?? 42n,
+    logs: receiptOverride?.logs ?? [],
+    status: 'success' as const,
+  };
   const stub: MockPublicStub = {
     readContract: mock(async () => read),
     simulateContract: mock(async () => ({ request: { foo: 'bar' } })),
-    // Default receipt has no logs — the helper's PlanCommitted parse
-    // loop is a no-op and the fallback recompute path fires using
-    // receipt.blockNumber. Tests for the event-parse path pass `logs`.
-    waitForTransactionReceipt: mock(async () => ({
-      blockNumber: receiptOverride?.blockNumber ?? 42n,
-      logs: receiptOverride?.logs ?? [],
-    })),
+    waitForTransactionReceipt: mock(async () => receiptShape),
+    getTransactionReceipt: mock(async () => receiptShape),
   };
   return stub as unknown as MockPublicStub & LoopPublicClient;
 }
