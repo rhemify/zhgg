@@ -35,6 +35,7 @@ import {
   postReceipt,
   buildAuditReport,
   canonicalizeAuditReport,
+  resolveOwner,
   // The Slice-Y schema. Aliased because `@zhgg/audit-agent` exports a
   // legacy `AuditReport` type (probe results), which we still consume.
   type AuditReport as CanonicalAuditReportSchema,
@@ -64,6 +65,10 @@ interface BootEnv {
   zgRpc: string | null;
   zgRouterKey: string | null;
   agentRegistry: Address | null;
+  /// OwnerMirror on Base Sepolia — when set, audit-route resolves
+  /// auditorAgent.owner via the Base-side mirror of the iNFT's 0G
+  /// owner. When unset, falls back to the deployer EOA.
+  ownerMirror: Address | null;
 }
 
 function readBootEnv(env: NodeJS.ProcessEnv = process.env): BootEnv {
@@ -101,6 +106,7 @@ function readBootEnv(env: NodeJS.ProcessEnv = process.env): BootEnv {
     zgRpc: env.ZG_RPC_URL ?? null,
     zgRouterKey: env.ZG_ROUTER_KEY && env.ZG_ROUTER_KEY.length > 0 ? env.ZG_ROUTER_KEY : null,
     agentRegistry: addr('AGENT_REGISTRY_ADDRESS'),
+    ownerMirror: addr('OWNER_MIRROR_ADDRESS'),
   };
 }
 
@@ -182,9 +188,29 @@ function buildAuditFnOrNull(env: BootEnv): RunAuditFn | null {
     //          full cross-agent flow" — a regulator can tell the
     //          difference at a glance.
     let canonicalReport: CanonicalAuditReportSchema | null = null;
-    const auditorOwner = zgAccount.address;
     const auditorTokenId = '1'; // audit.zhgg.eth — minted as token #1
     const auditorEns = 'audit.zhgg.eth';
+
+    // Resolve auditor owner via OwnerMirror on Base when env wired;
+    // fall back to the deployer EOA otherwise. Real cross-chain
+    // ownership read — gives the deployed mirror a real consumer.
+    let auditorOwner: Address = zgAccount.address;
+    if (env.baseSepoliaRpc && env.ownerMirror) {
+      try {
+        const basePub = createPublicClient({ transport: http(env.baseSepoliaRpc) });
+        auditorOwner = await resolveOwner({
+          ownerMirrorAddress: env.ownerMirror,
+          tokenId: BigInt(auditorTokenId),
+          basePub,
+          defaultOwner: zgAccount.address,
+        });
+      } catch {
+        // Honest fallback — never throw out of the audit pipeline
+        // because the mirror is unreachable. Keeps the deployer EOA
+        // as the recorded owner; transcript still lands.
+        auditorOwner = zgAccount.address;
+      }
+    }
 
     const buildAnchor = async (preReceipt: {
       target: typeof target;

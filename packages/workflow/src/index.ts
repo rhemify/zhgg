@@ -128,3 +128,9 @@ export type {
   RelayLegResult,
   RelayOutcome,
 } from './multi-leg-relay.js';
+
+// OwnerMirror cross-chain ownership resolver — used by Slice-Y AuditReport
+// to populate auditorAgent.owner from the Base-side mirror of the iNFT
+// (deployed on 0G). Mirrors `ownerOf(tokenId)` ↦ Address.
+export { resolveOwner, OWNER_MIRROR_ABI } from './owner-mirror.js';
+export type { ResolveOwnerArgs } from './owner-mirror.js';
