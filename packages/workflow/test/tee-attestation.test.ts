@@ -99,4 +99,34 @@ describe('verifyTeeAttestation', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.kind).toBe('malformed');
   });
+
+  /// Codex Q4 follow-up: previously the STRICT-mode body sent only
+  /// intel_quote + signing_address. The wrapper now must also forward
+  /// signing_algo and request_nonce so the sidecar can run the algo
+  /// rejection (commit 8) and the nonce binding (commit 6) on the
+  /// same envelope content.
+  it('STRICT mode forwards signing_algo and request_nonce to verifier', async () => {
+    let captured: { url: string; body: string } | null = null;
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      captured = { url, body: typeof init?.body === 'string' ? init.body : '' };
+      return new Response(JSON.stringify({ valid: true }), { status: 200 });
+    };
+    const r = await verifyTeeAttestation(VALID_ENVELOPE, {
+      strict: true,
+      verifierUrl: 'https://mock-verifier.test/verify',
+      fetchImpl: fetchImpl as never,
+    });
+    expect(r.ok).toBe(true);
+    expect(captured).not.toBeNull();
+    const sent = JSON.parse(captured!.body);
+    expect(sent.intel_quote).toBeDefined();
+    expect(sent.signing_address).toBe('0x8a4D4984CF370210dFEeFC773FAf9bb0edE97cC0');
+    // The new fields — without these, commits 6/8 are dead code from
+    // the wrapper path.
+    expect(sent.signing_algo).toBe('ecdsa');
+    expect(sent.request_nonce).toBe(
+      '034b9c390f073a9c8f8a1b50e537342fff3952bf2f32f145174e8d87588ed2da'
+    );
+  });
 });

@@ -167,6 +167,12 @@ export async function verifyTeeAttestation(
       body: JSON.stringify({
         intel_quote: env.intel_quote,
         signing_address: env.signing_address,
+        // Forward signing_algo + request_nonce so the sidecar can
+        // exercise the algo and nonce-binding checks. Without these,
+        // the wrapper path would bypass the very protections those
+        // checks add (codex Q4 + Q6 follow-up).
+        signing_algo: env.signing_algo,
+        request_nonce: env.request_nonce,
       }),
     });
   } catch (e) {
