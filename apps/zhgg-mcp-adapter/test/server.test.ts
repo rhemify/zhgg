@@ -9,8 +9,23 @@ import { describe, it, expect } from 'bun:test';
 import { createFetchHandler } from '../src/server.js';
 import type { AuditReport } from '@zhgg/audit-agent';
 import type { OracleResponse } from '@zhgg/oracle-agent';
+import type { Account } from 'viem';
 
 const TOKEN = 'test-bearer-supersecret';
+
+// SwapClients.account changed from `Address` to viem `Account` (full
+// LocalAccount object) in the team's swap fix — the route check fails
+// before this stub is ever called, so we just need to satisfy the type.
+// Pattern matches apps/swap-agent/test/swap.test.ts:20-27.
+const STUB_ACCOUNT = {
+  address: '0x0000000000000000000000000000000000000000',
+  type: 'local',
+  publicKey: '0x00',
+  source: 'privateKey',
+  signMessage: async () => '0x',
+  signTransaction: async () => '0x',
+  signTypedData: async () => '0x',
+} as unknown as Account;
 
 const FAKE_REPORT: AuditReport = {
   target: { agentId: 7n, agentName: 'oracle.zhgg.eth' },
@@ -57,7 +72,7 @@ function buildHandler() {
           publicClient: {} as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           walletClient: {} as any,
-          account: '0x0000000000000000000000000000000000000000',
+          account: STUB_ACCOUNT,
         },
         executeSwapFn: async () => ({
           ok: true as const,
@@ -227,7 +242,7 @@ describe('POST /agents/audit/call', () => {
           clients: {
             publicClient: {} as never,
             walletClient: {} as never,
-            account: '0x0000000000000000000000000000000000000000',
+            account: STUB_ACCOUNT,
           },
         },
       },
@@ -301,7 +316,7 @@ describe('POST /agents/oracle/call', () => {
         },
         swap: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          clients: { publicClient: {} as any, walletClient: {} as any, account: '0x0' },
+          clients: { publicClient: {} as any, walletClient: {} as any, account: STUB_ACCOUNT },
           executeSwapFn: async () => ({ ok: false as const, error: { kind: 'invalid_amount' as const, reason: 'unused' } }),
         },
       },

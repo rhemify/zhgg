@@ -26,6 +26,7 @@ import {
   keccak256,
   parseAbi,
   toHex,
+  type Account,
   type Address,
   type Hex,
 } from 'viem';
@@ -119,7 +120,7 @@ function buildSwapClientsOrNull(env: BootEnv): SwapClients | null {
   const transport = http(env.baseSepoliaRpc);
   const publicClient = createPublicClient({ transport });
   const walletClient = createWalletClient({ account, transport });
-  return { publicClient, walletClient, account: account.address };
+  return { publicClient, walletClient, account };
 }
 
 /// Build the audit deps (infer + postReceipt + erc8004 client) from env.
@@ -328,10 +329,19 @@ function buildRoutes(env: BootEnv): { routes: ServerRouteDeps; available: string
   const swapClientsResolved: SwapClients = swapClients ?? {
     // Stub triple — never actually used because the route check fails
     // first. We keep the type satisfied without leaking real keys into
-    // a partially-configured deploy.
+    // a partially-configured deploy. SwapClients.account is now a viem
+    // `Account` (LocalAccount object), so the stub needs the same shape.
     publicClient: createPublicClient({ transport: http('http://127.0.0.1:0') }),
     walletClient: createWalletClient({ transport: http('http://127.0.0.1:0') }),
-    account: '0x0000000000000000000000000000000000000000',
+    account: {
+      address: '0x0000000000000000000000000000000000000000',
+      type: 'local',
+      publicKey: '0x00',
+      source: 'privateKey',
+      signMessage: async () => '0x',
+      signTransaction: async () => '0x',
+      signTypedData: async () => '0x',
+    } as unknown as Account,
   };
   const swapExecuteFn = swapClients
     ? undefined
