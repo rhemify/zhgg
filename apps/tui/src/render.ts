@@ -99,7 +99,7 @@ export function buildFrame(state: FrameState): string {
   // ── Top section titles ────────────────────────────────────────────────────
   const topEnd = ROW_TOP_END();
   put(ROW_TOP_START, 1, $.bold + $.cyan + '║' + $.reset);
-  put(ROW_TOP_START, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'ACTIVE AGENTS' + $.reset);
+  put(ROW_TOP_START, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'iNFT AGENTS' + $.reset + $.dwhite + '  (role in current workflow →)' + $.reset);
   put(ROW_TOP_START, mid + 1, $.bold + $.cyan + '║' + $.reset);
   put(ROW_TOP_START, mid + 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'ACTION QUEUE' + $.reset);
   put(ROW_TOP_START, w, $.bold + $.cyan + '║' + $.reset);
@@ -114,8 +114,8 @@ export function buildFrame(state: FrameState): string {
       put(r, 1, $.cyan + '║' + $.reset);
       put(
         r, 3,
-        st.color + st.glyph + ' ' + pad(a.name, 14) + ' ' + $.dwhite + pad('#' + a.tokenId.toString(), 4) + ' ' +
-        $.dwhite + pad(a.scope, 26) + ' ' + st.color + st.label + $.reset,
+        st.color + st.glyph + ' ' + pad(a.name, 14) + ' ' + $.dwhite + pad('#' + a.tokenId.toString(), 3) + ' ' +
+        $.dwhite + pad(a.scope, 36) + ' ' + st.color + st.label + $.reset,
       );
       put(r, mid + 1, $.cyan + '║' + $.reset);
       put(r, w, $.cyan + '║' + $.reset);

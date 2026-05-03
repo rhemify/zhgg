@@ -23,10 +23,10 @@ export interface AgentRow {
 /// they describe the iNFT's on-chain capability bytes, not aspirations.
 export function liveAgents(): AgentRow[] {
   const scopeFor = (name: string): string => {
-    if (name.startsWith('audit'))  return '[probe,tee_attestation]';
-    if (name.startsWith('oracle')) return '[pyth,eu-ai-act,usdc]';
-    if (name.startsWith('swap'))   return '[uniswap-v3,weth9]';
-    return '[?]';
+    if (name.startsWith('audit'))  return 'EU AI Act auditor · TEE probes on 0G';
+    if (name.startsWith('oracle')) return 'Pyth price · regulatory feed';
+    if (name.startsWith('swap'))   return 'Uniswap v3 · WETH9 on Base';
+    return '?';
   };
   return Object.entries(AGENT_REGISTRY).map(([ens, tokenId]) => ({
     name: ens.replace(/\.zhgg\.eth$/, '-agent'),
@@ -54,27 +54,50 @@ export type RunningCommand =
   | 'unpark'
   | 'delegate';
 
-/// Map runningCommand + stagedIntent to a per-agent status. Three states:
-///   running  → that agent is actively dispatching (green ●)
-///   staged   → an intent for this agent is staged but not dispatched
-///              (yellow ◎)
-///   idle     → no activity (dim ○)
+/// Map runningCommand + stagedIntent to a per-agent status label that
+/// explains each agent's ROLE in the current cross-agent workflow, not
+/// just whether it's active.
+///
+/// During `audit <tokenId>`:
+///   - The target token → SUBJECT (being evaluated by the auditor)
+///   - oracle-agent (#2) → CONSULTED (oracle query is always part of audit)
+///   - other agents → idle
+///
+/// During `ask oracle`:
+///   - oracle-agent (#2) → QUERIED
+///
+/// During `swap`:
+///   - swap-agent (#3) → EXECUTING
 export function agentStatus(
   row: AgentRow,
   stagedIntent: IntentCommand | null,
   runningCommand: RunningCommand,
 ): { label: string; color: string; glyph: string } {
-  const stagedKind = stagedIntent?.kind;
-  const stagedTokenForAudit = stagedIntent?.kind === 'audit' ? stagedIntent.tokenId : null;
-  const matchesStaged =
-    (stagedKind === 'audit' && stagedTokenForAudit === row.tokenId) ||
-    (stagedKind === 'ask-oracle' && row.tokenId === 2n) ||
-    (stagedKind === 'swap' && row.tokenId === 3n);
-  const matchesRunning =
-    (runningCommand === 'audit' && row.tokenId === 1n) ||
-    (runningCommand === 'ask-oracle' && row.tokenId === 2n) ||
-    (runningCommand === 'swap' && row.tokenId === 3n);
-  if (matchesRunning) return { label: 'RUNNING', color: $.green, glyph: '●' };
-  if (matchesStaged)  return { label: 'STAGED',  color: $.yellow, glyph: '◎' };
-  return { label: 'IDLE', color: $.dwhite, glyph: '○' };
+  const auditTokenId = stagedIntent?.kind === 'audit' ? stagedIntent.tokenId : null;
+
+  if (runningCommand === 'audit') {
+    if (row.tokenId === auditTokenId) return { label: 'SUBJECT  ←', color: $.bold + $.green, glyph: '●' };
+    if (row.tokenId === 2n)          return { label: 'CONSULTED ↗', color: $.green, glyph: '◎' };
+    return { label: 'idle', color: $.dwhite, glyph: '○' };
+  }
+  if (runningCommand === 'ask-oracle') {
+    if (row.tokenId === 2n) return { label: 'QUERIED  ←', color: $.bold + $.green, glyph: '●' };
+    return { label: 'idle', color: $.dwhite, glyph: '○' };
+  }
+  if (runningCommand === 'swap') {
+    if (row.tokenId === 3n) return { label: 'EXECUTING ←', color: $.bold + $.green, glyph: '●' };
+    return { label: 'idle', color: $.dwhite, glyph: '○' };
+  }
+
+  // Staged (typed but not dispatched yet)
+  if (stagedIntent) {
+    if (stagedIntent.kind === 'audit' && row.tokenId === auditTokenId)
+      return { label: 'STAGED   →', color: $.yellow, glyph: '◎' };
+    if (stagedIntent.kind === 'ask-oracle' && row.tokenId === 2n)
+      return { label: 'STAGED   →', color: $.yellow, glyph: '◎' };
+    if (stagedIntent.kind === 'swap' && row.tokenId === 3n)
+      return { label: 'STAGED   →', color: $.yellow, glyph: '◎' };
+  }
+
+  return { label: 'idle', color: $.dwhite, glyph: '○' };
 }
