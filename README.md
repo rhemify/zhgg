@@ -1,196 +1,384 @@
 # zhgg
 
-**Trust-level inference router for crypto-native AI agents.**
+**Bidirectional agentic-commerce runtime — your agents can hire third-party
+KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
+the same MCP-callable HTTP surface. Every audit produces a tamper-proof
+EU AI Act evidence chain anchored on 0G Storage + ERC-8004.**
 
-Built for [ETHGlobal OpenAgents](https://ethglobal.com/events/openagents) — submitting to 0G, KeeperHub, and ENS prize tracks.
+> Last verified: 2026-05-03 against branch `siewwin`.
+>
+> Status: contracts deployed on 0G Galileo (16602) + Base Sepolia (84532).
+> 220 forge tests + 51 bun test files across 11 EIPs and 9 workspace agents.
+> Built for ETHGlobal OpenAgents — submitting to **0G Labs** ($15K), **KeeperHub**
+> ($4.5K + $500 feedback), and **EIP-standards** depth signals.
+
+## Headline scenario
+
+```
+audit oracle.zhgg.eth                        TUI command (one keystroke)
+        │
+        ▼
+ENS  →  AgentNFT.tokenId (ERC-7857, 0G)      apps/tui/src/intent-parser/resolve.ts
+        │
+        ▼
+SpendCap pre-flight (ERC-7715, Base)         apps/demo/src/spend-cap.ts
+        │
+        ▼
+AxiomCommit.commitPlan (0G)                  apps/demo/src/loop-helpers.ts
+        │
+        ▼
+0G Compute Router (TEE Qwen, verify_tee)     packages/workflow/src/adapters/zg-router.ts:18
+        │
+        ▼
+FeeSplitter 85/5/5/5 split (Base, ERC-8021)  contracts/src/FeeSplitter.sol:22
+   OR  KeeperHub x402 marketplace pay        apps/demo/src/keeperhub-marketplace.ts:60
+        │
+        ▼
+ERC-8004 giveFeedback receipt (0G)           apps/zhgg-mcp-adapter/src/index.ts:130
+        │
+        ▼
+canonical AuditReport bytes →
+0G Storage Log rootHash (anchor)             packages/workflow/src/audit-report.ts:283
+        │
+        ▼
+AxiomCommit.revealPlan (0G)                  apps/demo/src/loop-helpers.ts
+```
+
+## Bidirectional KH ↔ zhgg loop
+
+```
+                       ┌──────────────────────────────────────┐
+                       │  zhgg TUI  (operator-driven)         │
+   kh hire <slug> ────►│  apps/tui/src/index.ts:1568          │── x402 settle ──┐
+                       │  → payViaKeeperHubMarketplace        │                  ▼
+                       └──────────────────────────────────────┘   ┌─────────────────────────┐
+                                                                  │  KeeperHub marketplace  │
+                       ┌──────────────────────────────────────┐   │  (mainnet HTTPS + 402)  │
+   POST /agents/audit  │  zhgg-mcp-adapter HTTP server        │◄──│                         │
+   POST /agents/swap ──►  apps/zhgg-mcp-adapter/src/server.ts │   └─────────────────────────┘
+   POST /agents/oracle │  Bearer MCP_AUTH_TOKEN               │
+                       └──────────────────────────────────────┘
+```
+
+zhgg consumes KH (left arrow), zhgg agents are exposed AS KH-callable
+workflows (right arrow). Same x402 + EIP-3009 settlement, same MCP-shaped
+JSON envelopes, same ERC-8004 reputation evidence on both directions.
+
+## Quick links
+
+| Doc | Purpose |
+|---|---|
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | full system diagram + data flows |
+| [`docs/AUDIT-REPORT-SCHEMA.md`](./docs/AUDIT-REPORT-SCHEMA.md) | EU AI Act canonical report + verification recipe |
+| [`docs/INTEGRATION-MAP.md`](./docs/INTEGRATION-MAP.md) | package import graph + contract caller map |
+| [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md) | end-to-end testnet deploy (forge + smoke + MCP) |
+| [`tasks/integration-audit-final.md`](./tasks/integration-audit-final.md) | what's wired, gaps, risk register |
+| [`tasks/partner-alignment.md`](./tasks/partner-alignment.md) | KH/0G/EIP scoring with file:line evidence |
+| [`tasks/intent-commands.md`](./tasks/intent-commands.md) | every TUI intent + verified status |
+| [`.env.example`](./.env.example) | env-var matrix (required / filled-by-deploy / optional) |
 
 ---
 
-## The problem
-
-AI agents in 2026 have wallets and USDC, not credit cards and API keys. They need:
-
-- **Cheap inference** for routine tasks (research, classification)
-- **Verifiable inference** for on-chain decisions (votes, trades, credentials) — a smart contract has to be able to prove an AI actually approved the action
-- **Crypto-native payment** — no API keys, no Stripe, no human-in-the-loop
-- **Settlement reliability** — silent payment failures break the agent loop
-
-Today an agent developer wires this themselves. It's ~400 lines of fragile glue: provider selection, x402 payment, retry, audit logging, attestation verification. It breaks at 3am.
-
-## What zhgg is
-
-The Stripe for AI agent inference. One API surface, four trust modes:
-
-| Mode | Behaviour | When to use |
-|---|---|---|
-| `zhgg/fast` | Cheapest live provider on x402 Bazaar | Research, classification, anything where the AI's answer doesn't move money |
-| `zhgg/verified` | TEE-attested 0G Compute | The agent is about to take an on-chain action and a smart contract needs to verify the AI authorised it |
-| `zhgg/consensus` | 3 providers in parallel + 0G TEE anchor | Multi-sig for AI: high-stakes decisions where accuracy AND proof matter |
-| `zhgg/pipeline` | Cheap research → TEE-attested decision | Multi-step reasoning where step 1 doesn't need attestation but step 2 does |
-
-Underneath: KeeperHub settles every payment, 0G Storage logs every event with `keccak256` hashes, an ERC-7857 iNFT carries the agent's identity, ERC-8021 calldata suffix captures protocol fees.
-
-```
-┌─────────────────────────────────────────────────────┐
-│  agent calls router.route({ prompt, mode, budget })  │
-└─────────────────────┬───────────────────────────────┘
-                      ▼
-        ┌──────────── policy ────────────┐
-        │ scope check, mode allowed,     │
-        │ spend cap, expiry              │
-        └────────────┬───────────────────┘
-                     ▼
-        ┌──── unified provider pool ─────┐
-        │ 0G Compute  ·  Bazaar (x402)   │
-        │ ranked by price, filtered by   │
-        │ trust requirement              │
-        └────────────┬───────────────────┘
-                     ▼
-        ┌────── adapter dispatch ────────┐
-        │ zg.infer()  or  x402.infer()    │
-        └────────────┬───────────────────┘
-                     ▼
-        ┌────── KeeperHub MCP ───────────┐
-        │ settle, retry, gas, nonce      │
-        └────────────┬───────────────────┘
-                     ▼
-        ┌──── 0G Storage audit ──────────┐
-        │ append-only log, keccak256     │
-        │ hashed prompt + response       │
-        └────────────┬───────────────────┘
-                     ▼
-        ┌────── ERC-8021 suffix ─────────┐
-        │ protocol fee on every settle   │
-        └────────────────────────────────┘
-```
-
-Full architecture: [`docs/architecture.md`](./docs/architecture.md). Pivot brief: [`docs/pivot.md`](./docs/pivot.md).
-
----
-
-## Run it
+## Quick start
 
 ```bash
-bun install                            # one-time
-
-# CLI demo — 5 headlines through the router with mock providers
-bun --filter demo demo
-
-# Live TUI dashboard — same demo, judge-friendly side-by-side panels
-bun --filter @zhgg/tui router
-
-# Type check (6 packages)
-bun run check-types
-
-# Tests (319 router + 45 contract)
-cd packages/router && bun test
-cd contracts && forge test
+git clone https://github.com/LingSiewWin/zhgg && cd zhgg
+bun install
+cp .env.example .env                          # fill MINT_AGENT_PRIVATE_KEY etc.
+bun run check-types                           # 11 packages
+bun run apps/tui/src/index.ts                 # raw-ANSI TUI
 ```
 
-The demo prints 5 headlines: 3 routed through `zhgg/fast`, 2 through `zhgg/consensus`. Headline 5 deliberately produces 67% provider agreement so the `low_confidence` flag fires — that's the consensus mode's killer feature on display.
+Demo walkthrough (paste into the running TUI):
 
 ```
-[5] Smart contract upgrade proposal passes
-     mode:        consensus  (on-chain protocol consequence)
-     response:    bullish
-     providers:   x402:groq, x402:together, zg:0xnode-a
-     cost:        $0.000480
-     attestation: 0xde2f45…454b
-     agreement:   67%  ⚠ low confidence
-     audit_cid:   0x000000…0005
+agents                                        # list 3 iNFTs (audit/oracle/swap.zhgg.eth)
+balances                                      # OG + ETH + USDC + WETH
+ask oracle ETH/USD                            # Pyth Hermes feed
+ask oracle eu-ai-act                          # regulatory deltas
+kh discover aave                              # KH marketplace search
+kh inspect ARYA                               # full inputSchema + price
+kh hire <slug> {"foo":"bar"}                  # x402 marketplace round-trip
+swap 0.0001 ETH WETH                          # Uniswap V3 SwapRouter02
+mint audit                                    # ERC-7857 iNFT on 0G
+audit oracle.zhgg.eth                         # full 10-step orchestrator (gated on ZG_ROUTER_KEY)
 ```
+
+Full walkthrough: [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md).
 
 ---
 
-## Deploy contracts (testnet)
+## What's working
 
-```bash
-cd contracts
-forge install                          # one-time
-forge build
-forge script script/Deploy.s.sol \
-  --rpc-url $ZG_RPC_URL \
-  --private-key $PRIVATE_KEY \
-  --broadcast
-```
+### Workspace agent packages (`apps/`)
 
-Copy the printed `AGENT_NFT_ADDRESS`, `ACP_STUB_ADDRESS`, `ZG_INFT_TOKEN_ID` into `.env`. The deploy script also mints the demo iNFT (token #1) with a permissive capability manifest.
-
----
-
-## Prize tracks targeted
-
-| Sponsor | Track | What we ship |
+| Package | Purpose | Status |
 |---|---|---|
-| **0G** | Best Agent Framework & Tooling ($7,500) | zhgg packaged as an OpenClaw provider plugin. 0G Compute powers `zhgg/verified` and the consensus anchor. 0G Storage holds every audit log entry. |
-| **0G** | Best Autonomous Agents + iNFT ($7,500) | ERC-7857 iNFT (`AgentNFT.sol`) on 0G Galileo. Agent owns identity + memory root. `authorizeUsage` pays royalty to owner. Demo agent earns from usage and pays its own inference. |
-| **KeeperHub** | Best Integration ($4,500) + feedback bounty ($500) | Every settlement (both adapters) routes through KeeperHub MCP. See [`docs/FEEDBACK.md`](./docs/FEEDBACK.md). |
-| **ENS** | Creative Use ($2,500, stretch) | ENS text records as agent capability manifests. `agent.zhgg.eth` resolves via `zhgg.inft`/`zhgg.modes`/`zhgg.maxCostUsd` text records to the iNFT identity. |
+| `@zhgg/tui` (`apps/tui`) | Raw-ANSI dispatcher; 29 intents over 7 tiers | ✓ refuses on missing env, real I/O |
+| `@zhgg/audit-agent` (`apps/agents/audit`) | EU AI Act probes via TEE Qwen + verdict aggregator | ✓ ([`runAudit.ts`](./apps/agents/audit/src/runAudit.ts)) |
+| `@zhgg/oracle-agent` (`apps/agents/oracle`) | Pyth Hermes price feed + regulatory deltas | ✓ ([`apps/agents/oracle/src/index.ts:11`](./apps/agents/oracle/src/index.ts)) |
+| `@zhgg/keeperhub-agent` (`apps/keeperhub-agent`) | KH HTTP client (discover/inspect/trigger/status/workflows/integrations) | ✓ ([`endpoints/`](./apps/keeperhub-agent/src/endpoints/)) |
+| `@zhgg/swap-agent` (`apps/swap-agent`) | Uniswap V3 SwapRouter02 on Base, fee tiers `[500, 3000, 10000]` | ✓ |
+| `@zhgg/transfer-agent` (`apps/transfer-agent`) | ERC-20 + native transfer with ENS resolve | ✓ |
+| `@zhgg/mint-agent` (`apps/mint-agent`) | ERC-7857 mint + per-iNFT receiver wallet + optional ENS subname | ✓ |
+| `@zhgg/mcp-adapter` (`apps/zhgg-mcp-adapter`) | HTTP server exposing audit/oracle/swap as KH-callable | ✓ honest 503 on missing env |
+| `@zhgg/demo` (`apps/demo`) | Cross-agent orchestrator + smoke test + cross-agent CLI | ✓ |
+| `@zhgg/tee-verifier` (`apps/tee-verifier`) | dstack quote sidecar, structural mode | ⚠ deployed but not wired into orchestrator |
+| `web` (`apps/web`) | Static homepage; not on agent path | ✓ |
 
-**Total target: ~$20,500.**
+### Shared packages (`packages/`)
+
+| Package | Purpose |
+|---|---|
+| `@zhgg/workflow` | Audit report writer, x402 settle, delegation EIP-712, storage-log, multi-leg relay, 0G TEE inference plugin |
+| `@zhgg/router` | Mode classifier + provider pool (mock-stack, demo-only path) |
+| `@zhgg/oracle-data` | Static EU AI Act + MiCA + GDPR-AI deltas (no I/O) |
+| `@zhgg/wallet-aa` | ERC-4337 user-op + paymaster encoder (deployed but not yet on TUI dispatch path — see "What's NOT yet wired") |
+| `@my-better-t-app/env` | Web env schema |
+| `@my-better-t-app/ui` | Web component lib |
+| `@my-better-t-app/config` | Shared tsconfig presets |
+
+Live testnet addresses (verified from `contracts/broadcast/Deploy0GContracts.s.sol/16602/run-latest.json` and `.../84532/run-latest.json`):
+
+| Contract | Chain | Address |
+|---|---|---|
+| `AgentNFT` (ERC-7857) | 0G Galileo | `0x5298f4d8d8043c14e5f2683ad642febc8b54638f` |
+| `AgentRegistry` (ERC-8004) | 0G Galileo | `0xe78f6c235fd1686547dbea41f742d649607316b1` |
+| `AxiomCommit` | 0G Galileo | `0xa471d2c45f03518e47c7fc71c897d244df01859d` |
+| `AgenticCommerce` (EIP-8183) | 0G Galileo | `0x6b90618b48d199e1d0df75179d26c2b97e80af44` |
+| `SpendCap` (ERC-7715) | Base Sepolia | `0x666a6466bddd1fb79bda32f00a045c1ec77c61a8` |
+| `FeeSplitter` (ERC-8021) | Base Sepolia | `0xb3a9ea5a72caab795bcf16c7bc5fd2d4863b47dd` |
+| `OwnerMirror` | Base Sepolia | `0x49976ae86d28665232c164713c3379e6301a63c7` |
+| `AgentReceiverWalletFactory` | Base Sepolia | `0x6848f17d55b8df970df17c7a04b1c0e0b6565dd1` |
+| `DelegationManager` (ERC-7710) | Base Sepolia | `0xdee1f561d685cdced4c6caaa40f8c6f7112dffef` |
+| `AgentSimpleAccountFactory` (ERC-4337) | Base Sepolia | `0x1eea5c29d671af30a2436078caf523919fd44304` |
+
+iNFTs minted: `audit.zhgg.eth=1`, `oracle.zhgg.eth=2`, `swap.zhgg.eth=3` ([`apps/tui/src/agent-registry.ts:19-23`](./apps/tui/src/agent-registry.ts)).
 
 ---
 
-## What's in the repo
+## Partner alignment
+
+### KeeperHub track ($4,500 + $500 feedback bounty)
+
+| Criterion | File:line evidence | Status |
+|---|---|---|
+| x402 marketplace pay-and-trigger (consumer) | [`apps/demo/src/keeperhub-marketplace.ts:60-122`](./apps/demo/src/keeperhub-marketplace.ts) bound at [`apps/tui/src/index.ts:1568`](./apps/tui/src/index.ts) | ✓ |
+| Workflow consumption (discover/inspect/trigger/status/workflows/integrations) | [`apps/keeperhub-agent/src/index.ts:74-147`](./apps/keeperhub-agent/src/index.ts); endpoints in [`apps/keeperhub-agent/src/endpoints/`](./apps/keeperhub-agent/src/endpoints/) | ✓ |
+| HMAC-signed Turnkey wallet integration | [`apps/demo/src/keeperhub-marketplace.ts:31-44`](./apps/demo/src/keeperhub-marketplace.ts) consuming `WalletConfig{subOrgId, walletAddress, hmacSecret}` | ✓ |
+| Real on-chain x402 facilitator settlement | [`packages/workflow/src/x402.ts:1-90`](./packages/workflow/src/x402.ts) (`https://x402.org/facilitator`) | ✓ |
+| Producing workflows BACK to KH (publish plugin) | Plugin authored at [`packages/workflow/plugins/0g-tee-inference/`](./packages/workflow/plugins/0g-tee-inference/) but never opened a PR to `KeeperHub/keeperhub` | ⚠ |
+| `kh publish` arm in TUI (register `<ens>`) | Not wired ([`tasks/intent-commands.md:125`](./tasks/intent-commands.md)) | ⚠ |
+| Bidirectional flywheel — zhgg agents AS KH-callable workflows | [`apps/zhgg-mcp-adapter/src/server.ts:68`](./apps/zhgg-mcp-adapter/src/server.ts) routes; bearer + Slice-Y canonical receipts | ✓ |
+| Builder feedback bounty content | Raw research at [`docs/keeperhub.md:467-573`](./docs/keeperhub.md) — needs promotion to canonical `FEEDBACK.md` | ⚠ |
+
+### 0G Labs track ($15,000 — $7.5K framework + $7.5K agents+iNFT)
+
+| Criterion | File:line evidence | Status |
+|---|---|---|
+| ERC-7857 iNFT — 3 real tokens on Galileo | [`contracts/src/AgentNFT.sol:26-95`](./contracts/src/AgentNFT.sol) full IERC7857; deployed `0x5298…638f`; verified live `agents` intent returns 75B/231B/173B caps | ✓ |
+| ERC-8004 reputation — `giveFeedback` per audit | [`contracts/src/AgentRegistry.sol:23-121`](./contracts/src/AgentRegistry.sol); `giveFeedback` at [`apps/zhgg-mcp-adapter/src/index.ts:131-152`](./apps/zhgg-mcp-adapter/src/index.ts); CAIP-2 `eip155:16602:<registry>` | ✓ |
+| 0G Compute Router with `verify_tee:true` | [`packages/workflow/src/adapters/zg-router.ts:18-104`](./packages/workflow/src/adapters/zg-router.ts) sets `verify_tee:true`, parses `body.trace.tee_verified`, falls back to `x-tee-attestation` header | ⚠ header not always emitted by hosted router (honest comment [`tee-attestation.ts:12-19`](./packages/workflow/src/tee-attestation.ts)) |
+| 0G Storage adapter — canonical AuditReport bytes | [`packages/workflow/src/storage-log-zg.ts`](./packages/workflow/src/storage-log-zg.ts) wraps `@0gfoundation/0g-ts-sdk`; opt-in via `ZG_STORAGE_ENABLED=1` ([`audit-report.ts:283-287`](./packages/workflow/src/audit-report.ts)) | ⚠ flag-gated; orchestrator path pins, MCP path returns `feedbackURI=""` by design |
+| Slice-Y canonical AuditReport (deterministic, key-sorted, self-referential keccak256) | [`packages/workflow/src/audit-report.ts:1-27`](./packages/workflow/src/audit-report.ts); refuses fake URI [`:283-287`](./packages/workflow/src/audit-report.ts) | ✓ |
+| Track 1 framework — 0G TEE Inference KH plugin | [`packages/workflow/plugins/0g-tee-inference/`](./packages/workflow/plugins/0g-tee-inference/) first-class KH-shaped plugin; `_integrationType` exported | ✓ |
+| Track 2 autonomous agents | 3 iNFT-bound agents with real capability bytes; orchestrator at [`apps/demo/src/cross-agent.ts`](./apps/demo/src/cross-agent.ts); per-agent receiver wallets + 4-way 85/5/5/5 split + per-call ERC-8004 reputation | ✓ |
+
+### EIP standards (cross-cutting differentiator)
+
+| EIP | Reality | File:line |
+|---|---|---|
+| **ERC-7857** (iNFT) | Tokens 1/2/3 live on Galileo | [`contracts/src/AgentNFT.sol`](./contracts/src/AgentNFT.sol) |
+| **ERC-8004** (reputation) | `giveFeedback` per audit + CAIP-2 endpoint | [`contracts/src/AgentRegistry.sol`](./contracts/src/AgentRegistry.sol) |
+| **ERC-7710** (delegations) | EIP-712 sign + on-chain `redeemDelegations` | [`contracts/src/DelegationManager.sol`](./contracts/src/DelegationManager.sol); [`apps/tui/src/index.ts:799-878`](./apps/tui/src/index.ts) |
+| **ERC-7715** (spend caps) | Audit pre-flight + grant `[G]` | [`contracts/src/SpendCap.sol`](./contracts/src/SpendCap.sol); [`apps/demo/src/spend-cap.ts`](./apps/demo/src/spend-cap.ts) |
+| **ERC-8183** (agentic commerce / ACP escrow) | First on 0G Galileo; `acp create / acp release` | [`contracts/src/AgenticCommerce.sol`](./contracts/src/AgenticCommerce.sol); [`apps/tui/src/acp-intents.ts`](./apps/tui/src/acp-intents.ts) |
+| **ERC-4626** (yield vault) | `parkIdle/withdrawIdle` via `MockERC4626` | [`contracts/src/AgentReceiverWallet.sol:60-321`](./contracts/src/AgentReceiverWallet.sol) |
+| **ERC-4337** (account abstraction) | Factory deployed; user-op + paymaster encoder ready | [`contracts/src/AgentSimpleAccount.sol`](./contracts/src/AgentSimpleAccount.sol); [`packages/wallet-aa/`](./packages/wallet-aa/) — ⚠ no TUI callsite yet |
+| **EIP-3009** (transferWithAuthorization) | Used through KH x402 + facilitator settle | [`packages/workflow/src/x402.ts:7-90`](./packages/workflow/src/x402.ts) |
+| **EIP-8021** (calldata-suffix attribution) | Magic suffix `0x8021…8021` on FeeSplitter | [`contracts/src/lib/ERC8021Suffix.sol`](./contracts/src/lib/ERC8021Suffix.sol); [`contracts/src/FeeSplitter.sol:42-44`](./contracts/src/FeeSplitter.sol) |
+| ERC-721 / ERC-20 | Underlying primitives | OpenZeppelin v5 |
+
+**Honesty note** — synthetic-inference fallback exists at [`apps/demo/src/live-deps.ts:180-200`](./apps/demo/src/live-deps.ts) (returns `provider_id: 'qwen3.6-plus-mock'`, `receipt: cmpl-mock-N`, marker `0x6d6f636b…`). The TUI dispatch path bails at [`apps/tui/src/index.ts:223`](./apps/tui/src/index.ts) (`if (!bundle.inferenceReady)`) so this branch is **unreachable from TUI dispatch**. CLI `--live` mode without `ZG_ROUTER_KEY` does reach it. The marker is greppable on purpose so judges can confirm.
+
+---
+
+## Architecture
+
+zhgg is two HTTP services + one TUI + an orchestrator + a contract suite,
+all wired through `@zhgg/workflow` primitives. The TUI parses operator
+intents and dispatches to per-domain handlers (KH HTTP, Base writes, 0G
+writes, ACP escrow, yield, audit). The MCP adapter exposes the same
+agents over Bearer-authenticated HTTP so KeeperHub workflows can call
+ours. Every audit emits an ERC-8004 receipt + (optionally) a 0G Storage
+rootHash anchor of the canonical bytes.
+
+Full diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+
+```
+apps/
+  tui                    raw-ANSI dispatcher (29 intents, 7 tiers)
+  zhgg-mcp-adapter       HTTP server: /agents/{audit,oracle,swap}/call
+  agents/audit           runAudit (TEE Qwen probes + verdict)
+  agents/oracle          pyth + regulatory deltas
+  keeperhub-agent        KH HTTP client (6 endpoints)
+  swap-agent             Uniswap V3 SwapRouter02
+  transfer-agent         ERC-20 + native + ENS resolve
+  mint-agent             AgentNFT.mint + receiver wallet + ENS subname
+  demo                   cross-agent orchestrator + smoke + CLI
+  tee-verifier           dstack quote sidecar (structural)
+  web                    static homepage
+packages/
+  workflow               audit-report, x402, delegation, storage-log,
+                         multi-leg-relay, across, 0G TEE plugin
+  router                 mode classifier + provider pool (demo path)
+  oracle-data            static regulatory + price deltas
+  wallet-aa              ERC-4337 user-op + paymaster encoder
+contracts/
+  src/                   12 contracts (7 EIPs touched on-chain)
+  test/                  220 forge tests across 14 t.sol files
+  script/                Deploy0GContracts, DeployBaseContracts, DeployYieldVault
+docs/                    architecture, audit-report-schema, integration-map,
+                         deploy runbook, EIP cheat sheets, partner research
+scripts/                 fund-zg-router.ts (one-shot 3 OG deposit)
+```
+
+---
+
+## The 29 intents
+
+Reference: [`tasks/intent-commands.md`](./tasks/intent-commands.md) (gitignored
+locally; tier table mirrored here).
+
+| Tier | Intents | Cost | Effect |
+|---|---|---|---|
+| **T1 reads** | `balances`, `block`, `agents`, `ask oracle <topic>`, `?`, `[Q]` | free | `eth_getBalance`, `ownerOf`+`capabilities`, Pyth Hermes, regulatory deltas |
+| **T2 KH HTTP** | `kh integrations`, `kh workflows`, `kh discover`, `kh inspect`, `kh trigger`, `kh status` | free | KH org + marketplace catalog reads (verified 6 hits on `aave`) |
+| **T3 Base writes** | `[G]` grant, `swap`, `transfer`, `delegate`, `kh hire` | ~0.0001 ETH | SpendCap permission, Uniswap V3, ERC-20+ENS, ERC-7710 redeem, x402 marketplace |
+| **T4 yield** | `park <amt> <USDC\|WETH>`, `unpark <amt> <USDC\|WETH>` | gas | ERC-4626 deposit/withdraw via AgentReceiverWallet — ⏳ blocked on `YIELD_VAULT_ADDRESS` |
+| **T5 0G writes** | `mint <role>`, `commit <id> <plan>`, `reveal <commitId> <plan>` | ~0.001 OG | ERC-7857 mint, AxiomCommit commit/reveal |
+| **T6 ACP escrow** | `acp create <agent> <amount>`, `acp release <jobId>` | gas + token | EIP-8183 createJob+approve+fund (3 txs); evaluator-only release |
+| **T7 router-gated** | `audit <tokenId\|ens>` | ~0.005 OG + 0G Compute | Full 10-step orchestrator: capabilities → cap → commit → TEE infer → settle → ERC-8021 → ERC-8004 → storage → memoryRoot → reveal |
+
+29 distinct intents, parser tested at [`apps/tui/src/intent-parser/parsers/`](./apps/tui/src/intent-parser/parsers/).
+
+---
+
+## Audit evidence chain (EU AI Act)
+
+After every `audit <subject>` run, `audit.zhgg.eth` produces a canonical
+JSON `AuditReport` with deterministic key-sorted UTF-8 encoding. The
+report's `anchors.feedbackHash` is the keccak256 of those exact bytes
+with `feedbackHash` itself zeroed (self-referential fixed point). The
+hash + 0G Storage rootHash get written on-chain via
+`AgentRegistry.giveFeedback` (ERC-8004, [`apps/zhgg-mcp-adapter/src/index.ts:130-152`](./apps/zhgg-mcp-adapter/src/index.ts)).
+
+A regulator scanning `NewFeedback` events on chain 16602 can:
+
+1. extract `(feedbackURI, feedbackHash)` from the event
+2. fetch canonical bytes from 0G Storage at `rootHash = feedbackURI`
+3. recompute via `canonicalizeAuditReport`
+4. compare to `feedbackHash`
+5. match → these are the exact bytes the auditor agreed to on-chain
+
+The writer **refuses** to fabricate a fake URI: when storage is
+disabled or no client supplied it throws `WriteAuditReportError(storage_disabled|no_client)`
+([`packages/workflow/src/audit-report.ts:283-297`](./packages/workflow/src/audit-report.ts)).
+Schema, errors, sample, and verification recipe: [`docs/AUDIT-REPORT-SCHEMA.md`](./docs/AUDIT-REPORT-SCHEMA.md).
+
+---
+
+## What's NOT yet wired (honesty section)
+
+From [`tasks/integration-audit-final.md`](./tasks/integration-audit-final.md) §D — features that ship but aren't on the demo dispatch path:
+
+| Feature | Why deployed but isolated | Severity |
+|---|---|---|
+| `AgentSimpleAccountFactory` (ERC-4337) + `@zhgg/wallet-aa` | Built for paymaster demo; no TUI callsite. ~80 LOC to wire `aa send <addr>` UserOp | 🔴 critical |
+| `apps/tee-verifier` Bun server | `inferZG` runs `verifyTee:true` non-strict; sidecar's `verifierUrl` only set in tests | 🔴 critical |
+| `OwnerMirror` cross-chain attestor | Designed to mirror AgentNFT owner across chains; orchestrator reads owner directly via `AgentNFT.ownerOf` | 🟠 major |
+| `packages/workflow/src/across.ts` (Across V3 bridge) | Re-exported, not imported by any app | 🟠 major |
+| `multi-leg-relay.ts` (`relayPaymentIntent`) | EIP-712 multi-leg payment intent — no dispatch path; tests pass standalone | 🟠 major |
+| `packages/router` mock stack | Headlines demo (`apps/demo/src/index.ts`) exists; TUI never invokes it | 🟠 major |
+
+External blockers (env / faucet only — code is ready):
+
+| Blocker | Cost | Unlocks |
+|---|---|---|
+| 0G Compute Router ≥3 OG floor (faucet caps 0.1 OG/wallet/day) | external — Discord drip | T7 `audit` |
+| `YIELD_VAULT_ADDRESS` deploy (one `forge script DeployYieldVault.s.sol`) | ~0.0001 ETH gas | T4 `park` / `unpark` |
+| `KH_AUTHOR_*` env (subOrgId + wallet + HMAC) | request via Telegram `@LucaGra04` | KH x402 hire path (currently falls back to direct FeeSplitter) |
+| `ACP_PAYMENT_TOKEN` env + balance | configure | T6 `acp create` / `acp release` |
+
+**Why we shipped what we shipped** — bidirectional KH ↔ zhgg loop is the
+differentiator. Closing the AA-wallet + tee-verifier gaps adds two more
+"production-ready EIP" headlines but doesn't change the demo's narrative.
+The audit-evidence chain (Slice Y) is the hardest engineering and ships
+real, end-to-end, with refusal semantics — that's what regulators care about.
+
+---
+
+## Repo structure
 
 ```
 zhgg/
-├── packages/
-│   ├── router/              @zhgg/router — the entire core (319 tests)
-│   │   └── src/
-│   │       ├── intent.ts            mode + output_type + provider types
-│   │       ├── scope.ts             HMAC-signed ExecutionScope
-│   │       ├── policy.ts            spend / latency / mode / expiry rules
-│   │       ├── pool.ts              unified provider pool
-│   │       ├── consensus.ts         majority-vote / cosine / numeric / json
-│   │       ├── router.ts            mode orchestration + RouterEventBus
-│   │       ├── adapters/
-│   │       │   ├── zg.ts            0G broker adapter (TEE)
-│   │       │   └── x402.ts          Bazaar adapter (x402 USDC)
-│   │       ├── keeper.ts            KeeperHub MCP client
-│   │       ├── audit.ts             async 0G Storage writer
-│   │       ├── erc8021.ts           protocol fee calldata suffix
-│   │       ├── identity/
-│   │       │   ├── inft.ts          ERC-7857 iNFT adapter
-│   │       │   └── ens.ts           ENS text-record agent resolver
-│   │       ├── providers/
-│   │       │   └── openclaw.ts      OpenClaw provider plugin
-│   │       └── testing/
-│   │           └── mock-stack.ts    shared demo/TUI mock stack
-│   └── …
 ├── apps/
-│   ├── demo/                CLI: 5 headlines, mock providers, prints summary
-│   └── tui/                 Live dashboard: agent / routing / audit / settle
-└── contracts/               Foundry workspace (45 tests)
-    └── src/
-        ├── AgentNFT.sol             ERC-7857 iNFT + royalties
-        ├── ACPJobStub.sol           job lifecycle escrow
-        └── interfaces/IERC7857.sol
+│   ├── tui/                  raw-ANSI TUI (29 intents)
+│   ├── zhgg-mcp-adapter/     HTTP server (Slice Z, Bearer auth)
+│   ├── agents/{audit,oracle} per-agent runtime
+│   ├── keeperhub-agent/      KH HTTP client + endpoints/
+│   ├── {swap,transfer,mint}-agent/  EVM-write agents
+│   ├── demo/                 cross-agent orchestrator + smoke + CLI
+│   ├── tee-verifier/         dstack quote sidecar
+│   └── web/                  static homepage
+├── packages/
+│   ├── workflow/             audit-report, x402, delegation, storage-log,
+│   │   ├── src/              multi-leg-relay, across, adapters/zg-router
+│   │   └── plugins/          {0g-tee-inference,oracle} KH plugins
+│   ├── router/               mode classifier + mock stack
+│   ├── oracle-data/          regulatory deltas
+│   ├── wallet-aa/            ERC-4337 user-op + paymaster encoder
+│   └── {env,ui,config}/      web baseline (template)
+├── contracts/
+│   ├── src/                  12 contracts, 7 on-chain EIPs
+│   ├── test/                 220 forge tests across 14 t.sol files
+│   ├── script/               Deploy0GContracts, DeployBaseContracts, DeployYieldVault
+│   └── broadcast/            verified deploy artifacts (16602 + 84532)
+├── docs/                     architecture, schema, integration-map, runbook,
+│                             specs/EIP-*.md cheat sheets, partner research
+├── scripts/                  fund-zg-router.ts
+├── tasks/                    integration audit, partner alignment, intent commands
+├── .env.example              env-var matrix
+└── README.md                 (this file)
 ```
 
 ---
 
 ## Tech stack
 
-- **Runtime**: Bun
-- **Language**: TypeScript (strict, no `any`)
-- **Schema**: Zod
-- **EVM**: ethers v5 (required by 0G SDKs)
+- **Runtime**: bun
+- **Language**: TypeScript strict (no `any` in production paths)
+- **Schema**: zod 4
+- **EVM**: viem (apps), ethers v6 (0G SDK boundary in `storage-log-zg.ts` only)
 - **Solidity**: 0.8.24 + Foundry + OpenZeppelin v5
-- **0G**: `@0glabs/0g-serving-broker@0.7.5` (TEE inference) + `@0glabs/0g-ts-sdk@0.3.3` (storage)
-- **x402**: `@x402/core` + `@x402/evm` (EIP-3009 USDC payments on Base Sepolia)
-- **MCP**: `@modelcontextprotocol/sdk` (KeeperHub HTTP transport)
-- **TUI**: `@opentui/core` (peer dep), with raw-ANSI live dashboard implementation
-- **OpenClaw**: `openclaw@2026.4.25` (consumer of our provider plugin)
+- **0G**: `@0gfoundation/0g-ts-sdk` (Storage), 0G Compute Router (`router-api-testnet.integratenetwork.work/v1`)
+- **x402**: `@x402/core` + `@x402/evm` + `@keeperhub/wallet`
+- **MCP**: `@modelcontextprotocol/sdk` (KH HTTP transport)
+- **TUI**: `@opentui/core` + raw-ANSI dispatcher
+- **AI**: Anthropic Haiku 4.5 (optional classifier, fail-open)
 
-No Python. No Redis. No OPA. No Macaroons. No paywall server.
+No Python, no Redis, no OPA, no Macaroons, no paywall server.
 
 ---
 
-## Status
+## Contributing / license / cite
 
-- ✅ 319 router unit tests + 45 Solidity tests, all green
-- ✅ `bun run check-types` clean across 6 packages
-- ✅ Demo runs end-to-end with mock providers
-- ✅ Smart contracts compile + deploy via forge script
-- ⏳ Live testnet deploy + video record happen at submission time
+This repo is the ETHGlobal OpenAgents submission for `@LingSiewWin` (`siewwin` branch).
+
+- License: MIT (see `package.json`)
+- Issues: please file on GitHub
+- Cite as: `zhgg — bidirectional agentic-commerce runtime, ETHGlobal OpenAgents 2026`
+- Hackathon: <https://ethglobal.com/events/openagents>
+
+For a deep dive on any subsystem, start with [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+and follow the file:line citations.
