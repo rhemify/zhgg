@@ -123,8 +123,11 @@ export async function commitPlan(
     // Wait for confirmation and use receipt.blockNumber — the contract stores
     // block.number at mine time, so computing commitId from a pre-submission
     // snapshot produces a wrong hash and causes reveal to fail with CommitNotFound.
-    const receipt = await args.publicClient
-      .waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
+    //
+    // 0G Galileo's RPC sometimes returns receipts with blockTimestamp: "0x0"
+    // which causes viem's waitForTransactionReceipt to reject them. We poll
+    // getTransactionReceipt directly instead.
+    const receipt = await pollReceipt(args.publicClient, txHash, 150_000, 2_000);
     const commitId = computeCommitId(
       args.tokenId,
       planHash,
@@ -234,6 +237,32 @@ export function computeCommitId(
       [tokenId, planHash, getAddress(sender), blockNumber]
     )
   );
+}
+
+/// Poll `eth_getTransactionReceipt` directly, bypassing viem's
+/// `waitForTransactionReceipt` which rejects receipts with
+/// `blockTimestamp: "0x0"` (a quirk of 0G Galileo's RPC).
+async function pollReceipt(
+  client: LoopPublicClient,
+  hash: Hex,
+  timeoutMs: number,
+  intervalMs: number,
+): Promise<{ blockNumber: bigint; status: 'success' | 'reverted' }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const r = await client.getTransactionReceipt({ hash });
+      if (r) {
+        if (r.status === 'reverted') throw new Error('transaction reverted');
+        return { blockNumber: r.blockNumber, status: r.status };
+      }
+    } catch (e) {
+      // getTransactionReceipt throws when not yet found — keep polling
+      if (e instanceof Error && e.message === 'transaction reverted') throw e;
+    }
+    await new Promise(res => setTimeout(res, intervalMs));
+  }
+  throw new Error(`receipt for ${hash} not found within ${timeoutMs}ms`);
 }
 
 function errMsg(e: unknown): string {
