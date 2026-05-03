@@ -80,8 +80,9 @@ export function buildHelpLines(): HelpLine[] {
   if (zgRouter) {
     lines.push(ok('  audit <tokenId>             cross-agent oracle audit (TEE inference on 0G)'));
     lines.push(h ('    e.g.  audit 1   audit 2'));
-    lines.push(ok('  ask oracle <topic>          direct oracle query (EU AI Act, ETH/USD, …)'));
-    lines.push(h ('    e.g.  ask oracle ETH/USD   ask oracle eu-ai-act'));
+    lines.push(ok('  ask oracle <topic>          live price (Pyth) or regulatory deltas'));
+    lines.push(h ('    e.g.  ask oracle ETH/USD   →  ETH/USD = $2,309.63  (Pyth live, 14s ago)'));
+    lines.push(h ('           ask oracle eu-ai-act →  Article 6 (eff. 2026-08-02): High-risk AI…'));
   } else {
     lines.push(locked('  audit / ask oracle  ✗  ZG_ROUTER_KEY missing'));
   }
