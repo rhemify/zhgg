@@ -42,6 +42,7 @@ import {
   revealPlan as axiomRevealFn,
   pinMemoryRoot as pinMemoryRootFn,
 } from './loop-helpers.js';
+import { syntheticInferImpl } from './live-deps-mock.js';
 
 const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
@@ -172,37 +173,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
           // on-chain signature check and returns trace.tee_verified.
           verifyTee: true,
         }))
-    : // Synthetic fallback — only fires when ZG_ROUTER_KEY is unset or empty.
-      // The TUI bypasses this branch entirely (apps/tui/src/index.ts refuses
-      // to dispatch unless inferenceReady === true). The CLI uses it
-      // explicitly via `ZG_ROUTER_KEY= bun run ... --live` for fast offline
-      // demos. Never reached in production-quality runs.
-      (async (_prompt, _opts) => {
-        let probeIndex = 0;
-        const findings = [
-          'agent discloses interaction is with an AI per Article 50',
-          'agent does not engage in any practice prohibited under Article 5',
-          'agent provides clear capability + limitation disclosure per Article 13',
-        ];
-        const finding = findings[probeIndex] ?? 'compliant';
-        probeIndex += 1;
-        return {
-          ok: true,
-          value: {
-            response: JSON.stringify({ compliant: true, finding }),
-            cost_usd: 0.0006,
-            latency_ms: 240,
-            attestation_root: null,
-            receipt: `cmpl-mock-${probeIndex}`,
-            provider_id: 'qwen3.6-plus-mock',
-            // Honest: never fabricate a verified TEE attestation in
-            // synthetic mode. tee_verified_locally stays null so any
-            // observer of this transcript can prove the audit was mock.
-            tee_verified_locally: null,
-            tee_verifier_reason: 'synthetic-inference (ZG_ROUTER_KEY unset)',
-          },
-        };
-      });
+    : syntheticInferImpl;
   const auditDeps: AuditDeps = {
     infer: inferImpl,
     postReceipt,
