@@ -75,7 +75,13 @@ export async function payViaKeeperHubMarketplace(
   });
 
   const baseUrl = cfg.baseUrl ?? 'https://app.keeperhub.com';
-  const resourceUrl = `${baseUrl.replace(/\/$/, '')}/api/mcp/workflows/${cfg.marketplaceSlug}/call`;
+  const resourceUrl = `${baseUrl.replace(/\/$/, '')}/api/mcp/workflows/${encodeURIComponent(cfg.marketplaceSlug)}/call`;
+
+  // Validate URL before calling signer.fetch — a bad slug surfaces a
+  // clear error rather than a cryptic "URL is invalid" from the fetch runtime.
+  try { new URL(resourceUrl); } catch {
+    throw new Error(`KH marketplace: invalid slug "${cfg.marketplaceSlug}" produces malformed URL: ${resourceUrl}`);
+  }
 
   const res: Response = await signer.fetch(resourceUrl, {
     method: 'POST',

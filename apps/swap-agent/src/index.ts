@@ -196,6 +196,7 @@ export async function executeSwap(
     tokenOut,
     fee: found.fee,
     recipient: clients.account,
+    deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
     amountIn,
     amountOutMinimum: 0n,
     sqrtPriceLimitX96: 0n,
