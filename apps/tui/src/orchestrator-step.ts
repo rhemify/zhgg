@@ -17,6 +17,7 @@ import type { TranscriptStep } from '../../demo/src/cross-agent.js';
 import type { FlowState } from './flow-state.js';
 import type { ReceiptEnvelope } from './receipt-feed.js';
 import { pushAudit } from './audit-trail.js';
+import { basescanTxUrl, chainscanTxUrl, storagescanRootUrl } from '../../demo/src/explorer-urls.js';
 import { shortHash } from './format.js';
 import { tryBuildLiveBundle } from './live-bundle.js';
 
@@ -26,6 +27,7 @@ export const KNOWN_STEPS: readonly string[] = [
   'oracle.query.start', 'oracle.query.complete',
   'audit.capabilities.read', 'audit.axiom.commit', 'audit.axiom.reveal',
   'audit.memory_root.pin', 'audit.start', 'audit.complete', 'audit.failed',
+  'audit.report.pin', 'audit.report.unpinned',
   'audit.receipt.post', 'audit.receipt.failed',
 ];
 
@@ -111,7 +113,7 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       }
       const liveBundleCached = tryBuildLiveBundle();
       if (txHash) {
-        pushAudit('receipt', `Base Sepolia: https://sepolia.basescan.org/tx/${txHash}`, 'ok');
+        pushAudit('receipt', `Base Sepolia: ${basescanTxUrl(txHash)}`, 'ok');
       }
       const isZeroHash = !txHash || /^0x0+$/.test(txHash);
       if (!isZeroHash && liveBundleCached) {
@@ -146,7 +148,7 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
         pushAudit('axiom', `commit failed: ${reason}`, 'err');
       } else {
         pushAudit('axiom', `commit ok commitId=${cid ? shortHash(cid) : '—'} tx=${tx ? shortHash(tx) : '—'}`, 'ok');
-        if (tx) pushAudit('axiom', `0G: https://chainscan-galileo.0g.ai/tx/${tx}`, 'info');
+        if (tx) pushAudit('axiom', `0G: ${chainscanTxUrl(tx)}`, 'info');
       }
       break;
     }
@@ -171,6 +173,7 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       // both stamp the EXECUTE node green.
       const txHash = typeof detail.txHash === 'string' ? (detail.txHash as Hex) : null;
       pushAudit('erc-8004', `receipt posted tx=${txHash ? shortHash(txHash) : '—'}`, 'ok');
+      if (txHash) pushAudit('erc-8004', `0G: ${chainscanTxUrl(txHash)}`, 'info');
       flow.nodes = ['done', 'done', 'done', 'done'];
       flow.complete = true;
       const liveBundleCached = tryBuildLiveBundle();
@@ -204,11 +207,30 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
         flow.complete = true;
       }
       break;
-    case 'audit.memory_root.pin':
+    case 'audit.memory_root.pin': {
+      const tx = typeof detail.txHash === 'string' ? detail.txHash : null;
       pushAudit('memory', `pin ok=${detail.ok ?? '?'} root=${detail.rootHash ? shortHash(String(detail.rootHash)) : '—'}`, detail.ok === true ? 'ok' : 'err');
+      if (tx) pushAudit('memory', `0G: ${chainscanTxUrl(tx)}`, 'info');
       break;
-    case 'audit.axiom.reveal':
+    }
+    case 'audit.axiom.reveal': {
+      const tx = typeof detail.txHash === 'string' ? detail.txHash : null;
       pushAudit('axiom', `reveal ok=${detail.ok ?? '?'}`, detail.ok === true ? 'ok' : 'err');
+      if (tx) pushAudit('axiom', `0G: ${chainscanTxUrl(tx)}`, 'info');
+      break;
+    }
+    case 'audit.report.pin': {
+      // 0G Storage anchor — the regulator-readable proof that the canonical
+      // AuditReport bytes exist at this rootHash. Re-fetch + re-hash to
+      // verify against the on-chain feedbackHash.
+      const uri = typeof detail.uri === 'string' ? detail.uri : null;
+      const hash = typeof detail.hash === 'string' ? detail.hash : null;
+      pushAudit('storage', `pinned uri=${uri ? shortHash(uri) : '—'} hash=${hash ? shortHash(hash) : '—'}`, 'ok');
+      if (uri) pushAudit('storage', `0G Storage: ${storagescanRootUrl(uri)}`, 'info');
+      break;
+    }
+    case 'audit.report.unpinned':
+      pushAudit('storage', `unpinned reason=${detail.reason ?? detail.kind ?? 'unknown'}`, 'err');
       break;
     default:
       pushAudit('orchestrator', step.name, 'info');

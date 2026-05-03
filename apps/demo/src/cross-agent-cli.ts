@@ -7,6 +7,7 @@
 /// x402 protocol).
 
 import { runCrossAgentDemo, type TranscriptStep } from './cross-agent.js';
+import { basescanTxUrl, chainscanTxUrl, storagescanRootUrl } from './explorer-urls.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from './live-deps.js';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type {
@@ -40,6 +41,38 @@ function printStep(step: TranscriptStep): void {
     ? ` ${ANSI_DIM}${formatDetail(step.detail)}${ANSI_RESET}`
     : '';
   console.log(`${prefix} ${step.name}${detail}`);
+  // Surface block-explorer URLs after each chain-touching step so judges
+  // can ⌘+click straight from the transcript. Modern terminals auto-detect
+  // URL patterns in stdout; older ones still let you copy-paste the URL.
+  for (const url of stepExplorerUrls(step)) {
+    console.log(`         ${ANSI_DIM}↳ ${url}${ANSI_RESET}`);
+  }
+}
+
+/// Returns the explorer URLs for a transcript step, in display order.
+/// One step can emit multiple URLs (e.g. `audit.report.pin` shows both
+/// the storage rootHash + the upload tx hash).
+function stepExplorerUrls(step: TranscriptStep): string[] {
+  const d = step.detail ?? {};
+  const tx = typeof d.txHash === 'string' && d.txHash.length > 12 ? d.txHash : null;
+  const out: string[] = [];
+  switch (step.name) {
+    case 'oracle.payment.settle':
+      if (tx) out.push(basescanTxUrl(tx));
+      break;
+    case 'audit.axiom.commit':
+    case 'audit.axiom.reveal':
+    case 'audit.memory_root.pin':
+    case 'audit.receipt.post':
+      if (tx) out.push(chainscanTxUrl(tx));
+      break;
+    case 'audit.report.pin': {
+      const uri = typeof d.uri === 'string' ? d.uri : null;
+      if (uri) out.push(storagescanRootUrl(uri));
+      break;
+    }
+  }
+  return out;
 }
 
 function formatDetail(detail: Record<string, unknown>): string {
@@ -250,6 +283,22 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
     for (const finding of transcript.auditReport.findings) {
       console.log(`  ${ANSI_DIM}${finding}${ANSI_RESET}`);
     }
+  }
+  // Verifiable artefacts — full clickable URLs for every chain anchor a
+  // regulator / judge would want to inspect. Order matches the audit flow:
+  // payment → storage → receipt. Skipped silently when null (e.g. mock
+  // mode produces sentinel hashes that aren't real explorer-resolvable).
+  console.log('');
+  console.log(`  ${ANSI_DIM}verifiable artefacts:${ANSI_RESET}`);
+  if (transcript.oraclePaymentTx && /^0x[0-9a-fA-F]{64}$/.test(transcript.oraclePaymentTx)) {
+    console.log(`    payment (Base Sepolia): ${basescanTxUrl(transcript.oraclePaymentTx)}`);
+  }
+  const storageURI = transcript.canonicalAuditReport?.anchors.storageURI;
+  if (storageURI && storageURI.length > 0) {
+    console.log(`    audit report (0G Storage): ${storagescanRootUrl(storageURI)}`);
+  }
+  if (transcript.auditReceiptTx && /^0x[0-9a-fA-F]{64}$/.test(transcript.auditReceiptTx)) {
+    console.log(`    ERC-8004 receipt (0G):    ${chainscanTxUrl(transcript.auditReceiptTx)}`);
   }
   console.log(ruler);
   return verdict === 'unknown' ? 1 : 0;

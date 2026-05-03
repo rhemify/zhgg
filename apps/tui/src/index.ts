@@ -72,6 +72,7 @@ import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js'
 import { tryBuildLiveBundle, getLiveBundleError, type LiveBundle } from './live-bundle.js';
 import { type PanelOverlay } from './render.js';
 import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
+import { storagescanRootUrl } from '../../demo/src/explorer-urls.js';
 import {
   openGrantModal as openGrantModalImpl,
   confirmGrant as confirmGrantImpl,
@@ -1966,8 +1967,12 @@ async function dispatchKHHireIntent(
       const findingsSummary = tx.auditReport?.findings.slice(0, 2).join('; ') ?? 'no findings'
       pushAudit('kh', `audit verdict: ${verdict.toUpperCase()} — ${findingsSummary}`, verdictKind)
       if (tx.canonicalAuditReport?.anchors.storageURI) {
+        // Surface the FULL 0G Storage explorer URL so judges / regulators
+        // can ⌘+click (modern terminals auto-detect URLs) to view the
+        // canonical AuditReport bytes pinned at this rootHash, then
+        // re-verify the keccak256 against the on-chain feedbackHash.
         const uri = tx.canonicalAuditReport.anchors.storageURI
-        pushAudit('kh', `  audit anchored: 0g://${uri.slice(0, 14)}…`, 'info')
+        pushAudit('kh', `  audit anchored: ${storagescanRootUrl(uri)}`, 'info')
       }
       if (verdict === 'non_compliant') {
         pushAudit('kh', `  ⚠️  non-compliant — proceeding to payment but flagged on chain`, 'err')
