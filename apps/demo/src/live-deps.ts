@@ -115,6 +115,14 @@ export interface LiveDepsConfig {
   /// Optional — override for the 0G Storage indexer RPC. Defaults to
   /// the Galileo Turbo indexer in the SDK adapter.
   zgIndexerRpc?: string;
+  /// Optional — override for the 0G Compute Router base URL. When unset,
+  /// `inferZG` falls back to its built-in testnet default. Setting this
+  /// is the only way to point at a different Router (e.g. mainnet).
+  zgRouterUrl?: string;
+  /// Optional — ERC-8021 wallet attribution code (Schema 2). When set,
+  /// the FeeSplitter calldata suffix carries this as `walletCode`. Empty
+  /// when unset; the spec treats this field as optional.
+  walletCode?: string;
 }
 
 const ORACLE_PAYMENT_ATOMIC = 100_000n; // 0.1 USDC at 6 decimals
@@ -188,6 +196,9 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     ? ((prompt, opts) =>
         inferZG(prompt, {
           apiKey: opts.apiKey,
+          // Override Router URL via ZG_ROUTER_URL env var when present;
+          // otherwise the workflow's built-in testnet default applies.
+          baseUrl: cfg.zgRouterUrl,
           // Real TEE verification on every probe — router does the
           // on-chain signature check and returns trace.tee_verified.
           verifyTee: true,
@@ -482,5 +493,7 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
       : undefined,
     zgStorageEnabled: process.env.ZG_STORAGE_ENABLED === '1',
     zgIndexerRpc: process.env.ZG_INDEXER_RPC,
+    zgRouterUrl: process.env.ZG_ROUTER_URL,
+    walletCode: process.env.WALLET_CODE,
   };
 }
