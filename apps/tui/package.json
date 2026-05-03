@@ -9,7 +9,7 @@
     "./panels/splits": "./src/panels/splits.ts"
   },
   "scripts": {
-    "dev": "bun run --watch src/index.ts",
+    "dev": "bun run --env-file ../../.env --watch src/index.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {

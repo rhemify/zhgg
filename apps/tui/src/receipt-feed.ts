@@ -163,6 +163,9 @@ export interface ReceiptEnvelope {
   status: 'no settlement yet' | 'settled' | 'settled+receipt';
   split?: DecodedSplit;
   newFeedback?: DecodedNewFeedback;
+  /// Raw JSON body returned by a KeeperHub marketplace `kh hire` call.
+  /// Only present when the settlement was via the x402/KH path.
+  khResponse?: unknown;
 }
 
 export const EMPTY_RECEIPT: ReceiptEnvelope = { status: 'no settlement yet' };

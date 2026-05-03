@@ -1893,6 +1893,7 @@ async function dispatchKHHireIntent(
     receiptEnvelope = {
       ...receiptEnvelope,
       status: 'settled',
+      khResponse: settlement.marketplaceResponse,
     }
     setToast('ok', `kh hire ${slug} settled`)
   } catch (e) {
