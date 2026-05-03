@@ -195,6 +195,11 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
             attestation_root: null,
             receipt: `cmpl-mock-${probeIndex}`,
             provider_id: 'qwen3.6-plus-mock',
+            // Honest: never fabricate a verified TEE attestation in
+            // synthetic mode. tee_verified_locally stays null so any
+            // observer of this transcript can prove the audit was mock.
+            tee_verified_locally: null,
+            tee_verifier_reason: 'synthetic-inference (ZG_ROUTER_KEY unset)',
           },
         };
       });

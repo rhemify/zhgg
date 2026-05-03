@@ -20,6 +20,8 @@ const okResp = (text: string, attestation: string | null = null): ZGInferenceRes
   attestation_root: attestation,
   receipt: 'cmpl-x',
   provider_id: 'qwen3.6-plus',
+  tee_verified_locally: null,
+  tee_verifier_reason: null,
 });
 
 function makeAuditDeps(opts: {

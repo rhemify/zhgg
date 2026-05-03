@@ -55,6 +55,8 @@ function makeMockedAuditDeps(): AuditDeps {
         attestation_root: null,
         receipt: `cmpl-mock-${probeIndex}`,
         provider_id: 'qwen3.6-plus-mock',
+        tee_verified_locally: null,
+        tee_verifier_reason: null,
       },
     };
   };

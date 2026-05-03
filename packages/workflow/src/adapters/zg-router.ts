@@ -11,6 +11,13 @@
 /// the response includes a `tee_verified` field in its `trace` block.
 /// We forward this flag when `opts.verifyTee` is set.
 ///
+/// `teeVerifierUrl` (optional) pipes the returned attestation envelope
+/// through a local `tee-verifier` sidecar (apps/tee-verifier) so we
+/// re-verify the structural binding ourselves instead of trusting the
+/// router's `tee_verified` boolean blindly. When set, the result carries
+/// `tee_verified_locally: boolean | null` plus an honest reason string.
+/// When unset, behavior is unchanged (legacy path) and the field is null.
+///
 /// Returns a Result envelope so callers never see thrown exceptions in the
 /// business path; transport, config and malformed-response failures are
 /// modeled as discriminated error variants.
@@ -31,6 +38,17 @@ export interface ZGInferenceResult {
   attestation_root: string | null;
   receipt: string;
   provider_id: string;
+  /// Result of re-verifying the TEE attestation locally against the
+  /// `tee-verifier` sidecar. `true` = verifier returned `valid:true`;
+  /// `false` = verifier returned `valid:false` (binding mismatch, bad
+  /// quote, etc); `null` = local verify was not requested OR the verifier
+  /// was unreachable / no attestation envelope was available. When `null`,
+  /// `tee_verifier_reason` carries the honest cause. Never faked.
+  tee_verified_locally: boolean | null;
+  /// Human-readable reason accompanying `tee_verified_locally`. Always
+  /// `null` when local verify was not requested. Otherwise a short string
+  /// like `'verifier_unreachable: ECONNREFUSED'` or `'no_attestation_envelope'`.
+  tee_verifier_reason: string | null;
 }
 
 export type ZGRouterError =
@@ -57,6 +75,13 @@ export interface ZGRouterOptions {
   /// `trace.tee_verified` boolean we surface in `attestation_root`. Costs
   /// a tiny bit of extra latency (~100-300ms typical).
   verifyTee?: boolean;
+  /// Optional URL of the local `tee-verifier` HTTP sidecar (e.g.
+  /// `http://localhost:8787/verify`). When set, after a successful
+  /// inference we POST the returned attestation envelope to the verifier
+  /// and surface its verdict in `tee_verified_locally`. Unreachable /
+  /// missing-envelope cases set the field to `null` with an honest
+  /// `tee_verifier_reason` — never throws, never fakes a verified result.
+  teeVerifierUrl?: string;
 }
 
 interface OpenAIChoice {
@@ -148,10 +173,96 @@ export async function inferZG(
   const receipt = typeof body.id === 'string' ? body.id : '';
   const provider_id = typeof body.model === 'string' ? body.model : model;
 
+  // Optional: re-verify the attestation envelope ourselves through the
+  // local tee-verifier sidecar. We never throw and never fake a verdict —
+  // honest fallback is `null` + reason. Caller opts in by setting
+  // `teeVerifierUrl`; otherwise both fields stay null.
+  let tee_verified_locally: boolean | null = null;
+  let tee_verifier_reason: string | null = null;
+  if (opts.teeVerifierUrl) {
+    const verdict = await reverifyAttestationLocally({
+      verifierUrl: opts.teeVerifierUrl,
+      headerAttest,
+      fetchImpl,
+    });
+    tee_verified_locally = verdict.verified;
+    tee_verifier_reason = verdict.reason;
+  }
+
   return {
     ok: true,
-    value: { response: content, cost_usd, latency_ms, attestation_root, receipt, provider_id },
+    value: {
+      response: content,
+      cost_usd,
+      latency_ms,
+      attestation_root,
+      receipt,
+      provider_id,
+      tee_verified_locally,
+      tee_verifier_reason,
+    },
   };
+}
+
+/// Posts the (best available) attestation envelope to the local verifier
+/// and returns a normalized verdict. Never throws. The verifier expects
+/// `{ intel_quote, signing_address, signing_algo?, request_nonce? }`; we
+/// extract these from the `x-tee-attestation` envelope when present.
+async function reverifyAttestationLocally(args: {
+  verifierUrl: string;
+  headerAttest: string | null;
+  fetchImpl: FetchLike;
+}): Promise<{ verified: boolean | null; reason: string | null }> {
+  if (!args.headerAttest || args.headerAttest.trim() === '') {
+    return { verified: null, reason: 'no_attestation_envelope' };
+  }
+  let envelope: { intel_quote?: unknown; signing_address?: unknown; signing_algo?: unknown; request_nonce?: unknown };
+  try {
+    const trimmed = args.headerAttest.trim();
+    const raw = trimmed.startsWith('{') ? trimmed : safeBase64Decode(trimmed);
+    envelope = JSON.parse(raw) as typeof envelope;
+  } catch (e) {
+    return { verified: null, reason: `envelope_parse_error: ${errorMessage(e)}` };
+  }
+  if (typeof envelope.intel_quote !== 'string' || typeof envelope.signing_address !== 'string') {
+    return { verified: null, reason: 'envelope_missing_required_fields' };
+  }
+  let res: Response;
+  try {
+    res = await args.fetchImpl(args.verifierUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intel_quote: envelope.intel_quote,
+        signing_address: envelope.signing_address,
+        signing_algo: typeof envelope.signing_algo === 'string' ? envelope.signing_algo : undefined,
+        request_nonce: typeof envelope.request_nonce === 'string' ? envelope.request_nonce : undefined,
+      }),
+    });
+  } catch (e) {
+    return { verified: null, reason: `verifier_unreachable: ${errorMessage(e)}` };
+  }
+  if (!res.ok) {
+    return { verified: null, reason: `verifier_http_${res.status}` };
+  }
+  let body: { valid?: unknown; reason?: unknown; verdict?: unknown };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch (e) {
+    return { verified: null, reason: `verifier_bad_json: ${errorMessage(e)}` };
+  }
+  if (body.valid === true) {
+    const verdict = typeof body.verdict === 'string' ? body.verdict : 'structural';
+    return { verified: true, reason: `verifier_ok:${verdict}` };
+  }
+  const why = typeof body.reason === 'string' ? body.reason : 'valid_not_true';
+  return { verified: false, reason: `verifier_rejected: ${why}` };
+}
+
+function safeBase64Decode(s: string): string {
+  const norm = s.replace(/-/g, '+').replace(/_/g, '/');
+  if (typeof Buffer !== 'undefined') return Buffer.from(norm, 'base64').toString('utf8');
+  return atob(norm);
 }
 
 function errorMessage(e: unknown): string {
