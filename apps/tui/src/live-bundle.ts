@@ -15,6 +15,7 @@ import {
   type PublicClient,
   type WalletClient,
 } from 'viem';
+import { baseSepolia } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { buildLiveDeps, readLiveConfigFromEnv } from '../../demo/src/live-deps.js';
 import type { LiveBundle as DemoLiveBundle } from '../../demo/src/live-deps.js';
@@ -51,6 +52,10 @@ export interface LiveBundle {
   /// dispatch audit intents in that state (per "no fake" rule). Settle/receipt
   /// legs still work because they don't depend on Qwen.
   inferenceReady: boolean;
+  /// Deployed AgentReceiverWallet address — the ERC-7710 delegator. Required
+  /// for `delegate` intents: the manager's ERC-1271 check calls
+  /// `isValidSignature` on this contract (not the raw EOA).
+  receiverWallet: Address | null;
 }
 
 let liveBundle: LiveBundle | null = null;
@@ -74,8 +79,12 @@ export function tryBuildLiveBundle(): LiveBundle | null {
     const zgRpc = cfg.zgRpc;
     const account = privateKeyToAccount(cfg.baseSepoliaPrivateKey);
     const baseTransport = http(baseRpc);
-    const basePub = createPublicClient({ transport: baseTransport });
-    const baseWallet = createWalletClient({ account, transport: baseTransport });
+    // Cast to plain PublicClient/WalletClient: baseSepolia adds OP-stack
+    // transaction types (e.g. "deposit") that make the inferred generic
+    // stricter than the LiveBundle interface declares. The chain is still
+    // encoded on the client at runtime; the cast only loosens the type.
+    const basePub = createPublicClient({ chain: baseSepolia, transport: baseTransport }) as PublicClient;
+    const baseWallet = createWalletClient({ account, chain: baseSepolia, transport: baseTransport }) as WalletClient;
     const receiptFeed = createReceiptFeed({ baseRpcUrl: baseRpc, zgRpcUrl: zgRpc });
 
     // 0G Galileo clients — separate transport from Base. Mint prefers
@@ -94,6 +103,11 @@ export function tryBuildLiveBundle(): LiveBundle | null {
       agentNftEnv && /^0x[a-fA-F0-9]{40}$/.test(agentNftEnv)
         ? (agentNftEnv as Address)
         : null;
+    const receiverWalletEnv = process.env.AGENT_RECEIVER_WALLET_ADDRESS;
+    const receiverWallet: Address | null =
+      receiverWalletEnv && /^0x[a-fA-F0-9]{40}$/.test(receiverWalletEnv)
+        ? (receiverWalletEnv as Address)
+        : null;
 
     liveBundle = {
       basePub,
@@ -111,6 +125,7 @@ export function tryBuildLiveBundle(): LiveBundle | null {
       agentNft,
       demo,
       inferenceReady: cfg.zgRouterKey !== undefined && cfg.zgRouterKey.length > 0,
+      receiverWallet,
     };
     return liveBundle;
   } catch (e) {

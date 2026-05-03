@@ -11,6 +11,7 @@
 /// transfers ETH back. Both are 1:1, no fees.
 
 import {
+  type Account,
   type Address,
   type Hex,
   type PublicClient,
@@ -43,7 +44,9 @@ export interface WrapDeps {
 }
 
 export interface WrapArgs {
-  account: Address;
+  /// Full account object (LocalAccount from privateKeyToAccount). Must not
+  /// be an Address string — viem coerces bare addresses to json-rpc type.
+  account: Account;
   amount: bigint;
 }
 
@@ -57,7 +60,7 @@ export async function depositEthToWeth(deps: WrapDeps, args: WrapArgs): Promise<
     args: [],
     value: args.amount,
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
 
 /// WETH → ETH via `withdraw(uint256)`. Returns the real tx hash.
@@ -70,5 +73,5 @@ export async function withdrawWethToEth(deps: WrapDeps, args: WrapArgs): Promise
     functionName: 'withdraw',
     args: [args.amount],
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }

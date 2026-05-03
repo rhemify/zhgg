@@ -24,11 +24,13 @@ import {
   createWalletClient,
   http,
   parseUnits,
+  type Account,
   type Address,
   type Hex,
   type PublicClient,
   type WalletClient,
 } from 'viem';
+import { baseSepolia } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   ensureErc20Allowance,
@@ -103,7 +105,11 @@ export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 export interface SwapClients {
   publicClient: PublicClient;
   walletClient: WalletClient;
-  account: Address;
+  /// Full account object (LocalAccount from privateKeyToAccount). Must not
+  /// be an Address string — viem coerces bare addresses to { type: "json-rpc" }
+  /// which triggers eth_sendTransaction (rejected by public RPCs) instead of
+  /// the correct sign-and-send eth_sendRawTransaction path.
+  account: Account;
 }
 
 // ─── Public API: executeSwap ──────────────────────────────────────────────
@@ -195,7 +201,7 @@ export async function executeSwap(
     tokenIn,
     tokenOut,
     fee: found.fee,
-    recipient: clients.account,
+    recipient: clients.account.address,
     deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
     amountIn,
     amountOutMinimum: 0n,
@@ -225,7 +231,7 @@ export async function executeSwap(
           account: clients.account,
           params,
           value: 0n,
-          finalRecipient: clients.account,
+          finalRecipient: clients.account.address,
         },
       );
     } else {
@@ -292,15 +298,20 @@ export function buildClientsFromEnv(env: NodeJS.ProcessEnv = process.env): Build
   }
   const account = privateKeyToAccount(pk as Hex);
   const transport = http(rpc);
-  // Intentionally omit `chain` — the workspace has two viem type
-  // instances and their `Chain` shapes differ when an OP-stack chain
-  // is in play. The RPC endpoint already determines the chain at
-  // runtime; viem's writeContract validates chainId via eth_chainId.
-  const publicClient = createPublicClient({ transport });
-  const walletClient = createWalletClient({ account, transport });
+  // Set chain: baseSepolia on both clients so viem uses eth_sendRawTransaction
+  // (local signing) instead of eth_sendTransaction. Without chain, viem may
+  // coerce the account to json-rpc type, causing the public RPC to reject with
+  // -32602 (Invalid parameters) when it receives eth_sendTransaction.
+  // Cast to the plain PublicClient / WalletClient interfaces: baseSepolia adds
+  // OP-stack-specific transaction types that make the inferred type stricter
+  // than what SwapClients.publicClient declares. All operations we perform
+  // (readContract, simulateContract, waitForTransactionReceipt) are on the
+  // shared interface, so the cast is safe.
+  const publicClient = createPublicClient({ chain: baseSepolia, transport }) as PublicClient;
+  const walletClient = createWalletClient({ account, chain: baseSepolia, transport }) as WalletClient;
   return {
     ok: true,
-    clients: { publicClient, walletClient, account: account.address },
+    clients: { publicClient, walletClient, account },
   };
 }
 

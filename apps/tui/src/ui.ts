@@ -360,7 +360,7 @@ function buildAudit(): StyledText {
       ? (e.ok === 'ok' ? GREEN : e.ok === 'err' ? RED : CYAN)
       : (e.ok === 'ok' ? DGREEN : e.ok === 'err' ? DRED : DWHITE);
     const prefix = flash ? (e.ok === 'ok' ? '▶ ' : e.ok === 'err' ? '✕ ' : '◈ ') : '  ';
-    const line = `${e.time} ${e.agent.padEnd(10)} ${prefix}${e.event}`.slice(0, 120);
+    const line = `${e.time} ${e.agent.padEnd(10)} ${prefix}${e.event}`.slice(0, 200);
     return t`${color(line)}`;
   });
   return joinLines(lines);
