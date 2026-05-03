@@ -57,7 +57,7 @@ export async function depositEthToWeth(deps: WrapDeps, args: WrapArgs): Promise<
     args: [],
     value: args.amount,
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
 
 /// WETH → ETH via `withdraw(uint256)`. Returns the real tx hash.
@@ -70,5 +70,5 @@ export async function withdrawWethToEth(deps: WrapDeps, args: WrapArgs): Promise
     functionName: 'withdraw',
     args: [args.amount],
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
