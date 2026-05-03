@@ -226,6 +226,25 @@ export type IntentCommand =
       /// 0x + 64 hex (bytes32). Defaults to all zeros when omitted.
       salt: `0x${string}`;
     }
+  /// `aa send <to> <amountEth> [<calldata>]` — build, sign, and submit a
+  /// real ERC-4337 v0.7 UserOp through Pimlico's bundler. The dispatcher
+  /// reads AGENT_AA_FACTORY_ADDRESS + AGENT_AA_OWNER_PRIVATE_KEY +
+  /// PIMLICO_API_KEY (or the free testnet endpoint) and submits via
+  /// `eth_sendUserOperation`. Gas is sponsored by Pimlico's USDC ERC-20
+  /// paymaster when AGENT_AA_PAYMASTER is set; otherwise the AA must
+  /// hold ETH itself.
+  | {
+      kind: 'aa-send';
+      /// Recipient address — the call's `target` for `execute(target, value, data)`.
+      to: `0x${string}`;
+      /// Decimal-string amount in ETH units. The dispatcher converts to
+      /// wei via `parseEther`. Use `'0'` when the call carries calldata
+      /// only (e.g. an ERC-20 transfer encoded into the data blob).
+      amountEth: string;
+      /// 0x-prefixed hex blob — the `data` field passed to the
+      /// recipient. Defaults to `'0x'` (no calldata, value-only transfer).
+      callData: `0x${string}`;
+    }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
   /// Surfaced when the user types an `*.eth` target that isn't in

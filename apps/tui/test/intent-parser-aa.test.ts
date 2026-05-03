@@ -35,6 +35,55 @@ describe('aa <owner> — happy path', () => {
   });
 });
 
+describe('aa send — happy path', () => {
+  it('aa send <to> <amountEth> emits aa-send with parsed amount', () => {
+    const r = parseIntent('aa send 0x21db000000000000000000000000000000001a92 0.001');
+    expect(r.kind).toBe('aa-send');
+    if (r.kind !== 'aa-send') return;
+    expect(r.to.toLowerCase()).toBe('0x21db000000000000000000000000000000001a92');
+    expect(r.amountEth).toBe('0.001');
+    expect(r.callData).toBe('0x');
+  });
+
+  it('aa send accepts an explicit 0x calldata blob', () => {
+    const r = parseIntent(
+      'aa send 0x21db000000000000000000000000000000001a92 0 0xdeadbeef'
+    );
+    expect(r.kind).toBe('aa-send');
+    if (r.kind !== 'aa-send') return;
+    expect(r.amountEth).toBe('0');
+    expect(r.callData).toBe('0xdeadbeef');
+  });
+});
+
+describe('aa send — malformed', () => {
+  it('missing recipient returns unknown', () => {
+    const r = parseIntent('aa send');
+    expect(r.kind).toBe('unknown');
+    if (r.kind !== 'unknown') return;
+    expect(r.reason).toMatch(/recipient|to/i);
+  });
+
+  it('missing amount returns unknown', () => {
+    const r = parseIntent('aa send 0x21db000000000000000000000000000000001a92');
+    expect(r.kind).toBe('unknown');
+    if (r.kind !== 'unknown') return;
+    expect(r.reason).toMatch(/amount/i);
+  });
+
+  it('non-decimal amount returns unknown', () => {
+    const r = parseIntent('aa send 0x21db000000000000000000000000000000001a92 abc');
+    expect(r.kind).toBe('unknown');
+  });
+
+  it('non-hex calldata returns unknown', () => {
+    const r = parseIntent('aa send 0x21db000000000000000000000000000000001a92 0 abcd');
+    expect(r.kind).toBe('unknown');
+    if (r.kind !== 'unknown') return;
+    expect(r.reason).toMatch(/calldata|hex/i);
+  });
+});
+
 describe('aa <owner> — malformed', () => {
   it('missing owner returns unknown with usage hint', () => {
     const r = parseIntent('aa');

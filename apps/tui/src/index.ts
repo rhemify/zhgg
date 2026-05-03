@@ -106,6 +106,18 @@ import {
 } from '@zhgg/workflow';
 import { resolveRecipient } from '../../transfer-agent/src/resolve-recipient.js';
 import { executePark, executeUnpark } from './yield-intents.js';
+import {
+  ENTRYPOINT_V07_ADDRESS,
+  buildUserOp,
+  encodeExecute,
+  encodeInitCode,
+  getEntryPointNonce,
+  getUserOperationReceipt,
+  pimlicoBundlerUrl,
+  pimlicoGetUserOperationGasPrice,
+  sendUserOperation,
+  signUserOp,
+} from '@zhgg/wallet-aa';
 
 // ANSI primitives, layout constants, agent-status, audit-trail, flow-state,
 // and the live-bundle factory have been moved to focused modules
@@ -1120,6 +1132,206 @@ async function dispatchAaDeployIntent(
   render()
 }
 
+// ── ERC-4337 UserOp dispatcher (`aa send <to> <amountEth>`) ──────────────────
+//
+// Builds + signs + submits a real ERC-4337 v0.7 UserOp through Pimlico's
+// public testnet bundler. Gas knobs default to AgentSimpleAccount-sized
+// values; the bundler will reject and surface a precise reason if the
+// op needs more (the user can re-run with explicit overrides — out of
+// scope for the demo path).
+//
+// Env required:
+//   AGENT_AA_FACTORY_ADDRESS  — deployed factory on Base Sepolia
+//   AGENT_AA_OWNER_ADDRESS    — the EOA owner (predict CREATE2 input)
+//   BASE_SEPOLIA_PRIVATE_KEY  — signs the UserOp; MUST match owner
+//   BASE_SEPOLIA_RPC_URL      — for EntryPoint.getNonce reads
+//   PIMLICO_API_KEY           — optional; testnet methods work without
+//
+// Gas defaults (typical for AgentSimpleAccount.execute on Base Sepolia):
+const AA_DEFAULT_VERIFICATION_GAS = 150_000n
+const AA_DEFAULT_CALL_GAS = 100_000n
+const AA_DEFAULT_PRE_VERIFICATION_GAS = 60_000n
+const BASE_SEPOLIA_CHAIN_ID = 84532
+
+async function dispatchAaSendIntent(
+  intent: Extract<IntentCommand, { kind: 'aa-send' }>,
+): Promise<void> {
+  const factory = process.env.AGENT_AA_FACTORY_ADDRESS as Address | undefined
+  if (!factory || !isAddress(factory)) {
+    pushAudit('aa', 'aa send blocked: AGENT_AA_FACTORY_ADDRESS unset/invalid', 'err')
+    setToast('err', 'AGENT_AA_FACTORY_ADDRESS missing')
+    render()
+    return
+  }
+  const ownerAddr = process.env.AGENT_AA_OWNER_ADDRESS as Address | undefined
+  if (!ownerAddr || !isAddress(ownerAddr)) {
+    pushAudit('aa', 'aa send blocked: AGENT_AA_OWNER_ADDRESS unset/invalid', 'err')
+    render()
+    return
+  }
+  const pkRaw = process.env.BASE_SEPOLIA_PRIVATE_KEY
+  if (!pkRaw || !/^0x[0-9a-fA-F]{64}$/.test(pkRaw)) {
+    pushAudit('aa', 'aa send blocked: BASE_SEPOLIA_PRIVATE_KEY missing/invalid', 'err')
+    render()
+    return
+  }
+  const rpc = process.env.BASE_SEPOLIA_RPC_URL
+  if (!rpc) {
+    pushAudit('aa', 'aa send blocked: BASE_SEPOLIA_RPC_URL missing', 'err')
+    render()
+    return
+  }
+
+  runningCommand = 'audit'
+  pushAudit('aa', `aa send building UserOp · to=${shortHash(intent.to)}`, 'info')
+  render()
+
+  const ownerAccount = privateKeyToAccount(pkRaw as Hex)
+  if (ownerAccount.address.toLowerCase() !== ownerAddr.toLowerCase()) {
+    pushAudit(
+      'aa',
+      `aa send refused: BASE_SEPOLIA_PRIVATE_KEY → ${shortHash(ownerAccount.address)} ` +
+        `does not match AGENT_AA_OWNER_ADDRESS=${shortHash(ownerAddr)}`,
+      'err',
+    )
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  const transport = http(rpc)
+  const pub = createPublicClient({ transport })
+  const wallet = createWalletClient({ account: ownerAccount, transport })
+
+  // Predict the AA address for this owner (salt = bytes32(0)).
+  const ZERO_SALT = `0x${'0'.repeat(64)}` as Hex
+  const AA_FACTORY_PREDICT_ABI = parseAbi([
+    'function predict(address owner, bytes32 salt) view returns (address)',
+  ])
+  let sender: Address
+  try {
+    sender = await pub.readContract({
+      address: factory,
+      abi: AA_FACTORY_PREDICT_ABI,
+      functionName: 'predict',
+      args: [ownerAddr, ZERO_SALT],
+    })
+  } catch (err) {
+    pushAudit('aa', `predict failed: ${(err as Error).message}`.slice(0, 160), 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  pushAudit('aa', `aa.sender=${shortHash(sender)}`, 'info')
+  render()
+
+  // initCode: empty if AA is already deployed; factory + createAccount call otherwise.
+  const senderCode = await pub.getCode({ address: sender })
+  const initCode: Hex =
+    senderCode && senderCode !== '0x' ? '0x' : encodeInitCode(factory, ownerAddr, ZERO_SALT)
+  if (initCode !== '0x') {
+    pushAudit('aa', 'aa send including initCode (first-op deploy)', 'info')
+    render()
+  }
+
+  // Nonce from canonical EntryPoint
+  const nonceResult = await getEntryPointNonce({
+    rpcUrl: rpc,
+    entryPoint: ENTRYPOINT_V07_ADDRESS,
+    sender,
+  })
+  if (!nonceResult.ok) {
+    pushAudit('aa', `nonce read failed: ${nonceResult.error.kind}`, 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  const nonce = nonceResult.value
+
+  // Compose execute(target, value, data) callData
+  const callData = encodeExecute(intent.to, parseUnits(intent.amountEth, 18), intent.callData)
+
+  // Pimlico bundler — public testnet endpoint works without key
+  const bundlerUrl = pimlicoBundlerUrl(BASE_SEPOLIA_CHAIN_ID, process.env.PIMLICO_API_KEY)
+  const bundlerOpts = { bundlerUrl }
+
+  const gasPriceR = await pimlicoGetUserOperationGasPrice(bundlerOpts)
+  if (!gasPriceR.ok) {
+    pushAudit('aa', `bundler gas price failed: ${gasPriceR.error.kind}`, 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  const fast = gasPriceR.value.fast
+  const maxFeePerGas = BigInt(fast.maxFeePerGas)
+  const maxPriorityFeePerGas = BigInt(fast.maxPriorityFeePerGas)
+
+  const op = buildUserOp({
+    sender,
+    nonce,
+    initCode,
+    callData,
+    verificationGasLimit: AA_DEFAULT_VERIFICATION_GAS,
+    callGasLimit: AA_DEFAULT_CALL_GAS,
+    preVerificationGas: AA_DEFAULT_PRE_VERIFICATION_GAS,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+  })
+  const signature = await signUserOp(
+    wallet,
+    ownerAccount,
+    op,
+    ENTRYPOINT_V07_ADDRESS,
+    BASE_SEPOLIA_CHAIN_ID,
+  )
+  const signedOp = { ...op, signature }
+
+  pushAudit('aa', 'aa send submitting to Pimlico bundler…', 'info')
+  render()
+  const submitR = await sendUserOperation(signedOp, ENTRYPOINT_V07_ADDRESS, bundlerOpts)
+  if (!submitR.ok) {
+    const reason =
+      submitR.error.kind === 'rpc_error' ? submitR.error.message : submitR.error.kind
+    pushAudit('aa', `bundler rejected: ${reason}`.slice(0, 200), 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  const userOpHash = submitR.value
+  pushAudit('aa', `aa.submitted userOpHash=${shortHash(userOpHash)}`, 'info')
+  render()
+
+  // Poll for receipt — bundlers take a few seconds to include
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    if (cancelRequested) {
+      cancelRequested = false
+      pushAudit('aa', 'aa send polling cancelled (op may still mine)', 'info')
+      runningCommand = 'idle'
+      render()
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    const receiptR = await getUserOperationReceipt(userOpHash, bundlerOpts)
+    if (!receiptR.ok) continue
+    if (receiptR.value === null) continue
+    // Receipt landed.
+    const r = receiptR.value as { receipt?: { transactionHash?: string }; success?: boolean }
+    const txHash = r.receipt?.transactionHash ?? userOpHash
+    const ok = r.success !== false
+    pushAudit(
+      'aa',
+      `aa.${ok ? 'sent' : 'reverted'} userOp=${shortHash(userOpHash)} tx=${shortHash(txHash)}`,
+      ok ? 'ok' : 'err',
+    )
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  pushAudit('aa', `aa send timeout — userOp ${shortHash(userOpHash)} not mined in 60s`, 'err')
+  runningCommand = 'idle'
+  render()
+}
+
 // ── Yield-vault dispatchers (Slice K — ERC-4626) ─────────────────────────────
 //
 // Real on-chain `parkIdle` / `withdrawIdle` against the user's
@@ -1762,6 +1974,8 @@ function handleIntentKey(key: string): boolean {
     }
     // ERC-4337 SimpleAccount predict + deploy via AgentSimpleAccountFactory
     else if (parsed.kind === 'aa-deploy') void dispatchAaDeployIntent(parsed)
+    // ERC-4337 UserOp send through Pimlico bundler (gas via paymaster)
+    else if (parsed.kind === 'aa-send') void dispatchAaSendIntent(parsed)
     return true
   }
   // Backspace (0x7f / 0x08).

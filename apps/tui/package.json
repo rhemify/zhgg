@@ -21,6 +21,7 @@
     "@zhgg/router": "workspace:*",
     "@zhgg/swap-agent": "workspace:*",
     "@zhgg/transfer-agent": "workspace:*",
+    "@zhgg/wallet-aa": "workspace:*",
     "@zhgg/workflow": "workspace:*",
     "viem": "^2.21.0"
   },
