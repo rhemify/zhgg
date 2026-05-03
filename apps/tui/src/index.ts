@@ -2171,9 +2171,9 @@ async function refreshBalances(): Promise<void> {
   if (!bundle) return;
   try {
     const rows = await showBalances({
-      account: bundle.account.address,
-      zgRpcUrl: bundle.config.ZG_RPC_URL,
-      basePublicClient: bundle.publicClient,
+      account: bundle.zgAccount.address,
+      zgRpcUrl: bundle.zgRpcUrl,
+      basePublicClient: bundle.basePub,
     });
     // Pull the single headline row (the one with OG · ETH · USDC · WETH)
     const headline = rows.find(r => r.ok === 'ok' && r.event.includes('OG'));

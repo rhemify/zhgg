@@ -54,6 +54,7 @@ export interface FrameState {
   grantModalLines: string[];
   helpOverlayOpen: boolean;
   panelOverlay: PanelOverlay;
+  balanceHint: string;
 }
 
 // Build entire frame as a string (prevents flicker vs multiple writes)
@@ -62,6 +63,7 @@ export function buildFrame(state: FrameState): string {
     flow, stagedIntent, runningCommand, receiptEnvelope,
     intentBuffer, intentMode, intentHint, toast,
     grantModalOpen, grantModalLines, helpOverlayOpen, panelOverlay,
+    balanceHint,
   } = state;
   const w = W(), h = H(), mid = MID();
   let f = '';
@@ -89,9 +91,13 @@ export function buildFrame(state: FrameState): string {
       : $.red;
   const hLeft  = '  zhgg runtime';
   const hRight = `${modeText}  │  ${now}  `;
-  const hPad   = ' '.repeat(Math.max(0, w - hLeft.length - hRight.length - 2));
+  const hBalRaw = balanceHint ? `  ${balanceHint}  ` : '';
+  // Clamp balance hint so it doesn't crowd the mode/time section
+  const maxBalW = Math.max(0, w - hLeft.length - hRight.length - 2 - 2);
+  const hBal = hBalRaw.slice(0, maxBalW);
+  const hPad = ' '.repeat(Math.max(0, w - hLeft.length - hBal.length - hRight.length - 2));
   put(2, 1, $.bold + $.cyan + '║' + $.reset);
-  put(2, 2, $.bold + $.white + hLeft + $.reset + $.dwhite + hPad + $.reset + modeColor + modeText + $.reset + $.dwhite + `  │  ${now}  ` + $.reset);
+  put(2, 2, $.bold + $.white + hLeft + $.reset + $.dwhite + hPad + $.reset + $.amber + hBal + $.reset + modeColor + modeText + $.reset + $.dwhite + `  │  ${now}  ` + $.reset);
   put(2, w, $.bold + $.cyan + '║' + $.reset);
 
   put(ROW_HEADER_BOT, 1, $.bold + $.cyan + '╠' + '═'.repeat(mid - 1) + '╦' + '═'.repeat(w - mid - 2) + '╣' + $.reset);
