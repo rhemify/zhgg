@@ -33,9 +33,6 @@ async function main(): Promise<void> {
   const address = await wallet.getAddress();
 
   const walletBalance = await provider.getBalance(address);
-  console.log(`wallet:        ${address}`);
-  console.log(`wallet 0G:     ${ethers.formatEther(walletBalance)} OG`);
-
   const broker = await createZGComputeNetworkBroker(wallet);
 
   let ledger;
@@ -44,14 +41,22 @@ async function main(): Promise<void> {
   } catch {
     ledger = null;
   }
-  if (ledger) {
-    console.log(`router locked: ${ethers.formatEther(ledger.totalBalance ?? 0n)} OG`);
-    console.log(`router avail:  ${ethers.formatEther((ledger.totalBalance ?? 0n) - (ledger.locked ?? 0n))} OG`);
-  } else {
-    console.log('router ledger: <not yet initialised>');
-  }
 
-  if (balanceOnly) return;
+  const lockedBefore = ethers.formatEther(ledger?.totalBalance ?? 0n);
+  const availBefore = ethers.formatEther(
+    (ledger?.totalBalance ?? 0n) - (ledger?.locked ?? 0n)
+  );
+
+  console.log(`wallet:        ${address}`);
+  console.log(`before:        ${ethers.formatEther(walletBalance)} OG`);
+  console.log(
+    `router:        ${ledger ? `${lockedBefore} OG locked · ${availBefore} OG avail` : '<not yet initialised>'}`
+  );
+
+  if (balanceOnly) {
+    provider.destroy();
+    process.exit(0);
+  }
 
   if (!ledger) {
     console.log(`creating ledger + depositing ${amount} OG ...`);
@@ -62,8 +67,14 @@ async function main(): Promise<void> {
   }
 
   const after = await broker.ledger.getLedger();
-  console.log(`router locked: ${ethers.formatEther(after.totalBalance ?? 0n)} OG`);
-  console.log('done.');
+  const lockedAfter = ethers.formatEther(after.totalBalance ?? 0n);
+  const availAfter = ethers.formatEther(
+    (after.totalBalance ?? 0n) - (after.locked ?? 0n)
+  );
+  console.log(`after:         ${lockedAfter} OG locked · ${availAfter} OG avail`);
+  console.log('✓ done.');
+  provider.destroy();
+  process.exit(0);
 }
 
 main().catch((e: unknown) => {
