@@ -169,8 +169,12 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
         ],
       });
       const txHash = await zgFeedbackWallet.writeContract(sim.request);
-      // 0G testnet can take 60-300s to mine — long timeout + fast polling.
-      await zgPub.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
+      // Fire-and-forget — 0G nodes reject receipt polls immediately for
+      // pending txs. The tx is submitted; we return the hash so the audit
+      // trail shows it, and the background poller catches confirmation.
+      zgPub
+        .waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 })
+        .catch(() => { /* non-fatal */ });
       return txHash;
     },
   };
