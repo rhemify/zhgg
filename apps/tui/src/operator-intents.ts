@@ -89,7 +89,8 @@ export async function listAgents(input: ListAgentsInput): Promise<OpRow[]> {
     ok: 'info',
   });
 
-  for (const [role, tokenId] of entries) {
+  for (const [role, entry] of entries) {
+    const tokenId = entry.inftTokenId;
     try {
       // Two parallel reads — ownerOf + capabilities. We don't probe
       // tokenURI because it's not required by the spec ("alias, owner,

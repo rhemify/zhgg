@@ -34,7 +34,7 @@ export function buildHelpLines(): HelpLine[] {
   const delegation   = env('DELEGATION_MANAGER_ADDRESS') && env('SPEND_CAP_ADDRESS');
   const yieldVault   = env('YIELD_VAULT_ADDRESS');
 
-  const agents = Object.entries(AGENT_REGISTRY).map(([n, id]) => `${n} #${id}`).join('  ·  ');
+  const agents = Object.entries(AGENT_REGISTRY).map(([n, e]) => `${n} #${e.inftTokenId}`).join('  ·  ');
 
   // ── Always available ──────────────────────────────────────────────────────
   const h = (t: string): HelpLine => ({ text: t, kind: 'info' });

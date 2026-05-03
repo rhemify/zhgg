@@ -335,7 +335,7 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
           // Prefer the canonical role name (e.g. "oracle") over a bare tokenId
           // string — the KH marketplace workflow validates agentName is a
           // recognisable identifier and treats digit-only strings as missing.
-          agentName: Object.entries(AGENT_REGISTRY).find(([, id]) => id === intent.tokenId)?.[0] ?? intent.target,
+          agentName: Object.entries(AGENT_REGISTRY).find(([, e]) => e.inftTokenId === intent.tokenId)?.[0] ?? intent.target,
           // Real ERC-7857 capabilities are read by AuditDeps in live mode
           // via the readCapabilities dep wired in buildLiveDeps; this manifest
           // string is a fallback descriptor only.
@@ -848,13 +848,14 @@ async function resolveDelegateTo(
         reason: `agent "${trimmed}": AGENT_NFT_ADDRESS not set — cannot resolve owner`,
       }
     }
-    const tokenId = AGENT_REGISTRY[agentKey]
-    if (tokenId === undefined) {
+    const entry = AGENT_REGISTRY[agentKey]
+    if (entry === undefined) {
       return {
         ok: false,
         reason: `agent "${trimmed}" not in agent-registry — mint first or pass a 0x address`,
       }
     }
+    const tokenId = entry.inftTokenId
     try {
       const owner = (await bundle.zgPub.readContract({
         address: bundle.agentNft,

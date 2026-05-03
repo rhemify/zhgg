@@ -156,6 +156,29 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
     }
   }
 
+  // Inline duplicate of apps/tui/src/agent-registry.ts AGENT_REGISTRY.
+  // apps can't import sibling apps; keep the lookup consistent so the
+  // CLI sends the correct iNFT tokenId + registry agentId to the
+  // orchestrator (without this resolver the CLI stamped agentId=7n,
+  // which made AxiomCommit revert ERC721NonexistentToken and giveFeedback
+  // revert AgentNotFound). See apps/tui/src/agent-registry.ts for the
+  // rationale on the dual-id shape.
+  const CLI_AGENT_REGISTRY: Record<string, { inftTokenId: bigint; registryAgentId: bigint; ens: string }> = {
+    audit:  { inftTokenId: 1n, registryAgentId: 1n, ens: 'audit.zhgg.eth' },
+    oracle: { inftTokenId: 2n, registryAgentId: 2n, ens: 'oracle.zhgg.eth' },
+    swap:   { inftTokenId: 3n, registryAgentId: 3n, ens: 'swap.zhgg.eth' },
+  };
+  function resolveCliAgent(name: string) {
+    const norm = name.trim().toLowerCase().replace(/\.zhgg\.eth$/i, '');
+    return CLI_AGENT_REGISTRY[norm] ?? null;
+  }
+  const resolved = resolveCliAgent(target);
+  // Fall back to (1n, 1n) only if the user passed an unknown role —
+  // the orchestrator then audits a non-existent iNFT, surfaced as a
+  // loud failure the user can fix by minting first.
+  const subjectInftTokenId = resolved?.inftTokenId ?? 1n;
+  const subjectRegistryAgentId = resolved?.registryAgentId ?? 1n;
+
   const transcript = await runCrossAgentDemo(
     bundle?.deps ?? {
       settleOraclePayment: async () => MOCK_SETTLEMENT,
@@ -163,9 +186,10 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
     },
     {
       target: {
-        agentId: 7n,
-        agentName: target,
-        manifest: `placeholder manifest for ${target}; D5 will read from on-chain ERC-7857`,
+        agentId: subjectInftTokenId,
+        registryAgentId: subjectRegistryAgentId,
+        agentName: resolved ? Object.keys(CLI_AGENT_REGISTRY).find((k) => CLI_AGENT_REGISTRY[k] === resolved)! : target,
+        manifest: `placeholder manifest for ${target}; capabilities flow into manifest in the orchestrator's readCapabilities step`,
       },
       oracleTopic: 'eu-ai-act',
       auditOptions: bundle?.auditOptions ?? {

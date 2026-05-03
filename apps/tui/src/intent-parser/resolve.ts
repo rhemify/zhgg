@@ -50,9 +50,9 @@ export function resolveTarget(target: string, raw: string): TargetResolution {
     return { ok: true, tokenId: BigInt(target) };
   }
   // Agent role name or *.eth name — resolveAgent strips .zhgg.eth for compat.
-  const tokenId = resolveAgent(target);
-  if (tokenId !== null) {
-    return { ok: true, tokenId };
+  const entry = resolveAgent(target);
+  if (entry !== null) {
+    return { ok: true, tokenId: entry.inftTokenId };
   }
   // *.eth shape that didn't resolve → unknown_agent (user needs to mint)
   if (/\.eth$/i.test(target)) {

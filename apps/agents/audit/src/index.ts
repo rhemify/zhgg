@@ -35,7 +35,16 @@ export type {
 export { PROBE_PROMPTS, aggregateVerdict, parseProbeResponse } from './audit-core.js';
 
 export interface AuditTarget {
+  /// AgentNFT (ERC-7857) iNFT tokenId. Used by AxiomCommit,
+  /// readCapabilities, memoryRoot pin, and the canonical AuditReport's
+  /// `subjectAgent.tokenId`. NOT the same as `registryAgentId` —
+  /// AgentRegistry is its own ERC-721 with its own counter.
   agentId: bigint;
+  /// AgentRegistry (ERC-8004) agentId. Used ONLY for `giveFeedback`.
+  /// When omitted, falls back to `agentId` for backward compatibility
+  /// (works when both contracts happen to share the same numbering,
+  /// which is the case for the current zhgg deployment).
+  registryAgentId?: bigint;
   agentName: string;
   /// Free-form manifest of the target's capabilities — fed into each probe
   /// prompt. In practice, this is the target's ERC-7857 capability blob.
@@ -165,7 +174,10 @@ export async function runAudit(
   const receiptCtx: ReceiptContext = {
     registryAddress: opts.registryAddress,
     agentRegistryCaip: opts.agentRegistryCaip,
-    agentId: target.agentId,
+    // ERC-8004 giveFeedback expects the AgentRegistry's own agentId,
+    // not the AgentNFT iNFT tokenId. Fall back to target.agentId
+    // (matches old behavior + works when both ids align).
+    agentId: target.registryAgentId ?? target.agentId,
     clientAddress: opts.clientAddress,
     value,
     valueDecimals: 0,

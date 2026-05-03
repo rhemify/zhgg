@@ -28,9 +28,9 @@ export function liveAgents(): AgentRow[] {
     if (name.startsWith('swap'))   return 'Uniswap v3 · WETH9 on Base';
     return '?';
   };
-  return Object.entries(AGENT_REGISTRY).map(([role, tokenId]) => ({
+  return Object.entries(AGENT_REGISTRY).map(([role, entry]) => ({
     name: role + '-agent',
-    tokenId,
+    tokenId: entry.inftTokenId,
     scope: scopeFor(role),
   }));
 }
