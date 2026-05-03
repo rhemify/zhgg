@@ -53,6 +53,12 @@ export function openGrantModal(env: GrantEnv): void {
     setToast('err', 'no intent staged — type one and Enter to stage');
     return;
   }
+  const permissionId = permissionIdFor(stagedIntent);
+  if (!permissionId) {
+    // kh hire, swap, transfer etc. pay via x402 or direct tx — SpendCap not involved.
+    setToast('info', `[G] grant is only for audit/ask-oracle — ${stagedIntent.kind} uses its own payment path`);
+    return;
+  }
   const bundle = tryBuildLiveBundle();
   if (!bundle) {
     setToast('err', `live env unavailable: ${getLiveBundleError() ?? 'unknown'}`);
@@ -62,7 +68,6 @@ export function openGrantModal(env: GrantEnv): void {
     setToast('err', 'SPEND_CAP_ADDRESS not set — cannot grant');
     return;
   }
-  const permissionId = permissionIdFor(stagedIntent) ?? '0x' + '0'.repeat(64);
   const lines = [
     `Grant 0.5 USDC spend permission to ${bundle.baseAccount.address}`,
     `via SpendCap.grantPermission(...)`,
