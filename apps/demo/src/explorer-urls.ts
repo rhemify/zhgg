@@ -23,8 +23,15 @@ export function chainscanTxUrl(txHash: string): string {
 /// 0G Galileo storage explorer — for content lookup by rootHash. Lets a
 /// regulator fetch the canonical AuditReport bytes pinned at upload time
 /// and re-verify the keccak256 against the on-chain feedbackHash.
+///
+/// URL pattern is `?root=<rootHash>` (query string), NOT `/tx/<rootHash>`.
+/// The latter 308-redirects to chainscan-galileo, which doesn't index
+/// storage rootHashes — verified with `curl -I` 2026-05-03. Storagescan's
+/// SPA reads `?root=` from window.location.search and resolves the file
+/// view client-side. The bytes ARE downloadable via the indexer API:
+/// `https://indexer-storage-testnet-turbo.0g.ai/file?root=<rootHash>`.
 export function storagescanRootUrl(rootHash: string): string {
-  return `https://storagescan-galileo.0g.ai/tx/${rootHash}`;
+  return `https://storagescan-galileo.0g.ai/?root=${rootHash}`;
 }
 
 /// Base Sepolia block explorer — for the FeeSplitter settlement leg + any

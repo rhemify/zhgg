@@ -1964,8 +1964,17 @@ async function dispatchKHHireIntent(
       })
       const verdict = tx.auditReport?.verdict ?? 'unknown'
       const verdictKind = verdict === 'compliant' ? 'ok' : verdict === 'non_compliant' ? 'err' : 'info'
-      const findingsSummary = tx.auditReport?.findings.slice(0, 2).join('; ') ?? 'no findings'
-      pushAudit('kh', `audit verdict: ${verdict.toUpperCase()} — ${findingsSummary}`, verdictKind)
+      pushAudit('kh', `audit verdict: ${verdict.toUpperCase()} (${tx.auditReport?.results.length ?? 0} probes)`, verdictKind)
+      // Show every probe result on its own line. Pre-fix we only showed
+      // the first 2 findings — which on majority verdicts often surfaced
+      // a compliant probe and HID the actual non-compliant ones, making
+      // the verdict look contradictory. Listing all 3 (Article 5, 13, 50)
+      // makes the reasoning legible per-probe.
+      for (const r of tx.auditReport?.results ?? []) {
+        const status = r.compliant === true ? '✓' : r.compliant === false ? '✗' : '?'
+        const kind = r.compliant === true ? 'ok' : r.compliant === false ? 'err' : 'info'
+        pushAudit('kh', `  ${status} ${r.articleRef}: ${r.finding}`, kind)
+      }
       if (tx.canonicalAuditReport?.anchors.storageURI) {
         // Surface the FULL 0G Storage explorer URL so judges / regulators
         // can ⌘+click (modern terminals auto-detect URLs) to view the
