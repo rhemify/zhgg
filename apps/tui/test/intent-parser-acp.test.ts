@@ -28,17 +28,24 @@ describe('acp create — happy path', () => {
     expect(r.usdcAmount).toBe('0.5');
   });
 
-  it('ENS tokenId resolves via agent-registry', () => {
-    const r = parseIntent('acp create oracle.zhgg.eth 1.25');
+  it('role name resolves via agent-registry', () => {
+    const r = parseIntent('acp create oracle 1.25');
     expect(r.kind).toBe('acp-create');
     if (r.kind !== 'acp-create') return;
-    expect(r.target).toBe('oracle.zhgg.eth');
-    expect(r.tokenId).toBe(2n); // oracle.zhgg.eth → token #2 in the registry
+    expect(r.target).toBe('oracle');
+    expect(r.tokenId).toBe(2n);
     expect(r.usdcAmount).toBe('1.25');
   });
 
-  it('case-insensitive ENS label', () => {
-    const r = parseIntent('acp create AUDIT.ZHGG.eth 100');
+  it('legacy .zhgg.eth suffix still resolves (backward compat)', () => {
+    const r = parseIntent('acp create oracle.zhgg.eth 1.25');
+    expect(r.kind).toBe('acp-create');
+    if (r.kind !== 'acp-create') return;
+    expect(r.tokenId).toBe(2n);
+  });
+
+  it('case-insensitive role label', () => {
+    const r = parseIntent('acp create AUDIT 100');
     expect(r.kind).toBe('acp-create');
     if (r.kind !== 'acp-create') return;
     expect(r.tokenId).toBe(1n);
@@ -105,7 +112,7 @@ describe('acp create — malformed', () => {
     const r = parseIntent('acp create not-a-token 10');
     expect(r.kind).toBe('unknown');
     if (r.kind !== 'unknown') return;
-    expect(r.reason).toMatch(/expected an \*\.eth name or numeric tokenId/);
+    expect(r.reason).toMatch(/expected an agent role name.*or numeric tokenId/);
   });
 
   it('ENS not in registry returns unknown_agent', () => {

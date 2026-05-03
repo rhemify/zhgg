@@ -41,8 +41,8 @@ function setAgent(state: RunnerState, ens: string, patch: Partial<AgentRow>): vo
   state.agents.set(ens, { ...existing, ...patch });
 }
 
-const AUDIT_ENS = 'audit.zhgg.eth';
-const ORACLE_ENS = 'oracle.zhgg.eth';
+const AUDIT_ENS = 'audit';
+const ORACLE_ENS = 'oracle';
 
 /// Project a single `TranscriptStep` onto the TUI state. Pure — no I/O.
 /// Exported so the unit test can fire steps without an EventEmitter.

@@ -15,7 +15,7 @@ import {
 
 const PROBE_REFS = ['Article 50', 'Article 5', 'Article 13'];
 
-const startEv = (target = 'oracle.zhgg.eth'): SpotlightEvent => ({
+const startEv = (target = 'oracle'): SpotlightEvent => ({
   type: 'audit.start',
   target,
   probesTotal: 3,
@@ -32,7 +32,7 @@ const probeEv = (ref: string, pass: boolean): SpotlightEvent => ({
 
 describe('spotlight state — initial frame', () => {
   it('starts idle with no glyph and zero confidence', () => {
-    const s = initialState('oracle.zhgg.eth', 0);
+    const s = initialState('oracle', 0);
     expect(s.phase).toBe('idle');
     expect(verdictGlyph(s)).toBe(' ');
     expect(verdictLabel(s)).toBe('idle');
@@ -42,7 +42,7 @@ describe('spotlight state — initial frame', () => {
 
 describe('spotlight state — running phase morph', () => {
   it('audit.start switches to ◯ analyzing at 30% confidence', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     expect(s.phase).toBe('running');
     expect(verdictGlyph(s)).toBe('◯');
@@ -53,7 +53,7 @@ describe('spotlight state — running phase morph', () => {
   });
 
   it('first probe passing morphs glyph to ◐ leaning compliant ~46%', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     expect(verdictGlyph(s)).toBe('◐');
@@ -66,7 +66,7 @@ describe('spotlight state — running phase morph', () => {
   });
 
   it('two probes pass → confidence climbs ~63%', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     s = reduce(s, probeEv('Article 5', true));
@@ -74,7 +74,7 @@ describe('spotlight state — running phase morph', () => {
   });
 
   it('one fail flips glyph to leaning non-compliant', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 5', false));
     expect(verdictGlyph(s)).toBe('◐');
@@ -84,7 +84,7 @@ describe('spotlight state — running phase morph', () => {
   });
 
   it('mixed pass+fail labels mixed signal', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     s = reduce(s, probeEv('Article 5', false));
@@ -92,7 +92,7 @@ describe('spotlight state — running phase morph', () => {
   });
 
   it('cost accumulates per probe', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     s = reduce(s, probeEv('Article 5', true));
@@ -102,7 +102,7 @@ describe('spotlight state — running phase morph', () => {
 
 describe('spotlight state — complete phase reveal', () => {
   it('compliant verdict → ● COMPLIANT 95%', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     PROBE_REFS.forEach((ref) => (s = reduce(s, probeEv(ref, true))));
     s = reduce(s, { type: 'audit.complete', verdict: 'compliant', findings: [] });
@@ -113,7 +113,7 @@ describe('spotlight state — complete phase reveal', () => {
   });
 
   it('non_compliant verdict → ● NON-COMPLIANT 95%', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 5', false));
     s = reduce(s, { type: 'audit.complete', verdict: 'non_compliant', findings: [] });
@@ -122,7 +122,7 @@ describe('spotlight state — complete phase reveal', () => {
   });
 
   it('unclear verdict → 50% confidence', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, { type: 'audit.complete', verdict: 'unclear', findings: [] });
     expect(verdictLabel(s)).toBe('UNCLEAR');
@@ -130,7 +130,7 @@ describe('spotlight state — complete phase reveal', () => {
   });
 
   it('proof artifacts are stored separately and only revealed in complete phase', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, { type: 'audit.report.pin', uri: '0g://storage/0xabc', hash: '0xfeed' });
     s = reduce(s, { type: 'audit.receipt.post', txHash: '0xreceipt' });
@@ -146,7 +146,7 @@ describe('spotlight state — complete phase reveal', () => {
 
 describe('spotlight state — failure phase', () => {
   it('audit.failed flips to ✕ FAILED with reason', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, { type: 'audit.failed', reason: '402 declined: spend cap' });
     expect(s.phase).toBe('failed');

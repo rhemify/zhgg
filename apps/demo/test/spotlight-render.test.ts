@@ -16,7 +16,7 @@ import { renderLines, verdictLine, paintLines } from '../src/spotlight/render.js
 const PROBE_REFS = ['Article 50', 'Article 5', 'Article 13'];
 const startEv = (): SpotlightEvent => ({
   type: 'audit.start',
-  target: 'oracle.zhgg.eth',
+  target: 'oracle',
   probesTotal: 3,
   probeRefs: PROBE_REFS,
 });
@@ -33,25 +33,25 @@ const stripAnsi = (s: string) => s.replace(ANSI_RE, '');
 
 describe('verdictLine — phase progression', () => {
   it('idle phase produces empty verdict', () => {
-    const s = initialState('oracle.zhgg.eth', 0);
+    const s = initialState('oracle', 0);
     expect(verdictLine(s, 0)).toBe('');
   });
 
   it('running with no probes shows ◯ analyzing target', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
-    expect(verdictLine(s, 30)).toBe('◯  analyzing oracle.zhgg.eth');
+    expect(verdictLine(s, 30)).toBe('◯  analyzing oracle');
   });
 
   it('one probe pass shows ◐ leaning compliant with ratio + percent', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     expect(verdictLine(s, 47)).toBe('◐  leaning compliant · 1/3 probes · 47%');
   });
 
   it('complete + compliant shows ● COMPLIANT 95%', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     PROBE_REFS.forEach((r) => (s = reduce(s, probeEv(r, true))));
     s = reduce(s, { type: 'audit.complete', verdict: 'compliant', findings: [] });
@@ -59,7 +59,7 @@ describe('verdictLine — phase progression', () => {
   });
 
   it('failed phase shows ✕ FAILED with no probe ratio', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, { type: 'audit.failed', reason: 'spend cap exceeded' });
     expect(verdictLine(s, 0)).toBe('✕  FAILED');
@@ -68,14 +68,14 @@ describe('verdictLine — phase progression', () => {
 
 describe('renderLines — full frame composition', () => {
   it('idle frame has no verdict, no trail, no cost', () => {
-    const s = initialState('oracle.zhgg.eth', 0);
+    const s = initialState('oracle', 0);
     const { lines } = renderLines(s, 0);
     const visible = lines.filter((l) => l.trim().length > 0);
     expect(visible.length).toBe(0);
   });
 
   it('running frame includes verdict + 3 probe rows + cost line', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true, 'AI disclosure compliant'));
     const { lines } = renderLines(s, 47);
@@ -89,7 +89,7 @@ describe('renderLines — full frame composition', () => {
   });
 
   it('complete frame includes proof artifact reveal block', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     PROBE_REFS.forEach((r) => (s = reduce(s, probeEv(r, true))));
     s = reduce(s, { type: 'audit.complete', verdict: 'compliant', findings: [] });
@@ -109,7 +109,7 @@ describe('renderLines — full frame composition', () => {
   });
 
   it('failed frame surfaces the reason caption', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, { type: 'audit.failed', reason: 'router 502: backend down' });
     const { lines } = renderLines(s, 0);
@@ -121,7 +121,7 @@ describe('renderLines — full frame composition', () => {
 
 describe('paintLines — ANSI safety', () => {
   it('stripped paint output equals plain renderLines output', () => {
-    let s = initialState('oracle.zhgg.eth', 0);
+    let s = initialState('oracle', 0);
     s = reduce(s, startEv());
     s = reduce(s, probeEv('Article 50', true));
     const plain = renderLines(s, 47).lines;

@@ -34,16 +34,13 @@ export function resolveOracleTopic(raw: string): OracleTopic | null {
 ///
 /// Three input shapes:
 ///   - bare digits (e.g. `7`) → parsed as `BigInt`, passed through.
-///   - `*.eth` name → looked up in the static `agent-registry.ts`
-///     map; returns `unknown_agent` when missing so the TUI can
-///     prompt the user to mint first.
+///   - agent role name (e.g. `oracle`) or legacy `*.zhgg.eth` → looked
+///     up in the static `agent-registry.ts` map; returns `unknown_agent`
+///     when missing so the TUI can prompt the user to mint first.
+///   - `*.eth` mainnet name → same registry lookup (includes `.zhgg.eth`
+///     backward-compat via resolveAgent's suffix stripping).
 ///   - anything else → generic `unknown` reason (caller renders the
 ///     command-help hint).
-///
-/// We deliberately removed the previous keccak-style hash fallback —
-/// it produced syntactically-valid `bigint`s that no AgentNFT could
-/// possibly own, so any downstream `tokenURI` / `ownerOf` read
-/// reverted with a confusing "ERC721NonexistentToken" error.
 export type TargetResolution =
   | { ok: true; tokenId: bigint }
   | { ok: false; cmd: IntentCommand };
@@ -52,27 +49,29 @@ export function resolveTarget(target: string, raw: string): TargetResolution {
   if (/^\d+$/.test(target)) {
     return { ok: true, tokenId: BigInt(target) };
   }
-  if (/\.eth$/i.test(target)) {
-    const tokenId = resolveAgent(target);
-    if (tokenId === null) {
-      return {
-        ok: false,
-        cmd: {
-          kind: 'unknown_agent',
-          raw,
-          target,
-          message: `${target} — not in agent-registry. Mint first or use a tokenId.`,
-        },
-      };
-    }
+  // Agent role name or *.eth name — resolveAgent strips .zhgg.eth for compat.
+  const tokenId = resolveAgent(target);
+  if (tokenId !== null) {
     return { ok: true, tokenId };
+  }
+  // *.eth shape that didn't resolve → unknown_agent (user needs to mint)
+  if (/\.eth$/i.test(target)) {
+    return {
+      ok: false,
+      cmd: {
+        kind: 'unknown_agent',
+        raw,
+        target,
+        message: `${target} — not in agent-registry. Mint first or use a tokenId.`,
+      },
+    };
   }
   return {
     ok: false,
     cmd: {
       kind: 'unknown',
       raw,
-      reason: `audit target "${target}" — expected an *.eth name or numeric tokenId`,
+      reason: `audit target "${target}" — expected an agent role name (audit/oracle/swap) or numeric tokenId`,
     },
   };
 }

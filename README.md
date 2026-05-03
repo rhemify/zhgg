@@ -1,12 +1,10 @@
 # zhgg
 
-**Bidirectional agentic-commerce runtime — your agents can hire third-party
-KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
+**Bidirectional agentic-commerce runtime with a Terminal User Interface (TUI), allowing your agents to  hire third-party KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
 the same MCP-callable HTTP surface. Every audit produces a tamper-proof
 EU AI Act evidence chain anchored on 0G Storage + ERC-8004.**
 
 > Status: contracts deployed on 0G Galileo (16602) + Base Sepolia (84532).
-> 220 forge tests + 51 bun test files across 11 EIPs and 9 workspace agents.
 > Built for ETHGlobal OpenAgents — submitting to **0G Labs** ($15K), **KeeperHub**
 > ($4.5K + $500 feedback), and **EIP-standards** depth signals.
 
@@ -15,10 +13,10 @@ Live testnet addresses — see [Deployed contracts](#deployed-contracts) below.
 ## Headline scenario
 
 ```
-audit oracle.zhgg.eth                        TUI command (one keystroke)
+audit oracle                                 TUI command (one keystroke)
         │
         ▼
-ENS  →  AgentNFT.tokenId (ERC-7857, 0G)      apps/tui/src/intent-parser/resolve.ts
+role → AgentNFT.tokenId (ERC-7857, 0G)       apps/tui/src/agent-registry.ts
         │
         ▼
 SpendCap pre-flight (ERC-7715, Base)         apps/demo/src/spend-cap.ts
@@ -93,7 +91,7 @@ bun run apps/tui/src/index.ts                 # raw-ANSI TUI
 Demo walkthrough (paste into the running TUI):
 
 ```
-agents                                        # list 3 iNFTs (audit/oracle/swap.zhgg.eth)
+agents                                        # list 3 iNFTs (audit #1 / oracle #2 / swap #3)
 balances                                      # OG + ETH + USDC + WETH
 ask oracle ETH/USD                            # Pyth Hermes feed
 ask oracle eu-ai-act                          # regulatory deltas
@@ -102,7 +100,7 @@ kh inspect ARYA                               # full inputSchema + price
 kh hire <slug> {"foo":"bar"}                  # x402 marketplace round-trip
 swap 0.0001 ETH WETH                          # Uniswap V3 SwapRouter02
 mint audit                                    # ERC-7857 iNFT on 0G
-audit oracle.zhgg.eth                         # full 10-step orchestrator (gated on ZG_ROUTER_KEY)
+audit oracle                                  # full 10-step orchestrator (gated on ZG_ROUTER_KEY)
 ```
 
 Full walkthrough: [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md).
@@ -140,7 +138,7 @@ Full walkthrough: [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md).
 | `@my-better-t-app/config` | Shared tsconfig presets |
 
 
-iNFTs minted: `audit.zhgg.eth=1`, `oracle.zhgg.eth=2`, `swap.zhgg.eth=3` ([`apps/tui/src/agent-registry.ts:19-23`](./apps/tui/src/agent-registry.ts)).
+iNFTs minted: `audit=#1`, `oracle=#2`, `swap=#3` — identity lives on the AgentNFT contract on 0G Galileo, not ENS ([`apps/tui/src/agent-registry.ts`](./apps/tui/src/agent-registry.ts)).
 
 ---
 
@@ -294,7 +292,7 @@ locally; tier table mirrored here).
 
 ## Audit evidence chain (EU AI Act)
 
-After every `audit <subject>` run, `audit.zhgg.eth` produces a canonical
+After every `audit <subject>` run, the `audit` agent (iNFT #1) produces a canonical
 JSON `AuditReport` with deterministic key-sorted UTF-8 encoding. The
 report's `anchors.feedbackHash` is the keccak256 of those exact bytes
 with `feedbackHash` itself zeroed (self-referential fixed point). The

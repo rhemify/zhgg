@@ -40,11 +40,12 @@ export function parseDelegate(parts: string[], trimmed: string): IntentCommand {
   // typos so the operator gets immediate feedback.
   const isAddrShape = /^0x[a-fA-F0-9]{40}$/.test(to);
   const isEnsShape = /\.eth$/i.test(to);
-  if (!isAddrShape && !isEnsShape) {
+  const isAgentRole = /^(audit|oracle|swap)$/i.test(to);
+  if (!isAddrShape && !isEnsShape && !isAgentRole) {
     return {
       kind: 'unknown',
       raw: trimmed,
-      reason: `delegate to "${to}" — expected 0x-address or *.eth name (mainnet ENS or *.zhgg.eth agent)`,
+      reason: `delegate to "${to}" — expected 0x-address, agent role name (audit/oracle/swap), or mainnet *.eth name`,
     };
   }
   if (!/^0x[a-fA-F0-9]{64}$/.test(permissionId)) {

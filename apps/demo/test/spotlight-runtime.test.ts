@@ -96,7 +96,7 @@ describe('spotlight runtime — end-to-end', () => {
   it('runs through audit → complete and the captured output contains the verdict reveal', async () => {
     const cap = new CaptureStream();
     const result = await runSpotlight({
-      target: 'oracle.zhgg.eth',
+      target: 'oracle',
       out: cap as unknown as NodeJS.WriteStream,
       __depsOverride: makeBundle(),
     });
@@ -149,7 +149,7 @@ describe('spotlight runtime — end-to-end', () => {
     delete process.env.ORACLE_OWNER_ADDRESS;
     try {
       const result = await runSpotlight({
-        target: 'oracle.zhgg.eth',
+        target: 'oracle',
         out: cap as unknown as NodeJS.WriteStream,
       });
       expect(result.exitCode).toBe(1);

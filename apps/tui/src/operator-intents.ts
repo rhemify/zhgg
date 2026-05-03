@@ -89,7 +89,7 @@ export async function listAgents(input: ListAgentsInput): Promise<OpRow[]> {
     ok: 'info',
   });
 
-  for (const [ens, tokenId] of entries) {
+  for (const [role, tokenId] of entries) {
     try {
       // Two parallel reads — ownerOf + capabilities. We don't probe
       // tokenURI because it's not required by the spec ("alias, owner,
@@ -112,13 +112,13 @@ export async function listAgents(input: ListAgentsInput): Promise<OpRow[]> {
       const capBytes = Math.max(0, Math.floor((caps.length - 2) / 2));
       rows.push({
         agent: 'agents',
-        event: `#${tokenId} ${ens} owner=${shortAddr(owner)} caps=${capBytes}B`,
+        event: `#${tokenId} ${role} owner=${shortAddr(owner)} caps=${capBytes}B`,
         ok: 'ok',
       });
     } catch (e) {
       rows.push({
         agent: 'agents',
-        event: `#${tokenId} ${ens} read FAILED: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160),
+        event: `#${tokenId} ${role} read FAILED: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160),
         ok: 'err',
       });
     }
@@ -336,7 +336,7 @@ export async function dispatchMint(
     });
     emit({
       agent: 'mint-agent',
-      event: `mint.registered (registry update is manual — re-add ${input.role}-N.zhgg.eth → #${result.tokenId} in agent-registry.ts to expose in TUI)`,
+      event: `mint.registered (registry update is manual — re-add '${input.role}' → #${result.tokenId} in agent-registry.ts to expose in TUI)`,
       ok: 'info',
     });
     return { ok: true, result };

@@ -11,9 +11,9 @@
 ///   - malformed shapes return `unknown` with a precise reason so the
 ///     TUI can surface a hint without dispatching.
 ///
-/// Resolution of `<to>` (0x address vs *.zhgg.eth agent ENS vs mainnet
-/// *.eth) is a dispatcher concern — the parser preserves the user's
-/// literal so the audit row can echo it without normalising.
+/// Resolution of `<to>` (0x address vs agent role name vs mainnet *.eth)
+/// is a dispatcher concern — the parser preserves the user's literal so
+/// the audit row can echo it without normalising.
 
 import { describe, it, expect } from 'bun:test';
 import { parseIntent } from '../src/intent-parser.js';
@@ -42,21 +42,21 @@ describe('delegate — happy path', () => {
     expect(r.permissionId).toBe(PERM);
   });
 
-  it('accepts a registered agent ENS as <to> (parser keeps verbatim)', () => {
+  it('accepts an agent role name as <to> (parser keeps verbatim)', () => {
     // Parser does NOT cross-chain resolve — that's the dispatcher's job
     // (AgentNFT.ownerOf on 0G Galileo). The parser preserves the user's
     // literal so the audit row can echo it.
+    const r = parseIntent(`delegate oracle ${PERM}`);
+    expect(r.kind).toBe('delegate');
+    if (r.kind !== 'delegate') return;
+    expect(r.to).toBe('oracle');
+  });
+
+  it('accepts legacy oracle.zhgg.eth form (backward compat)', () => {
     const r = parseIntent(`delegate oracle.zhgg.eth ${PERM}`);
     expect(r.kind).toBe('delegate');
     if (r.kind !== 'delegate') return;
     expect(r.to).toBe('oracle.zhgg.eth');
-  });
-
-  it('accepts an arbitrary case agent ENS (dispatcher lower-cases)', () => {
-    const r = parseIntent(`delegate Oracle.zhgg.eth ${PERM}`);
-    expect(r.kind).toBe('delegate');
-    if (r.kind !== 'delegate') return;
-    expect(r.to).toBe('Oracle.zhgg.eth');
   });
 });
 
@@ -105,7 +105,7 @@ describe('delegate — malformed', () => {
     const r = parseIntent(`delegate notalegalname ${PERM}`);
     expect(r.kind).toBe('unknown');
     if (r.kind !== 'unknown') return;
-    expect(r.reason).toMatch(/expected 0x-address or \*\.eth name/);
+    expect(r.reason).toMatch(/expected 0x-address, agent role name/);
   });
 
   it('rejects extra arguments past <to> <permissionId>', () => {

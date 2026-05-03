@@ -753,10 +753,10 @@ async function dispatchAxiomRevealIntent(
 //
 // Resolution rules for `<to>`:
 //   - 0x40-hex   → viem `getAddress` (any case accepted; checksummed).
-//   - `*.zhgg.eth` agent ENS → look up tokenId via agent-registry, then
-//     read AgentNFT.ownerOf(tokenId) on 0G Galileo (chainId 16602)
-//     using the bundle's `zgPub` client. Cross-chain: read on 0G,
-//     write on Base.
+//   - agent role name (`audit`, `oracle`, `swap`) → look up tokenId via
+//     agent-registry, then read AgentNFT.ownerOf(tokenId) on 0G Galileo
+//     (chainId 16602) using the bundle's `zgPub` client. Cross-chain:
+//     read on 0G, write on Base.
 //   - mainnet `*.eth` → reuse `resolveRecipient` from transfer-agent
 //     (same free public RPC chain; honours `ENS_RPC_URL`).
 //
@@ -816,21 +816,22 @@ async function resolveDelegateTo(
   if (isAddress(trimmed, { strict: false })) {
     return { ok: true, address: getAddress(trimmed), source: 'address' }
   }
-  // Agent ENS (`*.zhgg.eth`) takes precedence over generic mainnet ENS —
-  // these names aren't on mainnet and a stray mainnet probe would just
-  // return ens_unresolved with a confusing reason.
-  if (/\.zhgg\.eth$/i.test(trimmed)) {
+  // Agent role name (e.g. `oracle`, optionally with legacy `.zhgg.eth` suffix)
+  // takes precedence over generic mainnet ENS — these names aren't on mainnet
+  // and a stray mainnet probe would just return ens_unresolved.
+  const agentKey = trimmed.toLowerCase().replace(/\.zhgg\.eth$/i, '');
+  if (AGENT_REGISTRY[agentKey] !== undefined || /\.zhgg\.eth$/i.test(trimmed)) {
     if (!bundle.agentNft) {
       return {
         ok: false,
-        reason: `agent ENS "${trimmed}": AGENT_NFT_ADDRESS not set — cannot resolve owner`,
+        reason: `agent "${trimmed}": AGENT_NFT_ADDRESS not set — cannot resolve owner`,
       }
     }
-    const tokenId = AGENT_REGISTRY[trimmed.toLowerCase()]
+    const tokenId = AGENT_REGISTRY[agentKey]
     if (tokenId === undefined) {
       return {
         ok: false,
-        reason: `agent ENS "${trimmed}" not in agent-registry — mint first or pass a 0x address`,
+        reason: `agent "${trimmed}" not in agent-registry — mint first or pass a 0x address`,
       }
     }
     try {

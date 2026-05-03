@@ -35,10 +35,10 @@ export const MINT_ROLES: ReadonlySet<MintRole> = new Set<MintRole>(['audit', 'or
 export type IntentCommand =
   | {
       kind: 'audit';
-      /// Either an ENS-shaped string (e.g. `oracle.zhgg.eth`) or a
-      /// numeric tokenId. We surface both so the TUI can label the
-      /// audit panel ("auditing oracle.zhgg.eth (#7)") without making
-      /// the orchestrator chase ENS.
+      /// Either an agent role name (e.g. `oracle`) or a numeric tokenId.
+      /// We surface both so the TUI can label the audit panel
+      /// ("auditing oracle (#2)") without making the orchestrator look
+      /// up the registry again.
       target: string;
       tokenId: bigint;
       /// Oracle topic to run the compliance check against.
@@ -121,10 +121,10 @@ export type IntentCommand =
   /// env at dispatch time and any 6-decimals ERC-20 will work).
   | {
       kind: 'acp-create';
-      /// Either an ENS-shaped string (e.g. `oracle.zhgg.eth`) or a
-      /// numeric tokenId. We keep both so the dispatcher can label the
-      /// audit row with the operator's input verbatim while feeding the
-      /// canonical bigint to AgentNFT.ownerOf.
+      /// Either an agent role name (e.g. `oracle`) or a numeric tokenId.
+      /// We keep both so the dispatcher can label the audit row with the
+      /// operator's input verbatim while feeding the canonical bigint to
+      /// AgentNFT.ownerOf.
       target: string;
       tokenId: bigint;
       /// Decimal-string amount (e.g. "10", "0.5"). The dispatcher
@@ -202,13 +202,13 @@ export type IntentCommand =
   ///
   /// `to` is the delegate address — kept as a raw string here because
   /// the dispatcher resolves three shapes: bare 0x address (viem
-  /// getAddress), agent ENS (`*.zhgg.eth` via agent-registry →
-  /// AgentNFT.ownerOf on 0G Galileo), or mainnet ENS (`*.eth` via
-  /// resolveRecipient). Validation at parse time is shape-only; real
-  /// resolution happens in the dispatcher with full clients.
+  /// getAddress), agent role name (via agent-registry → AgentNFT.ownerOf
+  /// on 0G Galileo), or mainnet ENS (`*.eth` via resolveRecipient).
+  /// Validation at parse time is shape-only; real resolution happens in
+  /// the dispatcher with full clients.
   | {
       kind: 'delegate';
-      /// Raw `<to>` token — 0x-address, agent ENS, or mainnet ENS.
+      /// Raw `<to>` token — 0x-address, agent role name, or mainnet ENS.
       to: string;
       /// 0x + 64 hex bytes32 — the SpendCap permissionId bucket the
       /// delegation will debit on each redemption. Validated at parse

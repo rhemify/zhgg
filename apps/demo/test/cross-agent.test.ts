@@ -6,7 +6,7 @@ import type { Erc8004Client, ZGInferenceResult, ZGRouterError, PostError, Result
 
 const TARGET = {
   agentId: 7n,
-  agentName: 'oracle.zhgg.eth',
+  agentName: 'oracle',
   manifest: 'returns regulatory feeds',
 };
 

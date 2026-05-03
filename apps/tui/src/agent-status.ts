@@ -28,10 +28,10 @@ export function liveAgents(): AgentRow[] {
     if (name.startsWith('swap'))   return 'Uniswap v3 · WETH9 on Base';
     return '?';
   };
-  return Object.entries(AGENT_REGISTRY).map(([ens, tokenId]) => ({
-    name: ens.replace(/\.zhgg\.eth$/, '-agent'),
+  return Object.entries(AGENT_REGISTRY).map(([role, tokenId]) => ({
+    name: role + '-agent',
     tokenId,
-    scope: scopeFor(ens),
+    scope: scopeFor(role),
   }));
 }
 

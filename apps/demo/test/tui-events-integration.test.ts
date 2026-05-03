@@ -96,7 +96,7 @@ describe('TUI ↔ orchestrator integration', () => {
       {
         target: {
           agentId: 7n,
-          agentName: 'audit.zhgg.eth',
+          agentName: 'audit',
           manifest: 'integration-test placeholder manifest',
         },
         oracleTopic: 'eu-ai-act',
@@ -122,8 +122,8 @@ describe('TUI ↔ orchestrator integration', () => {
     expect(stepNames).toContain('audit.complete');
 
     // The TUI state must reflect the agents the orchestrator touched.
-    const audit = state.agents.get('audit.zhgg.eth');
-    const oracle = state.agents.get('oracle.zhgg.eth');
+    const audit = state.agents.get('audit');
+    const oracle = state.agents.get('oracle');
     expect(audit).toBeDefined();
     expect(oracle).toBeDefined();
 
