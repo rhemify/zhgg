@@ -191,6 +191,29 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
         agentName: resolved ? Object.keys(CLI_AGENT_REGISTRY).find((k) => CLI_AGENT_REGISTRY[k] === resolved)! : target,
         manifest: `placeholder manifest for ${target}; capabilities flow into manifest in the orchestrator's readCapabilities step`,
       },
+      // Slice Y — populate the auditor identity from the audit role's
+      // iNFT (tokenId 1) when live config is available. Pre-fix every
+      // auditorAgent field stamped zero/placeholder; now the canonical
+      // AuditReport carries real on-chain identity for the auditor.
+      // Only fires in live mode — mock runs keep placeholder so tests
+      // don't depend on env.
+      auditorIdentity: live && bundle
+        ? (() => {
+            const auditEntry = CLI_AGENT_REGISTRY.audit!;
+            return {
+              iNFTAddress: (process.env.AGENT_NFT_ADDRESS ?? '0x0000000000000000000000000000000000000000') as `0x${string}`,
+              tokenId: auditEntry.inftTokenId,
+              ens: auditEntry.ens,
+              // Manifest hash deferred — would require an extra readCapabilities
+              // call against the audit iNFT. ZERO_HASH placeholder is honest
+              // ("not read") and downstream verifiers can re-derive on demand.
+              manifestHash: `0x${'0'.repeat(64)}` as `0x${string}`,
+              // The deployer EOA owns all 3 demo iNFTs; ORACLE_OWNER_ADDRESS
+              // is the same wallet (per .env.example).
+              owner: (process.env.ORACLE_OWNER_ADDRESS ?? '0x0000000000000000000000000000000000000000') as `0x${string}`,
+            };
+          })()
+        : undefined,
       oracleTopic: 'eu-ai-act',
       auditOptions: bundle?.auditOptions ?? {
         apiKey: process.env.ZG_ROUTER_KEY ?? 'sk-mock',
