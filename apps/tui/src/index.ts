@@ -24,6 +24,7 @@ import {
   parseUnits,
   formatUnits,
   keccak256,
+  toBytes,
   toHex,
   isAddress,
   getAddress,
@@ -52,6 +53,7 @@ import {
   type KHCall,
   type KHCallResult,
   type KHError as KHCallError,
+  type KHPublicWorkflow,
 } from '@zhgg/keeperhub-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { AGENT_REGISTRY } from './agent-registry.js';
@@ -289,6 +291,16 @@ function render() {
 // nothing.
 
 // `KNOWN_STEPS` and `applyOrchestratorStep` live in `./orchestrator-step.ts`.
+
+/// Compose the audit-manifest text from a KH workflow's metadata. Fed as
+/// the `manifest` to Qwen probes (which assess against EU AI Act Articles
+/// 5/13/50) AND keccak256-hashed into the canonical AuditReport's
+/// `subjectAgent.capabilitiesAtAudit` field. Used by `kh hire`'s
+/// auto-chained audit step.
+function workflowAsManifest(w: KHPublicWorkflow): string {
+  const schema = w.inputSchema ? JSON.stringify(w.inputSchema) : '{}'
+  return `Name: ${w.name}\nDescription: ${w.description}\nInputSchema: ${schema}\nChain: ${w.chain ?? 'unknown'}\nType: ${w.workflowType ?? 'unknown'}`
+}
 
 async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit' }>): Promise<void> {
   // No synthetic fallback. The TUI is real-or-fail — judges greping for
@@ -1886,6 +1898,90 @@ async function dispatchKHHireIntent(
     return
   }
   const provided = intent.inputs ?? {}
+
+  // ── Step 2.5: EU AI Act audit on the workflow before payment ──
+  // The whole project's pitch is verifiable agent commerce — paying without
+  // auditing breaks the value prop. Audit runs against the workflow's
+  // metadata (name + description + inputSchema as the manifest fed to Qwen
+  // probes), anchors the canonical AuditReport to 0G Storage, and surfaces
+  // the verdict before payment. Non-compliant warns prominently but does
+  // NOT block payment in this iteration (configurable later).
+  // Fail-soft: if the audit pipeline fails (router 402, env missing, etc.),
+  // we LOG the failure and proceed with payment — auditing is a value-add,
+  // not a hard gate that could deadlock the demo.
+  const auditBundle = tryBuildLiveBundle()
+  if (auditBundle?.demo && auditBundle.inferenceReady) {
+    pushAudit('kh', `audit ${slug} → running EU AI Act probes (~30s) before payment`, 'info')
+    render()
+    const auditEvents = new EventEmitter()
+    // Compact handler — render audit sub-steps in the kh channel for visual
+    // cohesion with the kh hire flow. kh panel is narrow so detail summary
+    // truncates long hex values to 8 chars + ellipsis.
+    const onAny = (step: TranscriptStep): void => {
+      const detail = step.detail
+        ? Object.entries(step.detail)
+            .filter(([, v]) => v !== undefined && v !== null)
+            .slice(0, 3)
+            .map(([k, v]) => {
+              const s = String(v)
+              return `${k}=${s.length > 14 ? s.slice(0, 8) + '…' : s}`
+            })
+            .join(' ')
+        : ''
+      pushAudit('kh', `  ${step.name}${detail ? ' ' + detail : ''}`, 'info')
+      render()
+    }
+    for (const name of KNOWN_STEPS) auditEvents.on(name, onAny)
+    // Compute manifest once — used both as Qwen probe input AND as the
+    // capabilitiesAtAudit hash baked into the canonical AuditReport.
+    const wfManifest = workflowAsManifest(workflow)
+    try {
+      const tx = await runCrossAgentDemo(auditBundle.demo.deps, {
+        target: {
+          // Synthetic IDs — workflow isn't an iNFT and isn't in
+          // AgentRegistry. auditWorkflowOnly skips the iNFT-coupled steps
+          // (oracle leg, capabilities-read, AxiomCommit, memoryRoot pin)
+          // and threads skipReceiptPost into runAudit.
+          agentId: 0n,
+          registryAgentId: 0n,
+          agentName: workflow.name ?? slug,
+          manifest: wfManifest,
+        },
+        // Surface workflow as the audit subject in the canonical report.
+        // subjectIdentity has only {capabilitiesAtAudit, registeredAtBlock,
+        // ens} — tokenId is sourced from target.agentId above (= 0n →
+        // serialized to "0" in subjectAgent.tokenId).
+        subjectIdentity: {
+          ens: `kh:${workflow.organizationId}/${slug}`,
+          capabilitiesAtAudit: keccak256(toBytes(wfManifest)),
+          registeredAtBlock: '0',
+        },
+        oracleTopic: 'eu-ai-act',
+        events: auditEvents,
+        auditOptions: auditBundle.demo.auditOptions,
+        auditWorkflowOnly: true,
+      })
+      const verdict = tx.auditReport?.verdict ?? 'unknown'
+      const verdictKind = verdict === 'compliant' ? 'ok' : verdict === 'non_compliant' ? 'err' : 'info'
+      const findingsSummary = tx.auditReport?.findings.slice(0, 2).join('; ') ?? 'no findings'
+      pushAudit('kh', `audit verdict: ${verdict.toUpperCase()} — ${findingsSummary}`, verdictKind)
+      if (tx.canonicalAuditReport?.anchors.storageURI) {
+        const uri = tx.canonicalAuditReport.anchors.storageURI
+        pushAudit('kh', `  audit anchored: 0g://${uri.slice(0, 14)}…`, 'info')
+      }
+      if (verdict === 'non_compliant') {
+        pushAudit('kh', `  ⚠️  non-compliant — proceeding to payment but flagged on chain`, 'err')
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.slice(0, 100) : String(e)
+      pushAudit('kh', `audit failed: ${msg} (proceeding to payment without audit)`, 'err')
+    } finally {
+      for (const name of KNOWN_STEPS) auditEvents.off(name, onAny)
+    }
+  } else {
+    pushAudit('kh', `audit skipped — live bundle unavailable (${getLiveBundleError() ?? 'env-incomplete'})`, 'err')
+  }
+  render()
 
   // ── Step 3: real x402 settlement via KeeperHub marketplace ──
   const providedSummary = requiredKeys.length > 0

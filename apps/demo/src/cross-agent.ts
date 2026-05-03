@@ -143,6 +143,17 @@ export interface CrossAgentDemoDeps {
 export interface CrossAgentDemoOpts {
   target: AuditTarget;
   oracleTopic: OracleQuery['topic'];
+  /// Workflow-audit mode (used by `kh hire` auto-chain). When true:
+  /// skip oracle payment + query (probes run against the workflow's
+  /// metadata directly), skip capabilities-read (workflow has no on-chain
+  /// iNFT), skip AxiomCommit + reveal (contract reverts on tokenId=0
+  /// because `agentNft.ownerOf(0)` reverts ERC721NonexistentToken), skip
+  /// memoryRoot pin (no subject iNFT), and pass `skipReceiptPost: true`
+  /// to runAudit (no AgentRegistry entry). Qwen probes + 0G Storage
+  /// anchor + canonical AuditReport STILL fire — the storage URI is the
+  /// regulator-readable proof. Phase-2 enhancement: thread auditor
+  /// tokenId override so AxiomCommit fires on auditor's iNFT instead.
+  auditWorkflowOnly?: boolean;
   /// Atomic units of USDC charged by the oracle. Default 100000 (0.1 USDC).
   oracleAmountAtomic?: string;
   /// Address that receives the 85% bulk of the oracle's fee (the oracle
@@ -244,80 +255,93 @@ export async function runCrossAgentDemo(
     events.emit(name, step);
   };
 
-  // 1. Build payment requirements for the oracle query
-  const requirements = buildPaymentRequirements({
-    amount: opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC,
-    payTo: opts.feeSplitter ?? DEFAULT_SPLITTER,
-    asset: opts.asset ?? DEFAULT_USDC,
-    network: opts.network ?? DEFAULT_NETWORK,
-    resource: {
-      url: 'https://oracle-agent.zhgg/query',
-      description: `oracle.query topic=${opts.oracleTopic}`,
-    },
-  });
-  emit('oracle.payment.request', { amount: requirements.accepts[0]?.amount ?? null });
+  // Oracle leg defaults — used when `auditWorkflowOnly` is set (kh hire
+  // chains an audit on the workflow's metadata, no oracle context needed
+  // and no x402 settlement to oracle.zhgg.eth). The downstream code
+  // already handles `settle === null` (refundable check) + `oracleResponse
+  // .ok === false` (manifest stays as opts.target.manifest, line 325-330).
+  let settle: Awaited<ReturnType<typeof deps.settleOraclePayment>> = null;
+  let oracleResponse: OracleResponse = {
+    ok: false,
+    error: { kind: 'unknown_topic', topic: opts.oracleTopic },
+  };
 
-  // 1.5 Pre-flight ERC-7715 spend-cap gate (Step 2 of the always-active
-  //     loop). Read-only by default; live mode can flip enforce=true to
-  //     atomically debit the cap so two concurrent runs can't both pass
-  //     the read and double-spend. Fail-closed BEFORE money moves.
-  if (deps.checkSpendCap) {
-    const amountAtomic = BigInt(opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC);
-    const enforce =
-      (opts.auditOptions as Parameters<typeof runAudit>[2] & { enforceSpendCap?: boolean })
-        .enforceSpendCap === true;
-    // Per-workflow ERC-7715 scope. Hashing the oracle topic gives every
-    // workflow a stable, content-derived `permissionId` so the user
-    // can grant separate budgets per workflow without orchestrator-side
-    // bookkeeping.
-    const permissionId = keccak256(toHex(`zhgg.oracle.${opts.oracleTopic}.v1`));
-    const capResult = await deps.checkSpendCap({
-      amount: amountAtomic,
-      enforce,
-      permissionId,
+  if (!opts.auditWorkflowOnly) {
+    // 1. Build payment requirements for the oracle query
+    const requirements = buildPaymentRequirements({
+      amount: opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC,
+      payTo: opts.feeSplitter ?? DEFAULT_SPLITTER,
+      asset: opts.asset ?? DEFAULT_USDC,
+      network: opts.network ?? DEFAULT_NETWORK,
+      resource: {
+        url: 'https://oracle-agent.zhgg/query',
+        description: `oracle.query topic=${opts.oracleTopic}`,
+      },
     });
-    if (!capResult.ok) {
-      emit('oracle.spend_cap.exceeded', {
-        reason: capResult.reason ?? 'unknown',
-        remaining: capResult.remaining?.toString() ?? null,
-        requested: capResult.requested?.toString() ?? null,
+    emit('oracle.payment.request', { amount: requirements.accepts[0]?.amount ?? null });
+
+    // 1.5 Pre-flight ERC-7715 spend-cap gate (Step 2 of the always-active
+    //     loop). Read-only by default; live mode can flip enforce=true to
+    //     atomically debit the cap so two concurrent runs can't both pass
+    //     the read and double-spend. Fail-closed BEFORE money moves.
+    if (deps.checkSpendCap) {
+      const amountAtomic = BigInt(opts.oracleAmountAtomic ?? DEFAULT_AMOUNT_ATOMIC);
+      const enforce =
+        (opts.auditOptions as Parameters<typeof runAudit>[2] & { enforceSpendCap?: boolean })
+          .enforceSpendCap === true;
+      // Per-workflow ERC-7715 scope. Hashing the oracle topic gives every
+      // workflow a stable, content-derived `permissionId` so the user
+      // can grant separate budgets per workflow without orchestrator-side
+      // bookkeeping.
+      const permissionId = keccak256(toHex(`zhgg.oracle.${opts.oracleTopic}.v1`));
+      const capResult = await deps.checkSpendCap({
+        amount: amountAtomic,
+        enforce,
+        permissionId,
       });
-      return {
-        steps,
-        oraclePaymentTx: null,
-        oracleResponse: { ok: false, error: { kind: 'unknown_topic', topic: opts.oracleTopic } },
-        auditReport: null,
-        auditReceiptTx: null,
-        totalCostUSD: 0,
-        refundable: false,
-        auditError: `spend cap blocked: ${capResult.reason ?? 'unknown'}`,
-        canonicalAuditReport: null,
-      };
+      if (!capResult.ok) {
+        emit('oracle.spend_cap.exceeded', {
+          reason: capResult.reason ?? 'unknown',
+          remaining: capResult.remaining?.toString() ?? null,
+          requested: capResult.requested?.toString() ?? null,
+        });
+        return {
+          steps,
+          oraclePaymentTx: null,
+          oracleResponse: { ok: false, error: { kind: 'unknown_topic', topic: opts.oracleTopic } },
+          auditReport: null,
+          auditReceiptTx: null,
+          totalCostUSD: 0,
+          refundable: false,
+          auditError: `spend cap blocked: ${capResult.reason ?? 'unknown'}`,
+          canonicalAuditReport: null,
+        };
+      }
+      emit('oracle.spend_cap.check', {
+        enforced: capResult.enforced ?? false,
+        remaining: capResult.remaining?.toString() ?? null,
+        spendTx: capResult.spendTx ?? null,
+      });
     }
-    emit('oracle.spend_cap.check', {
-      enforced: capResult.enforced ?? false,
-      remaining: capResult.remaining?.toString() ?? null,
-      spendTx: capResult.spendTx ?? null,
+
+    // 2. Settle oracle payment via injected dep. Replay protection lives one
+    // layer down (the verifier-side caller wraps `verifyPayment` with the
+    // payment payload's `fingerprint` before calling settle). The
+    // orchestrator only knows about the result, not the signed payload, so
+    // there's no honest fingerprint to compute here.
+    settle = await deps.settleOraclePayment(requirements, opts.target.agentName);
+    emit('oracle.payment.settle', {
+      txHash: settle?.txHash ?? null,
+      network: settle?.network ?? null,
+      payer: settle?.payer ?? null,
+      rail: settle?.rail ?? null,
     });
+
+    // 3. Query oracle (called directly — payment already settled)
+    emit('oracle.query.start', { topic: opts.oracleTopic });
+    oracleResponse = await queryOracle({ topic: opts.oracleTopic });
+    emit('oracle.query.complete', { ok: oracleResponse.ok });
   }
-
-  // 2. Settle oracle payment via injected dep. Replay protection lives one
-  // layer down (the verifier-side caller wraps `verifyPayment` with the
-  // payment payload's `fingerprint` before calling settle). The
-  // orchestrator only knows about the result, not the signed payload, so
-  // there's no honest fingerprint to compute here.
-  const settle = await deps.settleOraclePayment(requirements, opts.target.agentName);
-  emit('oracle.payment.settle', {
-    txHash: settle?.txHash ?? null,
-    network: settle?.network ?? null,
-    payer: settle?.payer ?? null,
-    rail: settle?.rail ?? null,
-  });
-
-  // 3. Query oracle (called directly — payment already settled)
-  emit('oracle.query.start', { topic: opts.oracleTopic });
-  const oracleResponse = await queryOracle({ topic: opts.oracleTopic });
-  emit('oracle.query.complete', { ok: oracleResponse.ok });
 
   // 4. Build the audit target's enriched manifest (regulatory context
   //    inlined from the oracle's response).
@@ -335,8 +359,12 @@ export async function runCrossAgentDemo(
   // `subjectAgent.capabilitiesAtAudit`. Pre-fix the bytes were emitted
   // for display only and Qwen audited the placeholder string —
   // structurally a probe but auditing nothing real.
+  // Skipped when `auditWorkflowOnly`: workflows have no on-chain iNFT,
+  // so calling AgentNFT.capabilities(0) reverts. The TUI populates
+  // `subjectIdentity.capabilitiesAtAudit` with a hash of the workflow
+  // metadata instead, which feeds into the canonical report below.
   let capabilitiesHex: Hex | null = null;
-  if (deps.readCapabilities) {
+  if (deps.readCapabilities && !opts.auditWorkflowOnly) {
     const cap = await deps.readCapabilities(opts.target.agentId);
     emit('audit.capabilities.read', {
       ok: cap.ok,
@@ -355,11 +383,17 @@ export async function runCrossAgentDemo(
   // 4.6 Step 3 — AXIOM pre-commit. The plan is the canonical intent the
   //     agent has decided to execute, derived from the enriched manifest +
   //     oracle context. Hash-only on chain; bytes revealed at Step 10.
+  // Skipped when `auditWorkflowOnly`: AxiomCommit.commitPlan calls
+  // AgentNFT.ownerOf(tokenId) which reverts ERC721NonexistentToken for
+  // tokenId=0. Phase-2 enhancement would thread the auditor's tokenId.
+  // With axiomCommit skipped, axiomCommitId stays null → reveal at the
+  // bottom of this function naturally short-circuits (already conditional
+  // on `axiomCommitId !== null`).
   let axiomCommitId: `0x${string}` | null = null;
   let axiomCommitTx: `0x${string}` | null = null;
   let axiomCommitBlock: bigint | null = null;
   let axiomPlanBytes: Uint8Array | null = null;
-  if (deps.axiomCommit) {
+  if (deps.axiomCommit && !opts.auditWorkflowOnly) {
     axiomPlanBytes = new TextEncoder().encode(
       JSON.stringify({
         agentId: opts.target.agentId.toString(),
@@ -560,6 +594,10 @@ export async function runCrossAgentDemo(
   try {
     auditReport = await runAudit({ ...opts.target, manifest }, deps.auditDeps, {
       ...opts.auditOptions,
+      // When auditing a KH workflow (subject not in AgentRegistry), skip
+      // the on-chain `giveFeedback` post — would revert AgentNotFound.
+      // Storage anchor + canonical AuditReport are still produced.
+      ...(opts.auditWorkflowOnly ? { skipReceiptPost: true } : {}),
       buildFeedbackAnchor,
     });
     emit('audit.complete', {
@@ -599,7 +637,11 @@ export async function runCrossAgentDemo(
       if (wr.ok && wr.rootHash) storageRootHash = wr.rootHash;
     }
 
-    if (deps.pinMemoryRoot && storageRootHash) {
+    // Skipped when `auditWorkflowOnly`: workflows have no on-chain iNFT,
+    // so AgentNFT.updateMemoryRoot(0, ...) reverts. Phase-2 enhancement
+    // would pin to the auditor's iNFT (audit.zhgg.eth = 1n) so the
+    // auditor accumulates a memoryRoot history of its own audits.
+    if (deps.pinMemoryRoot && storageRootHash && !opts.auditWorkflowOnly) {
       const pin = await deps.pinMemoryRoot({
         tokenId: opts.target.agentId,
         rootHash: storageRootHash,

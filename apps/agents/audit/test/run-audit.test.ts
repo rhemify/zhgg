@@ -266,4 +266,39 @@ describe('runAudit — single-probe inference failure surfaces in findings', () 
     expect(postedCtx.value?.attestationRoot).toBe('0xattest');
     expect(postedCtx.value?.paymentTxHash).toBeNull();
   });
+
+  /// Plan 2025-05-03 — `kh hire` chained workflow audit. The subject (a
+  /// KH workflow) isn't in AgentRegistry, so calling `giveFeedback(0)`
+  /// reverts AgentNotFound. `skipReceiptPost: true` lets the audit run
+  /// the probes + anchor (storage URI is the regulator-readable proof)
+  /// while skipping the on-chain receipt post. Probes still execute.
+  it('skipReceiptPost=true skips postReceipt but still runs probes + anchor', async () => {
+    const { deps, inferSpy, postSpy } = makeDeps({
+      inferResponses: [
+        { ok: true, value: okResp(okJson(true, 'ok')) },
+        { ok: true, value: okResp(okJson(true, 'ok')) },
+        { ok: true, value: okResp(okJson(true, 'ok')) },
+      ],
+    });
+    const anchorSpy = mock(async () => ({
+      feedbackURI: 'zhgg://0g-storage/audit/0xworkflow',
+      feedbackHash: '0xfeedbeef00000000000000000000000000000000000000000000000000000001' as `0x${string}`,
+    }));
+    const report = await runAudit(TARGET, deps, {
+      ...OPTS,
+      buildFeedbackAnchor: anchorSpy as never,
+      skipReceiptPost: true,
+    });
+
+    // Probes ran (3 probes in PROBE_PROMPTS).
+    expect(inferSpy).toHaveBeenCalledTimes(3);
+    // Anchor (storage pin) still fired.
+    expect(anchorSpy).toHaveBeenCalledTimes(1);
+    // postReceipt was NOT called — that's the whole point of the flag.
+    expect(postSpy).not.toHaveBeenCalled();
+    // Report still produced; receiptTxHash is null (no receipt to record).
+    expect(report.verdict).toBe('compliant');
+    expect(report.receiptTxHash).toBeNull();
+    expect(report.receiptError).toBeUndefined();
+  });
 });

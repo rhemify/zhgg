@@ -96,6 +96,14 @@ export interface AuditOptions {
     /// when no trace.
     teeProvider: string | null;
   }) => Promise<{ feedbackURI: string; feedbackHash: `0x${string}` } | null>;
+  /// Skip the ERC-8004 `giveFeedback` post step. Used when the audit
+  /// subject isn't registered in AgentRegistry (e.g. KH workflows audited
+  /// before a `kh hire` x402 payment) — calling `giveFeedback(0)` would
+  /// revert AgentNotFound. Probes still run, canonical AuditReport is
+  /// still built + pinned to 0G Storage. The storage anchor is the
+  /// regulator-readable proof; the on-chain receipt is reputational
+  /// metadata that requires a registered subject which workflows lack.
+  skipReceiptPost?: boolean;
 }
 
 export async function runAudit(
@@ -224,9 +232,18 @@ export async function runAudit(
     feedbackHashOverride: anchor?.feedbackHash,
   };
 
-  const post = await deps.postReceipt(deps.erc8004Client, receiptCtx);
-  const receiptTxHash = post.ok ? post.value : null;
-  const receiptError = post.ok ? undefined : `${post.error.kind}: ${post.error.reason}`;
+  // Skip the ERC-8004 receipt post when the subject isn't registered in
+  // AgentRegistry (e.g. KH workflow audit chained from `kh hire`). Probes
+  // + storage anchor still run — the storage URI is the regulator-readable
+  // proof. The on-chain receipt is reputational metadata that requires a
+  // registered subject which workflows don't have.
+  let receiptTxHash: `0x${string}` | null = null;
+  let receiptError: string | undefined;
+  if (!opts.skipReceiptPost) {
+    const post = await deps.postReceipt(deps.erc8004Client, receiptCtx);
+    receiptTxHash = post.ok ? post.value : null;
+    receiptError = post.ok ? undefined : `${post.error.kind}: ${post.error.reason}`;
+  }
 
   return {
     target: { agentId: target.agentId, agentName: target.agentName },

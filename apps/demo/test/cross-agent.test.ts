@@ -383,4 +383,85 @@ describe('runCrossAgentDemo', () => {
     // we hashed the manifest, not the rendered prompts.
     expect(qwen1?.promptHash).not.toBe(qwen2?.promptHash);
   });
+
+  /// Plan 2025-05-03 — `auditWorkflowOnly` mode for `kh hire` auto-chain.
+  /// Audits a KH workflow (no iNFT, no AgentRegistry entry) by skipping
+  /// the iNFT-coupled steps (oracle payment/query, capabilities-read,
+  /// AxiomCommit, memoryRoot pin, giveFeedback) while still running
+  /// Qwen probes + 0G Storage anchor + canonical AuditReport. The
+  /// storage URI is the regulator-readable proof.
+  it('auditWorkflowOnly skips oracle/capabilities/axiom/memory; keeps probes + storage anchor', async () => {
+    const settleSpy = mock(async () => ({
+      txHash: '0xshouldnotbecalled' as `0x${string}`,
+      network: 'eip155:84532',
+      payer: '0xnope' as `0x${string}`,
+      rail: 'direct_split' as const,
+    }));
+    const readCapsSpy = mock(async () => ({ ok: true as const, manifest: '0xdead' }));
+    const axiomCommitSpy = mock(async () => ({ ok: true as const, commitId: '0xCC' as `0x${string}`, txHash: '0xTX' as `0x${string}`, commitBlock: 1n }));
+    const axiomRevealSpy = mock(async () => ({ ok: true as const, txHash: '0xRV' as `0x${string}` }));
+    const pinMemorySpy = mock(async () => ({ ok: true as const, txHash: '0xPIN' as `0x${string}` }));
+    // Spy on auditDeps.postReceipt to confirm skipReceiptPost flowed through.
+    const auditDeps = makeAuditDeps({
+      inferResponses: [
+        { ok: true, value: okResp(okJson(true, 'a')) },
+        { ok: true, value: okResp(okJson(true, 'b')) },
+        { ok: true, value: okResp(okJson(true, 'c')) },
+      ],
+    });
+    const postReceiptOriginal = auditDeps.postReceipt;
+    const postReceiptSpy = mock(postReceiptOriginal as never);
+    auditDeps.postReceipt = postReceiptSpy as never;
+
+    const transcript = await runCrossAgentDemo(
+      {
+        settleOraclePayment: settleSpy,
+        readCapabilities: readCapsSpy as never,
+        axiomCommit: axiomCommitSpy as never,
+        axiomReveal: axiomRevealSpy as never,
+        pinMemoryRoot: pinMemorySpy as never,
+        auditDeps,
+      },
+      {
+        target: {
+          agentId: 0n,
+          registryAgentId: 0n,
+          agentName: 'kh:test/some-workflow',
+          manifest: 'name: workflow X; description: does Y',
+        },
+        oracleTopic: 'eu-ai-act',
+        auditOptions: {
+          apiKey: 'sk-fake',
+          registryAddress: '0x1111111111111111111111111111111111111111',
+          agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
+          clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
+        },
+        auditWorkflowOnly: true,
+      }
+    );
+
+    // Skip-list: none of these iNFT-coupled steps fire.
+    expect(settleSpy).not.toHaveBeenCalled();
+    expect(readCapsSpy).not.toHaveBeenCalled();
+    expect(axiomCommitSpy).not.toHaveBeenCalled();
+    expect(axiomRevealSpy).not.toHaveBeenCalled();
+    expect(pinMemorySpy).not.toHaveBeenCalled();
+    expect(postReceiptSpy).not.toHaveBeenCalled();
+    // No oracle.payment.* events emitted either.
+    const stepNames = transcript.steps.map((s) => s.name);
+    expect(stepNames).not.toContain('oracle.payment.request');
+    expect(stepNames).not.toContain('oracle.payment.settle');
+    expect(stepNames).not.toContain('oracle.query.start');
+    expect(stepNames).not.toContain('audit.capabilities.read');
+    expect(stepNames).not.toContain('audit.axiom.commit');
+    expect(stepNames).not.toContain('audit.memory_root.pin');
+
+    // Keep-list: probes ran, audit completed, canonical report exists.
+    // (audit.start/audit.complete fire from runCrossAgentDemo, audit.report.*
+    // fires from buildFeedbackAnchor — both expected in workflow mode.)
+    expect(stepNames).toContain('audit.start');
+    expect(stepNames).toContain('audit.complete');
+    expect(transcript.auditReport?.verdict).toBe('compliant');
+    expect(transcript.auditReport?.results.length).toBe(3); // 3 probes
+  });
 });
