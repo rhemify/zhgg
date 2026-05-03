@@ -139,8 +139,14 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       break;
     case 'audit.axiom.commit': {
       const cid = detail.commitId ? String(detail.commitId) : null;
-      pushAudit('axiom', `commit ${cid ? shortHash(cid) : '—'}`, detail.ok === false ? 'err' : 'ok');
-      if (cid) pushAudit('axiom', `0G Galileo: https://chainscan-galileo.0g.ai/tx/${cid}`, 'info');
+      const tx  = detail.txHash   ? String(detail.txHash)   : null;
+      if (detail.ok === false) {
+        const reason = detail.error ? String(detail.error) : 'unknown';
+        pushAudit('axiom', `commit failed: ${reason}`, 'err');
+      } else {
+        pushAudit('axiom', `commit ok commitId=${cid ? shortHash(cid) : '—'} tx=${tx ? shortHash(tx) : '—'}`, 'ok');
+        if (tx) pushAudit('axiom', `0G: https://chainscan-galileo.0g.ai/tx/${tx}`, 'info');
+      }
       break;
     }
     case 'audit.start':

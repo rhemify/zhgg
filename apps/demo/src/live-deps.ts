@@ -296,7 +296,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     });
     return r.ok
       ? { ok: true, commitId: r.value.commitId, txHash: r.value.txHash }
-      : { ok: false, error: r.error.kind };
+      : { ok: false, error: r.error.kind === 'commit_failed' ? r.error.reason : r.error.kind };
   };
 
   const axiomRevealDep: CrossAgentDemoDeps['axiomReveal'] = async ({
@@ -314,7 +314,9 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       publicClient: zgPub,
       walletClient: zgWallet,
     });
-    return r.ok ? { ok: true, txHash: r.value.txHash } : { ok: false, error: r.error.kind };
+    return r.ok
+      ? { ok: true, txHash: r.value.txHash }
+      : { ok: false, error: r.error.kind === 'reveal_failed' ? r.error.reason : r.error.kind };
   };
 
   const pinMemoryRootDep: CrossAgentDemoDeps['pinMemoryRoot'] = async ({ tokenId, rootHash }) => {
