@@ -1,5 +1,5 @@
 {
-  "name": "zhgg-mcp-adapter",
+  "name": "@zhgg/mcp-adapter",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/workflow": "workspace:*",
-    "swap-agent": "workspace:*",
+    "@zhgg/swap-agent": "workspace:*",
     "viem": "^2.21.0"
   },
   "devDependencies": {

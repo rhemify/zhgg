@@ -1,5 +1,5 @@
 {
-  "name": "demo",
+  "name": "@zhgg/demo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "@zhgg/oracle-data": "workspace:*",
     "@zhgg/router": "workspace:*",
     "@zhgg/workflow": "workspace:*",
-    "tui": "workspace:*"
+    "@zhgg/tui": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"

@@ -7,7 +7,7 @@
 import { describe, it, expect, mock } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { runCrossAgentDemo } from '../src/cross-agent.js';
-import { applyStep, runFromEvents, type RunnerState } from 'tui/events-runner';
+import { applyStep, runFromEvents, type RunnerState } from '@zhgg/tui/events-runner';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type {
   Erc8004Client,

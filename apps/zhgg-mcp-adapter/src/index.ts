@@ -42,7 +42,7 @@ import {
   type GiveFeedbackArgs,
 } from '@zhgg/workflow';
 import { runAudit, type AuditDeps } from '@zhgg/audit-agent';
-import type { SwapClients } from 'swap-agent';
+import type { SwapClients } from '@zhgg/swap-agent';
 import { createFetchHandler, startServer, type ServerRouteDeps } from './server.js';
 import type { RunAuditFn } from './routes/audit.js';
 

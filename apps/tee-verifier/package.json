@@ -1,5 +1,5 @@
 {
-  "name": "tee-verifier",
+  "name": "@zhgg/tee-verifier",
   "version": "0.0.1",
   "private": true,
   "type": "module",

@@ -1,5 +1,5 @@
 {
-  "name": "tui",
+  "name": "@zhgg/tui",
   "private": true,
   "type": "module",
   "module": "src/index.tsx",
@@ -14,13 +14,14 @@
   },
   "dependencies": {
     "@zhgg/audit-agent": "workspace:*",
+    "@zhgg/keeperhub-agent": "workspace:*",
+    "@zhgg/mint-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/oracle-data": "workspace:*",
     "@zhgg/router": "workspace:*",
+    "@zhgg/swap-agent": "workspace:*",
+    "@zhgg/transfer-agent": "workspace:*",
     "@zhgg/workflow": "workspace:*",
-    "mint-agent": "workspace:*",
-    "swap-agent": "workspace:*",
-    "transfer-agent": "workspace:*",
     "viem": "^2.21.0"
   },
   "devDependencies": {

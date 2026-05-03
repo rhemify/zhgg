@@ -21,8 +21,8 @@
     "build": "turbo build",
     "check-types": "turbo check-types",
     "dev:web": "turbo -F web dev",
-    "dev:tui": "turbo -F tui dev",
-    "flow": "turbo -F tui flow"
+    "dev:tui": "turbo -F @zhgg/tui dev",
+    "flow": "turbo -F @zhgg/tui flow"
   },
   "dependencies": {
     "@my-better-t-app/env": "workspace:*",

@@ -8,7 +8,7 @@
 /// revert reason, NEVER a fabricated txHash. We pass `error.kind` +
 /// `error.reason` straight through.
 
-import { executeSwap, type SwapClients } from 'swap-agent';
+import { executeSwap, type SwapClients } from '@zhgg/swap-agent';
 import { AGENTS, validateAgentInput } from '../input-schemas.js';
 
 const SWAP_DESC = AGENTS.find((a) => a.id === 'swap')!;

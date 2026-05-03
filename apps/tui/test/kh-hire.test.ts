@@ -23,7 +23,7 @@ import {
   resolveCallableSlug,
   validateRequiredInputs,
 } from '../src/kh-hire-validate.js';
-import type { KHPublicWorkflow } from 'keeperhub-agent';
+import type { KHPublicWorkflow } from '@zhgg/keeperhub-agent';
 
 // ── Fixture factory ──────────────────────────────────────────────────
 //

@@ -547,7 +547,7 @@ export async function mintAgent(input: MintAgentInput): Promise<MintAgentResult>
 
 // CLI bootstrap — only runs when this file is invoked directly. Bun
 // reports `process.argv[1]` as the entrypoint script, so guarding on
-// that lets `import { mintAgent } from 'mint-agent'` work without
+// that lets `import { mintAgent } from '@zhgg/mint-agent'` work without
 // triggering the CLI side-effects.
 const isMain = (() => {
   try {

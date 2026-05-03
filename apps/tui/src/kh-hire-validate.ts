@@ -16,7 +16,7 @@
 /// missing required keys — which are exactly the assertions a test can
 /// make without faking on-chain state.
 
-import type { KHPublicWorkflow } from 'keeperhub-agent';
+import type { KHPublicWorkflow } from '@zhgg/keeperhub-agent';
 
 /// Resolve `slugOrId` into a real, x402-callable slug. Returns:
 ///   - `{ ok: true, slug }`             — slug-callable, dispatcher proceeds

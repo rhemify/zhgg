@@ -44,14 +44,14 @@ import {
   revealPlan as axiomRevealCall,
 } from '../../demo/src/loop-helpers.js';
 import { queryOracle } from '@zhgg/oracle-agent';
-import { executeSwap } from 'swap-agent';
-import { executeTransfer } from 'transfer-agent';
+import { executeSwap } from '@zhgg/swap-agent';
+import { executeTransfer } from '@zhgg/transfer-agent';
 import {
   executeKHCall,
   type KHCall,
   type KHCallResult,
   type KHError as KHCallError,
-} from 'keeperhub-agent';
+} from '@zhgg/keeperhub-agent';
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { AGENT_REGISTRY } from './agent-registry.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';

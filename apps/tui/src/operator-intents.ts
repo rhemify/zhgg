@@ -21,7 +21,7 @@ import {
   type PublicClient,
   type WalletClient,
 } from 'viem';
-import { mintAgent, type AgentRole, type MintAgentResult } from 'mint-agent';
+import { mintAgent, type AgentRole, type MintAgentResult } from '@zhgg/mint-agent';
 import { AGENT_REGISTRY } from './agent-registry.js';
 
 // ─── Shared types ────────────────────────────────────────────────────────
