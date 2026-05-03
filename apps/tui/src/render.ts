@@ -23,20 +23,23 @@ import { AUDIT } from './audit-trail.js';
 import type { FlowState, NS } from './flow-state.js';
 import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js';
 import { tryBuildLiveBundle, getLiveBundleError } from './live-bundle.js';
-import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
+import { buildHelpLines, PERSISTENT_HINT, type HelpLine } from './help-overlay.js';
 import type { IntentCommand } from './intent-parser.js';
 
 function nodeStyle(ns: NS): string {
   if (ns === 'active')   return $.bold + $.green + $.bgNode;
-  if (ns === 'done')     return $.dgreen;
-  if (ns === 'rejected') return $.dim + $.dred + $.bgRej;
+  if (ns === 'done')     return $.bold + $.green;   // stays bright — judges see every step
+  if (ns === 'rejected') return $.bold + $.red + $.bgRej;
   return $.gray;
 }
 
 function nodeBorder(ns: NS) {
-  return ns === 'active' ? { tl:'╔',tr:'╗',bl:'╚',br:'╝',h:'═',v:'║' }
-                         : { tl:'┌',tr:'┐',bl:'└',br:'┘',h:'─',v:'│' };
+  if (ns === 'active') return { tl:'╔',tr:'╗',bl:'╚',br:'╝',h:'═',v:'║' };
+  if (ns === 'done')   return { tl:'╔',tr:'╗',bl:'╚',br:'╝',h:'═',v:'║' }; // double border stays
+  return { tl:'┌',tr:'┐',bl:'└',br:'┘',h:'─',v:'│' };
 }
+
+export type PanelOverlay = 'none' | 'audit' | 'flow';
 
 export interface FrameState {
   flow: FlowState;
@@ -50,6 +53,7 @@ export interface FrameState {
   grantModalOpen: boolean;
   grantModalLines: string[];
   helpOverlayOpen: boolean;
+  panelOverlay: PanelOverlay;
 }
 
 // Build entire frame as a string (prevents flicker vs multiple writes)
@@ -57,7 +61,7 @@ export function buildFrame(state: FrameState): string {
   const {
     flow, stagedIntent, runningCommand, receiptEnvelope,
     intentBuffer, intentMode, intentHint, toast,
-    grantModalOpen, grantModalLines, helpOverlayOpen,
+    grantModalOpen, grantModalLines, helpOverlayOpen, panelOverlay,
   } = state;
   const w = W(), h = H(), mid = MID();
   let f = '';
@@ -166,9 +170,11 @@ export function buildFrame(state: FrameState): string {
   // ── Bottom section titles ─────────────────────────────────────────────────
   const botStart = ROW_BOT_START();
   put(botStart, 1, $.cyan + '║' + $.reset);
-  put(botStart, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'AUDIT TRAIL' + $.reset);
+  put(botStart, 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'AUDIT TRAIL' + $.reset
+    + $.gray + '  [Z] expand' + $.reset);
   put(botStart, mid + 1, $.cyan + '║' + $.reset);
-  put(botStart, mid + 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'PAYMENT FLOW + RECEIPT' + $.reset);
+  put(botStart, mid + 2, $.bold + $.cyan + '  ◈ ' + $.reset + $.bold + $.white + 'PAYMENT FLOW + RECEIPT' + $.reset
+    + $.gray + '  [X] expand' + $.reset);
   // RAIL pill — visible badge in the FLOW panel header showing the actual
   // settled rail (truthful: only set after `oracle.payment.settle` lands).
   // Lives just to the right of the panel title so judges can see at a
@@ -192,12 +198,22 @@ export function buildFrame(state: FrameState): string {
   const logEnd = ROW_LOG() - 1;
   const auditCapacity = Math.max(0, logEnd - botStart);
   const visible = AUDIT.slice(-auditCapacity);
+  const nowMs = Date.now();
   visible.forEach((e, i) => {
     const r = botStart + 1 + i;
     if (r > logEnd) return;
-    const ec = e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite;
-    put(r, 1, $.cyan + '║' + $.reset);
-    const line = e.time + ' ' + pad(e.agent, 16) + ' ' + e.event;
+    const flash = nowMs < e.flashUntil;
+    // Sidebar glyph: flashing rows get a bright accent bar instead of '║'
+    const sideGlyph = flash
+      ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan) + '▐' + $.reset
+      : $.cyan + '║' + $.reset;
+    put(r, 1, sideGlyph);
+    // Text: flashing rows pop in bold+bright with a leading trade-tick glyph
+    const ec = flash
+      ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan)
+      : (e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite);
+    const prefix = flash ? (e.ok === 'ok' ? '▶ ' : e.ok === 'err' ? '✕ ' : '◈ ') : '  ';
+    const line = e.time + ' ' + pad(e.agent, 10) + ' ' + prefix + e.event;
     put(r, 3, ec + line.slice(0, mid - 4) + $.reset);
   });
   // Empty hint when no events yet
@@ -241,9 +257,9 @@ export function buildFrame(state: FrameState): string {
     if (i < 3) {
       const wr = nr + 3;
       if (wr <= logEnd) {
-        const wireLit = ns === 'done' || flow.nodes[i + 1] !== 'off';
-        const wc = wireLit ? $.dgreen : $.dgray;
-        const wireGlyph = wr === nr + 3 ? '│' : '▼';
+        const wireLit = ns === 'done';
+        const wc = wireLit ? $.bold + $.green : $.dgray;
+        const wireGlyph = wireLit ? '▼' : '│';
         put(wr, fc + Math.floor(nw / 2) - 1, wc + wireGlyph + $.reset);
       }
     }
@@ -383,56 +399,96 @@ export function buildFrame(state: FrameState): string {
     put(receiptRow, col, tc + text + $.reset);
   }
 
-  // ── Grant modal overlay (centred) ─────────────────────────────────────────
+  // ── Grant modal overlay — full-width so no bleed from right panel ───────
   if (grantModalOpen) {
-    const modalW = Math.min(w - 8, 78);
-    const modalH = grantModalLines.length + 4;
-    const modalR = Math.max(2, Math.floor((h - modalH) / 2));
-    const modalC = Math.max(2, Math.floor((w - modalW) / 2));
-    put(modalR, modalC, $.bold + $.yellow + '╔' + '═'.repeat(modalW - 2) + '╗' + $.reset);
-    put(modalR + 1, modalC, $.bold + $.yellow + '║' + $.reset
-      + $.bgNode + $.yellow + pad(' SPEND CAP — confirm grant', modalW - 2) + $.reset
-      + $.bold + $.yellow + '║' + $.reset);
+    const mC = 1, mW = w;   // col 1→w, covers outer ║ border chars
+    const innerW = mW - 2;
+    const mH = grantModalLines.length + 4;
+    const mR = Math.max(2, Math.floor((h - mH) / 2));
+    const bc = $.bold + $.yellow;
+    const titleFill = '═'.repeat(Math.max(0, innerW - ' SPEND CAP — confirm grant '.length));
+    put(mR,     mC, bc + '╔ SPEND CAP — confirm grant ' + titleFill + '╗' + $.reset);
     grantModalLines.forEach((ln, i) => {
-      put(modalR + 2 + i, modalC, $.bold + $.yellow + '║' + $.reset
-        + $.bgNode + $.white + pad(' ' + ln, modalW - 2) + $.reset
-        + $.bold + $.yellow + '║' + $.reset);
+      put(mR + 1 + i, mC, bc + '║' + $.reset + $.bgNode + $.white + pad(' ' + ln, innerW) + $.reset + bc + '║' + $.reset);
     });
-    const lastInner = modalR + 2 + grantModalLines.length;
-    put(lastInner, modalC, $.bold + $.yellow + '║' + $.reset
-      + $.bgNode + $.dwhite + pad('   [Enter] confirm   [Esc] cancel', modalW - 2) + $.reset
-      + $.bold + $.yellow + '║' + $.reset);
-    put(lastInner + 1, modalC, $.bold + $.yellow + '╚' + '═'.repeat(modalW - 2) + '╝' + $.reset);
+    const footerR = mR + 1 + grantModalLines.length;
+    put(footerR,     mC, bc + '║' + $.reset + $.bgNode + $.dwhite + pad('   [Enter] confirm   [Esc] cancel   [Q] close', innerW) + $.reset + bc + '║' + $.reset);
+    put(footerR + 1, mC, bc + '╚' + '═'.repeat(innerW) + '╝' + $.reset);
   }
 
-  // ── Help overlay (slice D) ────────────────────────────────────────────────
-  // Floats over the FLOW + RECEIPT panel so the audit trail stays
-  // readable while the operator scans the palette. Anchored to the
-  // right half of the screen with a dimmed border to read as
-  // "informational, not modal" (the grant modal uses bold yellow for
-  // a real action; help uses dim-green for ambient guidance).
+  // ── Panel zoom overlays (Z = audit, X = flow) ────────────────────────────
+  // Full-screen bordered overlay covering the main content. Esc dismisses.
+  if (panelOverlay !== 'none') {
+    const ovR = 2;                          // top row (below outer frame top)
+    const ovC = 1;                          // col 1 — covers outer border chars
+    const ovW = w;                          // full terminal width
+    const ovH = h - 3;                      // rows available inside overlay
+    const isAudit = panelOverlay === 'audit';
+    const borderColor = isAudit ? $.bold + $.cyan : $.bold + $.green;
+    const titleText = isAudit ? ' AUDIT TRAIL — full view ' : ' PAYMENT FLOW + RECEIPT — full view ';
+    const topFill = '═'.repeat(Math.max(0, ovW - titleText.length - 2));
+    // Draw box — col 1 to w so it overwrites the outer ║ border chars
+    put(ovR, ovC, borderColor + '╔' + titleText + topFill + '╗' + $.reset);
+    for (let r = ovR + 1; r < ovR + ovH; r++) {
+      put(r, ovC, borderColor + '║' + $.reset + ' '.repeat(ovW - 2) + borderColor + '║' + $.reset);
+    }
+    put(ovR + ovH, ovC, borderColor + '╚' + '═'.repeat(ovW - 2) + '╝' + $.reset);
+    // ESC hint in top-right corner of the top border
+    const escHint = ' ESC to close ';
+    put(ovR, ovC + ovW - escHint.length - 1, $.gray + escHint + $.reset);
+
+    if (isAudit) {
+      // Show as many audit rows as fit in the overlay
+      const innerH = ovH - 2;  // leave 1 row padding top + bottom
+      const rows = AUDIT.slice(-innerH);
+      const nowMs2 = Date.now();
+      rows.forEach((e, i) => {
+        const r = ovR + 1 + i;
+        const flash = nowMs2 < e.flashUntil;
+        const ec = flash
+          ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan)
+          : (e.ok === 'ok' ? $.green : e.ok === 'err' ? $.red : $.dwhite);
+        const prefix = flash ? (e.ok === 'ok' ? '▶ ' : e.ok === 'err' ? '✕ ' : '◈ ') : '  ';
+        const line = e.time + ' ' + pad(e.agent, 12) + ' ' + prefix + e.event;
+        put(r, ovC + 2, ec + line.slice(0, ovW - 4) + $.reset);
+      });
+      if (AUDIT.length === 0) {
+        put(ovR + 2, ovC + 2, $.dwhite + '(no events yet)' + $.reset);
+      }
+    } else {
+      // Flow overlay: receipt JSON + status
+      const json = envelopeJson(receiptEnvelope);
+      const lines = json.split('\n');
+      const innerH = ovH - 2;
+      lines.slice(0, innerH).forEach((ln, i) => {
+        put(ovR + 1 + i, ovC + 2, $.dwhite + ln.slice(0, ovW - 4) + $.reset);
+      });
+    }
+  }
+
+  // ── Help overlay — full-screen contextual command palette ────────────────
   if (helpOverlayOpen) {
-    const helpBody = buildHelpLines();
-    // Compute width from the longest line (plus padding) but cap at
-    // the panel width so it never spills outside the FLOW column.
-    const longest = helpBody.reduce((m, ln) => Math.max(m, ln.length), 0);
-    const minW = Math.min(64, w - mid - 6);
-    const overlayW = Math.max(minW, Math.min(w - mid - 6, longest + 4));
-    const overlayH = helpBody.length + 2; // 2 = top + bottom border
-    const overlayC = Math.max(mid + 2, w - overlayW - 2);
-    const overlayR = Math.max(ROW_BOT_START() + 1, ROW_LOG() - overlayH - 1);
-    // Top border with title.
-    const title = '─ COMMAND HELP ';
-    const topFill = '─'.repeat(Math.max(0, overlayW - title.length - 2));
-    put(overlayR, overlayC, $.dgreen + '┌' + title + topFill + '┐' + $.reset);
-    helpBody.forEach((ln, i) => {
-      const r = overlayR + 1 + i;
-      // Pad to overlayW-2 to fully clear whatever pixels (FLOW glyphs)
-      // were underneath. Slice in case a line accidentally overruns.
-      const padded = pad(ln, overlayW - 2).slice(0, overlayW - 2);
-      put(r, overlayC, $.dgreen + '│' + $.reset + $.white + padded + $.reset + $.dgreen + '│' + $.reset);
+    const helpBody: HelpLine[] = buildHelpLines();
+    const ovR = 2, ovC = 1, ovW = w, ovH = h - 3;
+    const bc = $.bold + $.dgreen;
+    const titleTxt = ' COMMAND PALETTE — what\'s available right now ';
+    const topFill = '═'.repeat(Math.max(0, ovW - titleTxt.length - 2));
+    put(ovR, ovC, bc + '╔' + titleTxt + topFill + '╗' + $.reset);
+    for (let r = ovR + 1; r < ovR + ovH; r++) {
+      put(r, ovC, bc + '║' + $.reset + ' '.repeat(ovW - 2) + bc + '║' + $.reset);
+    }
+    put(ovR + ovH, ovC, bc + '╚' + '═'.repeat(ovW - 2) + '╝' + $.reset);
+    const escHint2 = ' ESC to close ';
+    put(ovR, ovC + ovW - escHint2.length - 1, $.gray + escHint2 + $.reset);
+    const innerH = ovH - 2;
+    helpBody.slice(0, innerH).forEach((hl, i) => {
+      const r = ovR + 1 + i;
+      const color = hl.kind === 'ok'     ? $.green
+                  : hl.kind === 'locked' ? $.dred + $.dim
+                  : hl.kind === 'warn'   ? $.yellow
+                  : $.dwhite;
+      put(r, ovC + 2, color + hl.text.slice(0, ovW - 4) + $.reset);
     });
-    put(overlayR + helpBody.length + 1, overlayC, $.dgreen + '└' + '─'.repeat(overlayW - 2) + '┘' + $.reset);
   }
 
   return f;

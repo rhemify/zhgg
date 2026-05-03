@@ -1,129 +1,144 @@
-/// Static text content for the `?` help overlay.
+/// Contextual full-screen command palette for `?`.
 ///
-/// The overlay is purely informational — a 12-row floating box that
-/// describes every command the intent parser accepts plus the global
-/// hotkeys. We pull the agent list dynamically from `agent-registry.ts`
-/// so newly minted iNFTs appear without touching this file.
-///
-/// Render shape: an array of plain strings (the renderer in `index.ts`
-/// wraps each line in border glyphs and ANSI styles). Keep individual
-/// lines ≤ 72 chars so the box fits inside a 78-col modal even with
-/// the `║ … ║` borders.
+/// Reads process.env at call time to show only what is actually wired up.
+/// Each command group has an availability check — locked groups are shown
+/// dimmed with the specific missing env var so the operator knows exactly
+/// what to add, not a generic "unavailable" message.
 
 import { AGENT_REGISTRY } from './agent-registry.js';
 
-/// Build the agent-list lines from the registry. Wraps onto a second
-/// line when the joined list exceeds the modal interior width so the
-/// overlay degrades gracefully as we mint more iNFTs.
-function buildAgentLines(): string[] {
-  const entries = Object.entries(AGENT_REGISTRY).map(([name, id]) => `${name}(#${id})`);
-  if (entries.length === 0) return ['  registered agents:  (none — mint via bun mint-agent)'];
+export interface HelpLine {
+  text: string;
+  // 'ok' = available now, 'warn' = partial, 'locked' = missing env, 'info' = header/blank
+  kind: 'ok' | 'warn' | 'locked' | 'info';
+}
 
-  const head = '  registered agents:  ';
-  const indent = ' '.repeat(head.length);
-  const maxWidth = 64; // overlay interior width budget for one line
+function env(key: string): boolean {
+  const v = process.env[key];
+  return typeof v === 'string' && v.length > 0;
+}
 
-  const lines: string[] = [];
-  let current = head;
-  for (const entry of entries) {
-    const candidate = current === head ? current + entry : `${current}  ${entry}`;
-    if (candidate.length > maxWidth && current !== head) {
-      lines.push(current);
-      current = indent + entry;
+function miss(...keys: string[]): string[] {
+  return keys.filter(k => !env(k));
+}
+
+export function buildHelpLines(): HelpLine[] {
+  const lines: HelpLine[] = [];
+
+  const khKey        = env('KH_API_KEY');
+  const khWallet     = env('KH_AUTHOR_SUBORG_ID') && env('KH_AUTHOR_WALLET') && env('KH_AUTHOR_HMAC_SECRET');
+  const zgRouter     = env('ZG_ROUTER_KEY');
+  const basePk       = env('BASE_SEPOLIA_PRIVATE_KEY');
+  const mintPk       = env('MINT_AGENT_PRIVATE_KEY');
+  const axiom        = env('AXIOM_COMMIT_ADDRESS') && env('MINT_AGENT_PRIVATE_KEY');
+  const delegation   = env('DELEGATION_MANAGER_ADDRESS') && env('SPEND_CAP_ADDRESS');
+  const acp          = env('ACP_ADDRESS') && env('AGENT_NFT_ADDRESS') && env('ACP_PAYMENT_TOKEN');
+  const yieldVault   = env('YIELD_VAULT_ADDRESS');
+
+  const agents = Object.entries(AGENT_REGISTRY).map(([n, id]) => `${n} #${id}`).join('  ·  ');
+
+  // ── Always available ──────────────────────────────────────────────────────
+  const h = (t: string): HelpLine => ({ text: t, kind: 'info' });
+  const ok = (t: string): HelpLine => ({ text: t, kind: 'ok' });
+  const locked = (t: string): HelpLine => ({ text: t, kind: 'locked' });
+  const warn = (t: string): HelpLine => ({ text: t, kind: 'warn' });
+
+  lines.push(h(''));
+  lines.push(h('  ── ALWAYS AVAILABLE ─────────────────────────────────────────────'));
+  lines.push(ok ('  agents                      list minted iNFTs + capabilities'));
+  lines.push(ok ('  balances                    wallet: 0G OG + ETH / USDC / WETH on Base'));
+  lines.push(ok ('  block                       current block height on 0G + Base Sepolia'));
+  lines.push(ok ('  cancel                      abort the in-flight dispatch'));
+  if (agents) lines.push(h(`  registered:  ${agents}`));
+
+  // ── KeeperHub ─────────────────────────────────────────────────────────────
+  lines.push(h(''));
+  const khMissing = miss('KH_API_KEY');
+  lines.push(h(`  ── KEEPERHUB MARKETPLACE ${khKey ? '✓ API key set' : '✗ needs KH_API_KEY'} ──────────────────────────────`));
+  if (khKey) {
+    lines.push(ok('  kh discover [search]        browse 30 MCP-callable workflows'));
+    lines.push(ok('  kh inspect <id|slug>        full inputSchema + price'));
+    lines.push(ok('  kh workflows                workflows visible to your org'));
+    lines.push(ok('  kh trigger <wfId> [json]    fire a saved workflow'));
+    lines.push(ok('  kh status <execId>          poll run state'));
+    if (khWallet) {
+      lines.push(ok('  kh hire <slug> [json]       x402 USDC payment → MCP workflow'));
+      lines.push(h ('    free slugs: defi-position-aggregator-base  {"wallet":"0x…"}'));
+      lines.push(h ('               defi-position-aggregator-ethereum  {"wallet":"0x…"}'));
+      lines.push(h ('               test-sepolia-weth-deposit-issue2   (no inputs)'));
     } else {
-      current = candidate;
+      const mKh = miss('KH_AUTHOR_SUBORG_ID','KH_AUTHOR_WALLET','KH_AUTHOR_HMAC_SECRET');
+      lines.push(locked(`  kh hire  ✗  needs: ${mKh.join(', ')}  (run: bunx @keeperhub/wallet add)`));
     }
+  } else {
+    lines.push(locked('  kh *  ✗  KH_API_KEY missing — paste kh_… key into .env'));
   }
-  lines.push(current);
+
+  // ── 0G audit ─────────────────────────────────────────────────────────────
+  lines.push(h(''));
+  lines.push(h(`  ── AUDIT / 0G COMPUTE ${zgRouter ? '✓' : '✗ needs ZG_ROUTER_KEY'} ─────────────────────────────────────`));
+  if (zgRouter) {
+    lines.push(ok('  audit <tokenId>             cross-agent oracle audit (TEE inference on 0G)'));
+    lines.push(h ('    e.g.  audit 1   audit 2'));
+    lines.push(ok('  ask oracle <topic>          direct oracle query (EU AI Act, ETH/USD, …)'));
+    lines.push(h ('    e.g.  ask oracle ETH/USD   ask oracle eu-ai-act'));
+  } else {
+    lines.push(locked('  audit / ask oracle  ✗  ZG_ROUTER_KEY missing'));
+  }
+
+  // ── Base Sepolia trading ──────────────────────────────────────────────────
+  lines.push(h(''));
+  lines.push(h(`  ── TRADING / BASE SEPOLIA ${basePk ? '✓' : '✗ needs BASE_SEPOLIA_PRIVATE_KEY'} ─────────────────────────────`));
+  if (basePk) {
+    lines.push(ok('  swap <amt> <from> <to>      Uniswap v3 token swap'));
+    lines.push(h ('    e.g.  swap 0.001 ETH USDC'));
+    lines.push(ok('  transfer <amt> <token> to <addr>   ERC-20 send'));
+    lines.push(h ('    e.g.  transfer 1 USDC 0xAbc…'));
+    if (mintPk) {
+      lines.push(ok('  mint <role>                 mint a new iNFT (audit|oracle|swap)'));
+    } else {
+      lines.push(locked('  mint  ✗  needs MINT_AGENT_PRIVATE_KEY'));
+    }
+  } else {
+    lines.push(locked('  swap / transfer  ✗  BASE_SEPOLIA_PRIVATE_KEY missing'));
+  }
+
+  // ── Advanced ─────────────────────────────────────────────────────────────
+  lines.push(h(''));
+  lines.push(h('  ── ADVANCED ──────────────────────────────────────────────────────'));
+  if (axiom) {
+    lines.push(ok('  commit <tokenId> <plan>     AxiomCommit.commitPlan (0G)'));
+    lines.push(ok('  reveal <commitId> <plan>    AxiomCommit.revealPlan (0G)'));
+  } else {
+    lines.push(locked(`  commit / reveal  ✗  needs: ${miss('AXIOM_COMMIT_ADDRESS','MINT_AGENT_PRIVATE_KEY').join(', ')}`));
+  }
+  if (delegation) {
+    lines.push(ok('  delegate <to> <permId>      ERC-7710 redeemable delegation (Base)'));
+  } else {
+    lines.push(warn(`  delegate  ~  needs: ${miss('DELEGATION_MANAGER_ADDRESS','SPEND_CAP_ADDRESS').join(', ')}`));
+  }
+  if (acp) {
+    lines.push(ok('  acp create <tokenId> <amt>  open + fund EIP-8183 escrow job (0G)'));
+    lines.push(ok('  acp release <jobId>         release escrow → provider'));
+  } else {
+    lines.push(warn(`  acp  ~  needs: ${miss('ACP_ADDRESS','AGENT_NFT_ADDRESS','ACP_PAYMENT_TOKEN').join(', ')}`));
+  }
+  if (yieldVault) {
+    lines.push(ok('  park <amt> <USDC|WETH>      deposit into ERC-4626 yield vault'));
+    lines.push(ok('  unpark <amt> <USDC|WETH>    redeem from vault'));
+  } else {
+    lines.push(warn('  park / unpark  ~  needs YIELD_VAULT_ADDRESS'));
+  }
+
+  // ── Keys ─────────────────────────────────────────────────────────────────
+  lines.push(h(''));
+  lines.push(h('  ── KEYS ──────────────────────────────────────────────────────────'));
+  lines.push(ok('  [Enter] dispatch  [Esc] blur/close  [G] grant SpendCap  [Q] quit'));
+  lines.push(ok('  [Z] audit full-view  [X] receipt full-view  [R] reset  [TAB] focus'));
+  lines.push(h(''));
+
   return lines;
 }
 
-/// Returns the full overlay body as plain strings (no borders, no ANSI).
-/// Caller is responsible for box-drawing and styling.
-export function buildHelpLines(): string[] {
-  const lines: string[] = [];
-  lines.push('  audit <tokenId|ens>     run cross-agent audit');
-  lines.push('     e.g.  audit 1');
-  lines.push('           audit 2                 (oracle-agent #2)');
-  lines.push('');
-  lines.push('  ask oracle <topic>      direct oracle query');
-  lines.push('     e.g.  ask oracle eu-ai-act');
-  lines.push('           ask oracle ETH/USD');
-  lines.push('');
-  lines.push('  swap <amount> <from> <to>  agent-executed token swap');
-  lines.push('     e.g.  swap 0.001 ETH USDC      (compact)');
-  lines.push('           swap 0.001 ETH to USDC   (natural)');
-  lines.push('           supported: ETH, WETH, USDC');
-  lines.push('');
-  lines.push('  transfer <amount> <token> to <recipient>   send to address/ENS');
-  lines.push('     e.g.  transfer 1 USDC vitalik.eth');
-  lines.push('           transfer 0.001 ETH to 0xAbc…123');
-  lines.push('     aliases: send, pay');
-  lines.push('');
-  lines.push('  commit <tokenId|ens> <plan>     AxiomCommit.commitPlan (0G)');
-  lines.push('     e.g.  commit 1 buy 0.05 ETH if EU AI Act compliant');
-  lines.push('           commit 1 refuse cap_exceeded');
-  lines.push('  reveal <commitId> <plan>        AxiomCommit.revealPlan (0G)');
-  lines.push('     e.g.  reveal 0xabc…def buy 0.05 ETH if EU AI Act compliant');
-  lines.push('     plan must match committed text byte-for-byte');
-  lines.push('     requires AXIOM_COMMIT_ADDRESS + MINT_AGENT_PRIVATE_KEY');
-  lines.push('');
-  lines.push('  delegate <to> <permissionId>    ERC-7710 redeemable delegation');
-  lines.push('     e.g.  delegate 2 0x0000…0001');
-  lines.push('           delegate 0xAbc…123 0xa1b2…f00d');
-  lines.push('     <to> = 0x-addr | tokenId | mainnet *.eth');
-  lines.push('     posts to DelegationManager (Base Sepolia); SpendCap auto-debits');
-  lines.push('     requires DELEGATION_MANAGER_ADDRESS + SPEND_CAP_ADDRESS');
-  lines.push('');
-  lines.push('  acp create <agentTokenId|ens> <usdcAmount>   open + fund job (EIP-8183)');
-  lines.push('     e.g.  acp create 2 0.5');
-  lines.push('           acp create 2 10                (10 USDC escrow → token #2 owner)');
-  lines.push('  acp release <jobId>            evaluator releases escrow → provider');
-  lines.push('     e.g.  acp release 1');
-  lines.push('     calls AgenticCommerce.complete (0G); only the job evaluator may');
-  lines.push('     requires ACP_ADDRESS + AGENT_NFT_ADDRESS + ACP_PAYMENT_TOKEN');
-  lines.push('');
-  lines.push('  park <amount> <USDC|WETH>     deposit receiver idle into MockERC4626');
-  lines.push('     e.g.  park 1 USDC                  (defaults to iNFT #1)');
-  lines.push('           park 2 0.5 USDC              (explicit tokenId)');
-  lines.push('     requires: receiver wallet funded with the asset');
-  lines.push('               YIELD_VAULT_ADDRESS in env (deploy via forge script)');
-  lines.push('  unpark <amount> <USDC|WETH>   redeem from vault back to receiver');
-  lines.push('     e.g.  unpark 0.5 USDC             (owner-only — must own iNFT)');
-  lines.push('');
-  // ── Operator UX (Phase 3) ─────────────────────────────────────────────
-  // Read-only inspections plus the one explicitly-confirmed write
-  // (`mint`). They bypass the FLOW panel because they don't exercise
-  // the audit/payment pipeline.
-  lines.push('  agents                  list our iNFTs (ownerOf, capabilities)');
-  lines.push('  balances                wallet: 0G + ETH/USDC/WETH on Base');
-  lines.push('  block                   current block heights (0G + Base)');
-  lines.push('  cancel                  abort the in-flight dispatch');
-  lines.push('  mint <role>             mint a new iNFT (audit|oracle|swap)');
-  lines.push('');
-  lines.push('  kh discover [search]         browse public KH marketplace (≈85 wfs)');
-  lines.push('  kh inspect <wfId>            full inputSchema + price for one workflow');
-  lines.push('  kh hire <slug|id> [<json>]   pay (x402, USDC on Base) + invoke MCP wf');
-  lines.push('  kh workflows                 list workflows visible to your org');
-  lines.push('  kh integrations              list connected integrations (web3, etc)');
-  lines.push('  kh trigger <wfId> [<json>]   fire saved KeeperHub workflow');
-  lines.push('  kh status <executionId>      poll workflow run state');
-  lines.push('     e.g.  kh discover aave           → 6 Aave-related workflows');
-  lines.push('           kh inspect zaajy1vtnd…     → schema + price metadata');
-  lines.push('           kh hire mcp-test {"address":"0xAbc…"}   → x402 settle + run');
-  lines.push('           kh trigger wf-42 {"x":1}');
-  lines.push('     requires KH_API_KEY (kh_…); KEEPERHUB_API_URL optional');
-  lines.push('     `kh hire` also requires KH_AUTHOR_{SUBORG_ID,WALLET,HMAC_SECRET}');
-  lines.push('     (Turnkey-custodied buyer wallet; provision via @keeperhub/wallet)');
-  lines.push('');
-  for (const ln of buildAgentLines()) lines.push(ln);
-  lines.push('');
-  lines.push('  keys:  [G] grant SpendCap (required before first audit)');
-  lines.push('         [Enter] dispatch  [Esc] clear/cancel  [TAB] focus  [Q] quit');
-  return lines;
-}
-
-/// Persistent one-line hint that lives just above the intent input
-/// row. Shorter than the overlay — designed to remind a confused
-/// operator that `?` exists without taking screen real estate.
-export const PERSISTENT_HINT = '?: help  │  first time? press [G] to grant SpendCap, then audit/ask/swap';
+/// Persistent one-line hint above the intent input.
+export const PERSISTENT_HINT = '[?] command palette  │  [G] grant SpendCap  │  [Enter] dispatch  │  [Esc] blur';

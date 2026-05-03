@@ -69,11 +69,11 @@ import {
   FLOW_COL, FLOW_NODE_W, nodeRow,
 } from './layout.js';
 import { pad, shortHash, formatStaged } from './format.js';
-import { AUDIT, pushAudit } from './audit-trail.js';
+import { AUDIT, pushAudit, loadAuditFromDisk, saveReceiptToDisk, loadReceiptFromDisk } from './audit-trail.js';
 import { mkFlow, type FlowState, type NS } from './flow-state.js';
 import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js';
 import { tryBuildLiveBundle, getLiveBundleError, type LiveBundle } from './live-bundle.js';
-import { buildFrame } from './render.js';
+import { buildFrame, type PanelOverlay } from './render.js';
 import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
 import {
   openGrantModal as openGrantModalImpl,
@@ -136,7 +136,12 @@ let flow: FlowState = mkFlow()
 // (orchestrator, viem grant) can mutate while the 1Hz renderTimer
 // repaints — no callback wiring needed past the initial subscribe.
 
-let receiptEnvelope: ReceiptEnvelope = EMPTY_RECEIPT
+// Load persisted state from previous sessions.
+loadAuditFromDisk();
+const _savedReceipt = loadReceiptFromDisk();
+let receiptEnvelope: ReceiptEnvelope = (_savedReceipt && typeof _savedReceipt === 'object' && 'status' in (_savedReceipt as object))
+  ? (_savedReceipt as ReceiptEnvelope)
+  : EMPTY_RECEIPT;
 
 let intentBuffer = ''
 let intentMode: 'idle' | 'editing' = 'editing'
@@ -165,6 +170,9 @@ let grantModalLines: string[] = []
 /// keeps editing — the operator can keep typing while reading the
 /// command palette.
 let helpOverlayOpen = false
+
+// Full-screen overlay for a single panel. Z = audit, X = flow, Esc = close.
+let panelOverlay: PanelOverlay = 'none'
 
 let toast: { kind: 'ok' | 'err' | 'info'; text: string } | null = null
 function setToast(kind: 'ok' | 'err' | 'info', text: string): void { toast = { kind, text } }
@@ -196,7 +204,7 @@ function render() {
       $.red + "\n  Terminal too small — resize to at least 100×32\n" + $.reset)
     return
   }
-  process.stdout.write(`${E}[?25l${E}[H` + buildFrame({
+  process.stdout.write(`${E}[?25l${E}[2J${E}[H` + buildFrame({
     flow,
     stagedIntent,
     runningCommand,
@@ -208,6 +216,7 @@ function render() {
     grantModalOpen,
     grantModalLines,
     helpOverlayOpen,
+    panelOverlay,
   }))
 }
 
@@ -246,12 +255,15 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
   runningCommand = 'audit'
   pushAudit('intent', `dispatching audit "${intent.target}" (token #${intent.tokenId})`, 'info')
   const events = new EventEmitter()
-  const onAny = (step: TranscriptStep): void => applyOrchestratorStep({
-    flow,
-    setReceiptEnvelope: (e) => { receiptEnvelope = e },
-    getReceiptEnvelope: () => receiptEnvelope,
-    setToast,
-  }, step)
+  const onAny = (step: TranscriptStep): void => {
+    applyOrchestratorStep({
+      flow,
+      setReceiptEnvelope: (e) => { receiptEnvelope = e; saveReceiptToDisk(e); },
+      getReceiptEnvelope: () => receiptEnvelope,
+      setToast,
+    }, step)
+    render()  // repaint immediately on each step so judges see INTENT→POLICY→RAILS→EXECUTE progress
+  }
   for (const name of KNOWN_STEPS) events.on(name, onAny)
 
   try {
@@ -1990,13 +2002,12 @@ function handleIntentKey(key: string): boolean {
   // dismissal so the operator can read the overlay without losing
   // their half-typed intent.
   if (key === '\x1b') {
-    if (helpOverlayOpen) {
-      helpOverlayOpen = false
-      return true
-    }
+    if (panelOverlay !== 'none') { panelOverlay = 'none'; return true }
+    if (helpOverlayOpen) { helpOverlayOpen = false; return true }
     intentBuffer = ''
     intentHint = ''
     stagedIntent = null
+    intentMode = 'idle'   // ESC blurs the intent input
     return true
   }
   // Tab — blur.
@@ -2007,13 +2018,18 @@ function handleIntentKey(key: string): boolean {
   // Single printable char (0x20..0x7e). Skip multi-byte sequences
   // (arrow keys etc.) — those start with 0x1b followed by `[X` which
   // we already partial-match above.
-  if (key.length === 1) {
-    const code = key.charCodeAt(0)
-    if (code >= 32 && code < 127) {
-      intentBuffer += key
-      refreshLivePreview()
-      return true
+  // Multi-char: paste arrives as a single data chunk. Accept all printable
+  // ASCII + basic Unicode (quotes, curly braces, etc. from JSON paste).
+  if (key.length >= 1) {
+    let added = false
+    for (const ch of key) {
+      const code = ch.codePointAt(0) ?? 0
+      if (code >= 32 && code !== 127) {
+        intentBuffer += ch
+        added = true
+      }
     }
+    if (added) { refreshLivePreview(); return true }
   }
   return false
 }
@@ -2048,8 +2064,9 @@ process.stdin.on("data", (key: string) => {
         setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
         render,
       }).then(() => render())
-    } else if (key === '\x1b') {
+    } else if (key === '\x1b' || key === 'q' || key === 'Q' || key === '\x03') {
       grantModalOpen = false
+      if (key === '\x03') { cleanup(); process.exit(0) }
     }
     render()
     return
@@ -2087,6 +2104,12 @@ process.stdin.on("data", (key: string) => {
       setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
       render,
     })
+  } else if (key === 'z' || key === 'Z') {
+    panelOverlay = panelOverlay === 'audit' ? 'none' : 'audit'
+  } else if (key === 'x' || key === 'X') {
+    panelOverlay = panelOverlay === 'flow' ? 'none' : 'flow'
+  } else if (key === '\x1b' && panelOverlay !== 'none') {
+    panelOverlay = 'none'
   } else if (key === 'r' || key === 'R') {
     // Reset the FLOW panel + audit trail. Slice C dropped the
     // synthetic walkthrough (advance/setAuto), so this is the only

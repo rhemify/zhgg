@@ -110,13 +110,16 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
         flow.settledRail = null;
       }
       const liveBundleCached = tryBuildLiveBundle();
+      if (txHash) {
+        pushAudit('receipt', `Base Sepolia: https://sepolia.basescan.org/tx/${txHash}`, 'ok');
+      }
       if (txHash && liveBundleCached) {
         liveBundleCached.receiptFeed
           .fetchSplit(txHash)
           .then((split) => {
             if (split) {
               setReceiptEnvelope({ ...getReceiptEnvelope(), status: 'settled', split });
-              pushAudit('receipt', `Split decoded blk=${split.blockNumber}`, 'ok');
+              pushAudit('receipt', `Split decoded blk=${split.blockNumber} owner=${split.ownerCut} kh=${split.keeperCut}`, 'ok');
             }
           })
           .catch((e) => {
@@ -134,9 +137,12 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
     case 'audit.capabilities.read':
       pushAudit('audit-agent', `capabilities read manifestLen=${detail.manifestLen ?? 0}`, detail.ok === false ? 'err' : 'info');
       break;
-    case 'audit.axiom.commit':
-      pushAudit('axiom', `commit ${detail.commitId ? shortHash(String(detail.commitId)) : '—'}`, detail.ok === false ? 'err' : 'ok');
+    case 'audit.axiom.commit': {
+      const cid = detail.commitId ? String(detail.commitId) : null;
+      pushAudit('axiom', `commit ${cid ? shortHash(cid) : '—'}`, detail.ok === false ? 'err' : 'ok');
+      if (cid) pushAudit('axiom', `0G Galileo: https://chainscan-galileo.0g.ai/tx/${cid}`, 'info');
       break;
+    }
     case 'audit.start':
       pushAudit('audit-agent', `start agentId=${detail.agentId ?? '?'}`, 'info');
       flow.nodes = ['done', 'done', 'done', 'active'];

@@ -13,7 +13,7 @@ export const MID = (): number => Math.floor(W() * 0.42);
 export const ROW_HEADER_TOP = 1;
 export const ROW_HEADER_BOT = 3;
 export const ROW_TOP_START  = 4;
-export const ROW_TOP_END   = (): number => Math.min(11, Math.floor(H() * 0.30));
+export const ROW_TOP_END   = (): number => Math.min(7, Math.floor(H() * 0.20));
 export const ROW_MID_DIV   = (): number => ROW_TOP_END() + 1;
 export const ROW_BOT_START = (): number => ROW_MID_DIV() + 1;
 // Reserve five rows at the bottom for: log border, receipt-status,
