@@ -756,11 +756,10 @@ async function dispatchAxiomRevealIntent(
 //     (same free public RPC chain; honours `ENS_RPC_URL`).
 //
 // Hardcoded caveats (matching the on-chain Delegation struct field-for-field):
-//   delegator        = the TUI's EOA (baseAccount). For a smart-wallet
-//                      delegator (AgentReceiverWallet) the manager's
-//                      ERC-1271 check passes; for a bare EOA the chain
-//                      reverts on `InvalidSignature` — that revert is
-//                      bubbled verbatim (per "real reverts bubble" rule).
+//   delegator        = bundle.receiverWallet (AgentReceiverWallet). The
+//                      manager's ERC-1271 check calls isValidSignature on
+//                      this contract; it validates the iNFT owner's EOA sig.
+//                      Requires AGENT_RECEIVER_WALLET_ADDRESS in env.
 //   delegate         = resolved <to>.
 //   allowedTargets   = [SpendCap]    (only target the redemption may hit).
 //   maxValuePerCall  = 0             (no native ETH).
@@ -783,6 +782,16 @@ const AGENT_NFT_OWNER_OF_ABI = parseAbi([
 /// makes drift between the Solidity ABI and this clone easier to spot.
 const DELEGATION_MANAGER_ABI = parseAbi([
   'function redeemDelegations(bytes[] permissionContexts, bytes32[] modes, bytes[] executionCallData) payable',
+  'error LengthMismatch()',
+  'error UnsupportedMode(bytes32 mode)',
+  'error InvalidSignature()',
+  'error WrongDelegate(address expected, address caller)',
+  'error AlreadyRedeemed(bytes32 redemptionKey)',
+  'error DelegationExpired(uint64 expiresAt, uint256 nowTs)',
+  'error TargetNotAllowed(address target)',
+  'error ValueExceedsCap(uint256 requested, uint128 max)',
+  'error EmptyAllowedTargets()',
+  'error ExecutionFailed(uint256 index, bytes returnData)',
 ])
 
 const SPEND_CAP_SPEND_ABI = parseAbi([
@@ -887,12 +896,20 @@ async function dispatchDelegate(
     setToast('err', 'SPEND_CAP_ADDRESS required')
     return
   }
+  if (!bundle.receiverWallet) {
+    pushAudit('delegate', 'AGENT_RECEIVER_WALLET_ADDRESS not set — delegation requires a smart-wallet delegator', 'err')
+    setToast('err', 'AGENT_RECEIVER_WALLET_ADDRESS required')
+    return
+  }
 
   runningCommand = 'delegate'
   pushAudit('delegate', `delegate.intent ${intent.to} ${intent.permissionId}`, 'info')
   render()
 
-  // 1. Resolve <to>.
+  // 1. Resolve <to>. The resolved address becomes the `delegate` field —
+  //    it must match msg.sender at redeemDelegations time. For self-demo
+  //    the user passes their own EOA address so the TUI signs and redeems
+  //    in the same flow without requiring a separate agent process.
   const recipient = await resolveDelegateTo(intent.to, bundle)
   if (!recipient.ok) {
     pushAudit('delegate', `delegate.resolve.failed ${recipient.reason}`.slice(0, 200), 'err')
@@ -910,13 +927,16 @@ async function dispatchDelegate(
   // 2. Build the delegation. Salt is random per dispatch so repeated
   //    calls with identical args don't collide on the manager's
   //    `redeemed[(delegator, salt)]` map.
+  //    delegator = AgentReceiverWallet (implements IDelegationExecutor +
+  //    ERC-1271); the manager's isValidSignature check validates against
+  //    the iNFT owner's EOA, which is bundle.baseAccount.
   const saltBytes = new Uint8Array(32)
   crypto.getRandomValues(saltBytes)
   const salt = ('0x' +
     Array.from(saltBytes).map((b) => b.toString(16).padStart(2, '0')).join('')) as Hex
   const expiresAt = BigInt(Math.floor(Date.now() / 1000)) + DELEGATE_TTL_SECONDS
 
-  const delegator: Address = bundle.baseAccount.address
+  const delegator: Address = bundle.receiverWallet
   const delegation: ERC7710Delegation = {
     delegator,
     delegate: recipient.address,
@@ -1656,12 +1676,31 @@ async function dispatchKHIntent(
       pushAudit('kh', `  price: ${w.priceUsdcPerCall ? '$' + w.priceUsdcPerCall + ' USDC/call' : 'free'}`, 'info')
       const desc = (w.description ?? '').replace(/\s+/g, ' ').slice(0, 100)
       if (desc) pushAudit('kh', `  ${desc}${(w.description ?? '').length > 100 ? '…' : ''}`, 'info')
-      const required = w.inputSchema?.required ?? []
-      const allProps = Object.keys(w.inputSchema?.properties ?? {})
-      pushAudit('kh', `  required (${required.length}): ${required.join(', ') || '—'}`, 'info')
-      const optionalProps = allProps.filter((p) => !required.includes(p))
-      if (optionalProps.length > 0) {
-        pushAudit('kh', `  optional (${optionalProps.length}): ${optionalProps.join(', ').slice(0, 80)}`, 'info')
+      const required: string[] = w.inputSchema?.required ?? []
+      const props = (w.inputSchema?.properties ?? {}) as Record<string, Record<string, unknown>>
+      const allProps = Object.keys(props)
+      if (allProps.length === 0) {
+        pushAudit('kh', `  inputs: none`, 'info')
+      } else {
+        for (const key of allProps) {
+          const p = props[key] ?? {}
+          const isRequired = required.includes(key)
+          const tag = isRequired ? 'required' : 'optional'
+          const type = typeof p.type === 'string' ? p.type : 'any'
+          const desc = typeof p.description === 'string' ? p.description.slice(0, 80) : ''
+          const ex = p.example !== undefined ? `  e.g. ${JSON.stringify(p.example)}` : ''
+          pushAudit('kh', `  [${tag}] ${key} (${type})${desc ? ' — ' + desc : ''}${ex}`, 'info')
+        }
+      }
+      if (allProps.length > 0) {
+        const exampleInputs = Object.fromEntries(
+          required.map(k => {
+            const ex = (props[k] ?? {}).example
+            return [k, ex !== undefined ? ex : `<${(props[k] ?? {}).type ?? 'value'}>`]
+          })
+        )
+        const slug = w.listedSlug ?? w.id
+        pushAudit('kh', `  → kh hire ${slug}${required.length > 0 ? ' ' + JSON.stringify(exampleInputs) : ''}`, 'ok')
       }
       // Receipt panel gets the full schema for copy-paste into kh trigger
       receiptEnvelope = {
@@ -1825,6 +1864,24 @@ async function dispatchKHHireIntent(
     : '(no required inputs)'
   pushAudit('kh', `hire.intent ${slug} $${price} ${providedSummary}`, 'info')
   render()
+
+  // Recursively emit one audit line per leaf value so long JSON never truncates.
+  function printWorkflowFields(scope: string, obj: unknown, prefix = ''): void {
+    if (obj === null || obj === undefined) return
+    if (typeof obj !== 'object' || Array.isArray(obj)) {
+      pushAudit(scope, `  ${prefix}${JSON.stringify(obj)}`, 'ok')
+      return
+    }
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const key = prefix ? `${prefix}.${k}` : k
+      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        printWorkflowFields(scope, v, key)
+      } else {
+        pushAudit(scope, `  ${key}: ${JSON.stringify(v)}`, 'ok')
+      }
+    }
+  }
+
   try {
     const settlement = await payViaKeeperHubMarketplace(
       {
@@ -1833,6 +1890,7 @@ async function dispatchKHHireIntent(
         hmacSecret: hmacSecret!,
         marketplaceSlug: slug,
         baseUrl,
+        onDiag: (msg) => pushAudit('kh', msg, 'info'),
       },
       provided,
     )
@@ -1870,11 +1928,13 @@ async function dispatchKHHireIntent(
         const ok = status === 'error' ? 'err' : 'ok'
         pushAudit('kh', `workflow ${status}  id=${r.executionId}`, ok)
         if (r.error) pushAudit('kh', `  error: ${String(r.error).slice(0, 120)}`, 'err')
+        // Pretty-print output fields — one audit line per leaf key so nothing truncates
+        const { executionId: _id, status: _s, error: _e, workflowId: _w, ...rest } = r
+        printWorkflowFields('kh', rest)
       } else if (typeof r.result !== 'undefined') {
-        pushAudit('kh', `workflow result: ${JSON.stringify(r.result).slice(0, 120)}`, 'ok')
+        printWorkflowFields('kh', r.result as Record<string, unknown>)
       } else {
-        const json = JSON.stringify(r)
-        pushAudit('kh', `workflow: ${json.slice(0, 120)}${json.length > 120 ? '…' : ''}`, 'ok')
+        printWorkflowFields('kh', r)
       }
     }
 
@@ -1886,7 +1946,14 @@ async function dispatchKHHireIntent(
     setToast('ok', `kh hire ${slug} settled`)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    pushAudit('kh', `hire failed: ${msg.slice(0, 140)}`, 'err')
+    // Split on '| x402:' so the x402 detail gets its own untruncated line.
+    const x402Split = msg.indexOf('| x402:')
+    if (x402Split !== -1) {
+      pushAudit('kh', `hire failed: ${msg.slice(0, x402Split).trim()}`, 'err')
+      pushAudit('kh', msg.slice(x402Split + 2), 'err')
+    } else {
+      pushAudit('kh', `hire failed: ${msg.slice(0, 200)}`, 'err')
+    }
     setToast('err', `kh hire failed`)
   }
   render()
@@ -1995,9 +2062,6 @@ function handleIntentKey(key: string): boolean {
   // we already partial-match above.
   // Multi-char: paste arrives as a single data chunk. Accept all printable
   // ASCII + basic Unicode (quotes, curly braces, etc. from JSON paste).
-  // Global hotkeys (G, R, Z, X, TAB, Q) fall through to the global handler
-  // even while editing so they remain accessible from the first keystroke.
-  if (key.length === 1 && (key === 'g' || key === 'G')) return false
   if (key.length >= 1) {
     let added = false
     for (const ch of key) {
@@ -2146,7 +2210,7 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
     helpOverlayOpen = false
   } else if (ev.name === 'tab') {
     intentMode = intentMode === 'editing' ? 'idle' : 'editing'
-  } else if (key === 'g' || key === 'G') {
+  } else if ((key === 'g' || key === 'G') && intentMode !== 'editing') {
     grantCapStr = '0.5'
     openGrantModalImpl({
       stagedIntent,
