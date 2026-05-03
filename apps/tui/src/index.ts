@@ -1864,6 +1864,28 @@ async function dispatchKHHireIntent(
   const price = workflow.priceUsdcPerCall ?? '0'
 
   // ── Step 2: validate required[] keys against operator-supplied inputs ──
+  // Show pre-flight schema hint — which inputs are required and which were provided.
+  // This prints BEFORE validation so the operator can see what to fix even if it passes.
+  const requiredKeys = workflow.inputSchema?.required ?? []
+  if (requiredKeys.length > 0) {
+    const providedKeys = Object.keys(intent.inputs ?? {})
+    const missing = requiredKeys.filter(k => !providedKeys.includes(k) || !(intent.inputs as Record<string, unknown>)?.[k])
+    if (missing.length > 0) {
+      pushAudit(
+        'kh',
+        `hire blocked — "${slug}" requires: ${requiredKeys.join(', ')}  (missing: ${missing.join(', ')})`,
+        'err',
+      )
+      pushAudit(
+        'kh',
+        `  usage: kh hire ${slug} {"${missing[0]}":"<value>"${requiredKeys.length > 1 ? ', …' : ''}}`,
+        'info',
+      )
+      setToast('err', `missing input: ${missing[0]}`)
+      render()
+      return
+    }
+  }
   const validation = validateRequiredInputs(workflow, intent.inputs)
   if (!validation.ok) {
     pushAudit(
@@ -1871,15 +1893,18 @@ async function dispatchKHHireIntent(
       `hire refused — inputs missing required key "${validation.missing}" (schema requires: ${validation.required.join(', ')})`,
       'err',
     )
+    pushAudit('kh', `  usage: kh hire ${slug} {"${validation.missing}":"<value>"}`, 'info')
     setToast('err', `missing input: ${validation.missing}`)
     render()
     return
   }
   const provided = intent.inputs ?? {}
-  const requiredCount = workflow.inputSchema?.required?.length ?? 0
 
   // ── Step 3: real x402 settlement via KeeperHub marketplace ──
-  pushAudit('kh', `hire.intent ${slug} $${price} (${requiredCount} required keys validated)`, 'info')
+  const providedSummary = requiredKeys.length > 0
+    ? `(${requiredKeys.length} required: ${requiredKeys.join(', ')})`
+    : '(no required inputs)'
+  pushAudit('kh', `hire.intent ${slug} $${price} ${providedSummary}`, 'info')
   render()
   try {
     const settlement = await payViaKeeperHubMarketplace(
@@ -1904,7 +1929,17 @@ async function dispatchKHHireIntent(
     const r = settlement.marketplaceResponse as Record<string, unknown>
     if (r && typeof r === 'object') {
       if (r.status === 'error' || typeof r.error === 'string') {
-        pushAudit('kh', `workflow ERROR: ${String(r.error ?? 'unknown').slice(0, 120)}`, 'err')
+        const errMsg = String(r.error ?? 'unknown')
+        pushAudit('kh', `workflow ERROR: ${errMsg.slice(0, 120)}`, 'err')
+        // runCodeStep retries exhausted — almost always means missing/wrong inputs
+        if (errMsg.includes('runCodeStep') && errMsg.includes('max retries')) {
+          if (requiredKeys.length > 0) {
+            pushAudit('kh', `  hint: this workflow requires — ${requiredKeys.join(', ')}`, 'info')
+            pushAudit('kh', `  retry: kh hire ${slug} {"${requiredKeys[0]}":"<value>"}`, 'info')
+          } else {
+            pushAudit('kh', `  hint: check the workflow's inputSchema with: kh inspect ${slug}`, 'info')
+          }
+        }
       } else if (r.type === 'calldata' && typeof r.to === 'string') {
         const ethValue = typeof r.value === 'string' && r.value !== '0'
           ? ` · attach ${(Number(r.value) / 1e18).toFixed(4)} ETH` : ''
