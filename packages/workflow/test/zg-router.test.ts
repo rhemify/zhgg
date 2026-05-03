@@ -24,6 +24,40 @@ function okBody(text: string, totalTokens = 100, attestation: string | null = nu
   );
 }
 
+/// Like `okBody` but emits a `trace` block — the path inferZG inspects
+/// when `verify_tee: true` is sent. When `attestation` is supplied it's
+/// forwarded as the `x-tee-attestation` header (envelope JSON or base64).
+function okBodyWithTrace(opts: {
+  text?: string;
+  trace?: { tee_verified?: boolean; provider?: string };
+  attestation?: string;
+}) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (opts.attestation) headers['x-tee-attestation'] = opts.attestation;
+  return new Response(
+    JSON.stringify({
+      id: 'cmpl-test-1',
+      model: 'qwen3.6-plus',
+      choices: [{ message: { role: 'assistant', content: opts.text ?? 'ok' } }],
+      usage: { total_tokens: 100 },
+      ...(opts.trace ? { trace: opts.trace } : {}),
+    }),
+    { status: 200, headers }
+  );
+}
+
+/// Build a minimal LLM-shape attestation envelope for sidecar tests.
+/// Matches the shape `verifyTeeAttestation` and `reverifyAttestationLocally`
+/// expect (intel_quote, signing_address, signing_algo, request_nonce).
+function llmEnvelope(opts: { signing_address?: string; nonce?: string } = {}) {
+  return JSON.stringify({
+    intel_quote: '0x' + 'ab'.repeat(40), // ≥64 chars to clear length check
+    signing_address: opts.signing_address ?? '0xcA11E7c00Ffe5c0De0000000000000000000beeF',
+    signing_algo: 'ecdsa',
+    request_nonce: opts.nonce ?? '0x' + '11'.repeat(32),
+  });
+}
+
 describe('inferZG', () => {
   it('returns Ok with parsed InferenceResult on happy path', async () => {
     const fetchImpl = mockFetch(() => okBody('hello world', 200, '0xabc123'));
@@ -106,5 +140,115 @@ describe('inferZG', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.error.kind).toBe('malformed_response');
+  });
+
+  describe('verify_tee=true body parsing (codex Q5 + closes TODOS gap #5)', () => {
+    it('trace.tee_verified=true + header present → attestation_root=tee_verified:<provider>, sidecar gets envelope', async () => {
+      let verifierBody: string | null = null;
+      const fetchImpl = mockFetch(async (req) => {
+        if (req.url.includes('/verify')) {
+          verifierBody = await req.text();
+          return new Response(JSON.stringify({ valid: true }), { status: 200 });
+        }
+        return okBodyWithTrace({
+          trace: { tee_verified: true, provider: 'qwen-tee-1' },
+          attestation: llmEnvelope(),
+        });
+      });
+      const result = await inferZG('p', {
+        apiKey: FAKE_KEY,
+        verifyTee: true,
+        teeVerifierUrl: 'http://verifier.local/verify',
+        fetchImpl,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable');
+      expect(result.value.attestation_root).toBe('tee_verified:qwen-tee-1');
+      expect(result.value.tee_verified_locally).toBe(true);
+      // Sidecar must have received the envelope's intel_quote + signing_address.
+      expect(verifierBody).not.toBeNull();
+      const sentToVerifier = JSON.parse(verifierBody!);
+      expect(sentToVerifier.signing_address).toBe('0xcA11E7c00Ffe5c0De0000000000000000000beeF');
+      expect(typeof sentToVerifier.intel_quote).toBe('string');
+    });
+
+    it('trace.tee_verified=true + no header → attestation_root set, sidecar reports no_attestation_envelope', async () => {
+      const fetchImpl = mockFetch(async (req) => {
+        if (req.url.includes('/verify')) {
+          throw new Error('verifier should not be called when header absent');
+        }
+        return okBodyWithTrace({
+          trace: { tee_verified: true, provider: 'qwen-tee-1' },
+          // no attestation header
+        });
+      });
+      const result = await inferZG('p', {
+        apiKey: FAKE_KEY,
+        verifyTee: true,
+        teeVerifierUrl: 'http://verifier.local/verify',
+        fetchImpl,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable');
+      // attestation_root reflects the trace boolean even without an
+      // envelope (the trace is the Router's verdict, the envelope is
+      // for our independent re-verification).
+      expect(result.value.attestation_root).toBe('tee_verified:qwen-tee-1');
+      expect(result.value.tee_verified_locally).toBeNull();
+      expect(result.value.tee_verifier_reason).toBe('no_attestation_envelope');
+    });
+
+    it('trace.tee_verified=false → attestation_root falls back to header (or null), no sidecar call', async () => {
+      let verifierCalled = false;
+      const fetchImpl = mockFetch(async (req) => {
+        if (req.url.includes('/verify')) {
+          verifierCalled = true;
+          return new Response(JSON.stringify({ valid: false }), { status: 200 });
+        }
+        return okBodyWithTrace({
+          trace: { tee_verified: false },
+          // no attestation header — confirms attestation_root === null
+        });
+      });
+      const result = await inferZG('p', {
+        apiKey: FAKE_KEY,
+        verifyTee: true,
+        teeVerifierUrl: 'http://verifier.local/verify',
+        fetchImpl,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable');
+      expect(result.value.attestation_root).toBeNull();
+      // No header → reverifyAttestationLocally short-circuits without
+      // hitting the sidecar.
+      expect(verifierCalled).toBe(false);
+      expect(result.value.tee_verifier_reason).toBe('no_attestation_envelope');
+    });
+
+    it('header present but envelope missing signing_address → envelope_missing_required_fields', async () => {
+      let verifierCalled = false;
+      const fetchImpl = mockFetch(async (req) => {
+        if (req.url.includes('/verify')) {
+          verifierCalled = true;
+          return new Response(JSON.stringify({ valid: true }), { status: 200 });
+        }
+        return okBodyWithTrace({
+          trace: { tee_verified: true, provider: 'qwen-tee-1' },
+          attestation: JSON.stringify({ intel_quote: '0x' + 'ab'.repeat(40) }),
+        });
+      });
+      const result = await inferZG('p', {
+        apiKey: FAKE_KEY,
+        verifyTee: true,
+        teeVerifierUrl: 'http://verifier.local/verify',
+        fetchImpl,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable');
+      expect(result.value.tee_verified_locally).toBeNull();
+      expect(result.value.tee_verifier_reason).toBe('envelope_missing_required_fields');
+      // Sidecar must NOT be called when our pre-validation rejects the envelope.
+      expect(verifierCalled).toBe(false);
+    });
   });
 });
