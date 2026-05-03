@@ -1,4 +1,6 @@
-import 'server-only';
+// `import 'server-only'` (upstream KH) intentionally omitted: see the
+// matching note in 0g-tee-inference/steps/run-inference.ts. Tests mock
+// the package; runtime has no Next.js RSC analogue.
 import { withPluginMetrics } from '@/lib/metrics/instrumentation/plugin';
 import { type StepInput, withStepLogging } from '@/lib/workflow/executor/step-handler';
 import { queryOracle, type OracleResponse, type OracleTopic } from '@zhgg/oracle-data';
