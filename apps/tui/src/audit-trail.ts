@@ -21,21 +21,28 @@ export interface AuditRow {
   agent: string;
   event: string;
   ok: 'ok' | 'err' | 'info';
+  // ISO date string (YYYY-MM-DD) — used to filter out rows from previous days on load
+  date?: string;
   // epoch ms — row renders with a pop-in highlight until this time expires
   flashUntil: number;
 }
 
 export const AUDIT: AuditRow[] = [];
 
-// Load the last 200 rows from disk on startup so the trail survives restarts.
+// Load rows from disk on startup — today's rows only. Rows from previous
+// days are stale and confuse the operator (old failures mixed with live events).
 export function loadAuditFromDisk(): void {
   try {
     if (!existsSync(AUDIT_FILE)) return;
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const lines = readFileSync(AUDIT_FILE, 'utf8').trim().split('\n').filter(Boolean);
-    const last200 = lines.slice(-200);
-    for (const line of last200) {
+    // Read from the tail — no need to parse the whole file
+    const tail = lines.slice(-400);
+    for (const line of tail) {
       try {
         const row = JSON.parse(line) as Omit<AuditRow, 'flashUntil'>;
+        // Skip rows from previous days (old sessions)
+        if (row.date && row.date !== today) continue;
         AUDIT.push({ ...row, flashUntil: 0 }); // loaded rows don't flash
       } catch { /* skip malformed */ }
     }
@@ -43,8 +50,10 @@ export function loadAuditFromDisk(): void {
 }
 
 export function pushAudit(agent: string, event: string, ok: AuditRow['ok'] = 'info'): void {
+  const now = new Date();
   const row: AuditRow = {
-    time: new Date().toLocaleTimeString('en-GB').slice(0, 8),
+    time: now.toLocaleTimeString('en-GB').slice(0, 8),
+    date: now.toISOString().slice(0, 10), // YYYY-MM-DD
     agent,
     event,
     ok,

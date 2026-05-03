@@ -63,9 +63,8 @@ export function buildHelpLines(): HelpLine[] {
     lines.push(ok('  kh status <execId>          poll run state'));
     if (khWallet) {
       lines.push(ok('  kh hire <slug> [json]       x402 USDC payment → MCP workflow'));
-      lines.push(h ('    free slugs: defi-position-aggregator-base  {"wallet":"0x…"}'));
-      lines.push(h ('               defi-position-aggregator-ethereum  {"wallet":"0x…"}'));
-      lines.push(h ('               test-sepolia-weth-deposit-issue2   (no inputs)'));
+      lines.push(h ('    → run  kh discover  to see callable slugs + required inputs'));
+      lines.push(h ('    → run  kh inspect <slug>  to see inputSchema before hiring'));
     } else {
       const mKh = miss('KH_AUTHOR_SUBORG_ID','KH_AUTHOR_WALLET','KH_AUTHOR_HMAC_SECRET');
       lines.push(locked(`  kh hire  ✗  needs: ${mKh.join(', ')}  (run: bunx @keeperhub/wallet add)`));
