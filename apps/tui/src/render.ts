@@ -1,0 +1,439 @@
+// ── Frame builder ────────────────────────────────────────────────────────────
+//
+// Pure(ish) frame-builder: takes a snapshot of the current TUI state,
+// returns the full ANSI frame string. The caller (render loop in
+// `index.ts`) writes the result to stdout in a single `process.stdout.write`
+// call to avoid flicker. State is passed in as a struct rather than
+// accessed as module locals — keeps this file independent of the
+// dispatcher's mutable globals.
+
+import type { Hex } from 'viem';
+import type { ReceiptEnvelope } from './receipt-feed.js';
+import { envelopeJson } from './receipt-feed.js';
+import { $, at } from './theme.js';
+import {
+  W, H, MID,
+  ROW_HEADER_TOP, ROW_HEADER_BOT, ROW_TOP_START, ROW_TOP_END,
+  ROW_MID_DIV, ROW_BOT_START,
+  ROW_LOG, ROW_RECEIPT, ROW_HINT, ROW_INTENT, ROW_STATUS, ROW_FOOTER,
+  FLOW_COL, FLOW_NODE_W, nodeRow,
+} from './layout.js';
+import { pad, shortHash, formatStaged } from './format.js';
+import { AUDIT } from './audit-trail.js';
+import type { FlowState, NS } from './flow-state.js';
+import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js';
+import { tryBuildLiveBundle, getLiveBundleError } from './live-bundle.js';
+import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
+import type { IntentCommand } from './intent-parser.js';
+
+function nodeStyle(ns: NS): string {
+  if (ns === 'active')   return $.bold + $.green + $.bgNode;
+  if (ns === 'done')     return $.dgreen;
+  if (ns === 'rejected') return $.dim + $.dred + $.bgRej;
+  return $.gray;
+}
+
+function nodeBorder(ns: NS) {
+  return ns === 'active' ? { tl:'╔',tr:'╗',bl:'╚',br:'╝',h:'═',v:'║' }
+                         : { tl:'┌',tr:'┐',bl:'└',br:'┘',h:'─',v:'│' };
+}
+
+export interface FrameState {
+  flow: FlowState;
+  stagedIntent: IntentCommand | null;
+  runningCommand: RunningCommand;
+  receiptEnvelope: ReceiptEnvelope;
+  intentBuffer: string;
+  intentMode: 'idle' | 'editing';
+  intentHint: string;
+  toast: { kind: 'ok' | 'err' | 'info'; text: string } | null;
+  grantModalOpen: boolean;
+  grantModalLines: string[];
+  helpOverlayOpen: boolean;
+}
+
+// Build entire frame as a string (prevents flicker vs multiple writes)
+export function buildFrame(state: FrameState): string {
+  const {
+    flow, stagedIntent, runningCommand, receiptEnvelope,
+    intentBuffer, intentMode, intentHint, toast,
+    grantModalOpen, grantModalLines, helpOverlayOpen,
+  } = state;
+  const w = W(), h = H(), mid = MID();
+  let f = '';
+
+  const put = (r: number, c: number, s: string): void => { f += at(r, c) + s; };
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  put(ROW_HEADER_TOP, 1, $.bold + $.green + '╔' + '═'.repeat(w - 2) + '╗' + $.reset);
+
+  // header content row — MODE pill reflects ground truth, no aspirational
+  // labels. Three states:
+  //   live          → all env present, ZG_ROUTER_KEY set (real Qwen possible)
+  //   inference-blk → env present but ZG_ROUTER_KEY empty (audit refused;
+  //                   settle/grant still work)
+  //   env-incomplete→ readLiveConfigFromEnv threw; first missing key shown
+  const now      = new Date().toLocaleTimeString('en-GB');
+  const bundle   = tryBuildLiveBundle();
+  const modeText = bundle
+    ? (bundle.inferenceReady ? 'MODE:live' : 'MODE:inference-blocked')
+    : `MODE:env-incomplete (${(getLiveBundleError() ?? '?').slice(0, 40)})`;
+  const modeColor = bundle && bundle.inferenceReady
+    ? $.green
+    : bundle
+      ? $.yellow
+      : $.red;
+  const hLeft  = '  zhgg runtime';
+  const hRight = `${modeText}  │  ${now}  `;
+  const hPad   = ' '.repeat(Math.max(0, w - hLeft.length - hRight.length - 2));
+  put(2, 1, $.bold + $.green + '║' + $.reset);
+  put(2, 2, $.bold + $.white + hLeft + $.reset + $.dwhite + hPad + $.reset + modeColor + modeText + $.reset + $.dwhite + `  │  ${now}  ` + $.reset);
+  put(2, w, $.bold + $.green + '║' + $.reset);
+
+  put(ROW_HEADER_BOT, 1, $.bold + $.green + '╠' + '═'.repeat(mid - 1) + '╦' + '═'.repeat(w - mid - 2) + '╣' + $.reset);
+
+  // ── Top section titles ────────────────────────────────────────────────────
+  const topEnd = ROW_TOP_END();
+  put(ROW_TOP_START, 1, $.bold + $.green + '║' + $.reset);
+  put(ROW_TOP_START, 2, $.dwhite + '  ACTIVE AGENTS' + $.reset);
+  put(ROW_TOP_START, mid + 1, $.bold + $.green + '║' + $.reset);
+  put(ROW_TOP_START, mid + 2, $.dwhite + '  ACTION QUEUE' + $.reset);
+  put(ROW_TOP_START, w, $.bold + $.green + '║' + $.reset);
+
+  // Agent rows — driven by agent-registry.ts (real iNFTs minted on 0G)
+  // and current dispatch state. No hardcoded statuses.
+  const agents = liveAgents();
+  agents.forEach((a, i) => {
+    const r  = ROW_TOP_START + 1 + i;
+    const st = agentStatus(a, stagedIntent, runningCommand);
+    if (r <= topEnd) {
+      put(r, 1, $.green + '║' + $.reset);
+      put(
+        r, 3,
+        st.color + st.glyph + ' ' + pad(a.name, 14) + ' ' + $.dwhite + pad('#' + a.tokenId.toString(), 4) + ' ' +
+        $.dwhite + pad(a.scope, 26) + ' ' + st.color + st.label + $.reset,
+      );
+      put(r, mid + 1, $.green + '║' + $.reset);
+      put(r, w, $.green + '║' + $.reset);
+    }
+  });
+
+  // Action queue — only renders when an intent is staged (typed but not
+  // yet dispatched) or running. Empty otherwise; never invents a queue.
+  if (stagedIntent || runningCommand !== 'idle') {
+    const r1 = ROW_TOP_START + 1;
+    const r2 = r1 + 1;
+    const headline =
+      runningCommand === 'audit' ? `audit-agent → running on token ${stagedIntent?.kind === 'audit' ? '#' + stagedIntent.tokenId.toString() : '?'}` :
+      runningCommand === 'ask-oracle' ? 'oracle-agent → query in flight' :
+      runningCommand === 'swap' ? 'swap-agent → swap in flight' :
+      runningCommand === 'transfer' ? 'transfer-agent → tx in flight' :
+      stagedIntent?.kind === 'audit' ? `audit-agent → audit token #${stagedIntent.tokenId}` :
+      stagedIntent?.kind === 'ask-oracle' ? `oracle-agent → ${stagedIntent.topic}` :
+      stagedIntent?.kind === 'swap' ? `swap-agent → ${stagedIntent.amount} ${stagedIntent.fromSym}→${stagedIntent.toSym}` :
+      'idle';
+    const detail = runningCommand !== 'idle'
+      ? `      status=running   (await results in AUDIT TRAIL)`
+      : `      status=staged    [Enter] dispatch   [G] grant   [Esc] clear`;
+    if (r1 <= topEnd) {
+      put(r1, mid + 2, $.white + '  ▸ ' + headline + $.reset);
+      put(r1, w, $.green + '║' + $.reset);
+    }
+    if (r2 <= topEnd) {
+      const col = runningCommand !== 'idle' ? $.green : $.yellow;
+      put(r2, mid + 2, col + detail + $.reset);
+      put(r2, w, $.green + '║' + $.reset);
+    }
+  } else {
+    const r1 = ROW_TOP_START + 1;
+    if (r1 <= topEnd) {
+      put(r1, mid + 2, $.dwhite + '  (queue empty — type an intent below)' + $.reset);
+      put(r1, w, $.green + '║' + $.reset);
+    }
+  }
+
+  // Borders & side bars for top section rows
+  for (let r = ROW_TOP_START + 1; r <= topEnd; r++) {
+    put(r, 1, $.green + '║' + $.reset);
+    put(r, mid + 1, $.dgray + '│' + $.reset);
+    put(r, w, $.green + '║' + $.reset);
+  }
+
+  // ── Mid divider ───────────────────────────────────────────────────────────
+  const midDiv = ROW_MID_DIV();
+  put(midDiv, 1, $.green + '╠' + '─'.repeat(mid - 1) + '╪' + '─'.repeat(w - mid - 2) + '╣' + $.reset);
+
+  // ── Bottom section titles ─────────────────────────────────────────────────
+  const botStart = ROW_BOT_START();
+  put(botStart, 1, $.green + '║' + $.reset);
+  put(botStart, 2, $.dwhite + '  AUDIT TRAIL' + $.reset);
+  put(botStart, mid + 1, $.green + '║' + $.reset);
+  put(botStart, mid + 2, $.dwhite + '  PAYMENT FLOW + RECEIPT' + $.reset);
+  // RAIL pill — visible badge in the FLOW panel header showing the actual
+  // settled rail (truthful: only set after `oracle.payment.settle` lands).
+  // Lives just to the right of the panel title so judges can see at a
+  // glance whether x402 or direct_split actually settled this run.
+  const railPillText = flow.settledRail === 'x402'
+    ? ' RAIL: x402 '
+    : flow.settledRail === 'direct_split'
+      ? ' RAIL: direct_split '
+      : ' RAIL: — ';
+  const railPillColor = flow.settledRail === null
+    ? $.dgray
+    : $.bold + $.green + $.bgNode;
+  put(botStart, mid + 28, railPillColor + railPillText + $.reset);
+  // Controls hint (right-aligned in header). SPACE/A removed since the
+  // mock walk-through was deleted in Slice C.
+  const hint = ' ?·R·G·TAB·Q ';
+  put(botStart, w - hint.length, $.dgray + hint + $.reset);
+  put(botStart, w, $.green + '║' + $.reset);
+
+  // Audit trail (live AUDIT array, sticky-bottom).
+  const logEnd = ROW_LOG() - 1;
+  const auditCapacity = Math.max(0, logEnd - botStart);
+  const visible = AUDIT.slice(-auditCapacity);
+  visible.forEach((e, i) => {
+    const r = botStart + 1 + i;
+    if (r > logEnd) return;
+    const ec = e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite;
+    put(r, 1, $.green + '║' + $.reset);
+    const line = e.time + ' ' + pad(e.agent, 16) + ' ' + e.event;
+    put(r, 3, ec + line.slice(0, mid - 4) + $.reset);
+  });
+  // Empty hint when no events yet
+  if (AUDIT.length === 0 && botStart + 1 <= logEnd) {
+    put(botStart + 1, 3, $.dgray + '(no events — type an intent below and Enter to dispatch)' + $.reset);
+  }
+
+  // Side bars for bottom section
+  for (let r = botStart + 1; r <= logEnd; r++) {
+    put(r, 1, $.green + '║' + $.reset);
+    put(r, mid + 1, $.dgray + '│' + $.reset);
+    put(r, w, $.green + '║' + $.reset);
+  }
+
+  // ── Payment flow node diagram ─────────────────────────────────────────────
+  const fc   = FLOW_COL();
+  const nw   = FLOW_NODE_W;
+  const labels  = ['INTENT', 'POLICY', 'RAILS', 'EXECUTE'];
+
+  flow.nodes.forEach((ns, i) => {
+    const nr   = nodeRow(i);
+    const b    = nodeBorder(ns);
+    const col  = nodeStyle(ns);
+    const inner = nw - 2;
+
+    // Top border
+    if (nr <= logEnd)
+      put(nr, fc, col + b.tl + b.h.repeat(inner) + b.tr + $.reset);
+
+    // Label row
+    if (nr + 1 <= logEnd) {
+      const label = pad(' ' + labels[i]!, inner);
+      put(nr + 1, fc, col + b.v + $.reset + col + label + $.reset + col + b.v + $.reset);
+    }
+
+    // Bottom border
+    if (nr + 2 <= logEnd)
+      put(nr + 2, fc, col + b.bl + b.h.repeat(inner) + b.br + $.reset);
+
+    // Wire below (except last node)
+    if (i < 3) {
+      const wr = nr + 3;
+      if (wr <= logEnd) {
+        const wireLit = ns === 'done' || flow.nodes[i + 1] !== 'off';
+        const wc = wireLit ? $.dgreen : $.dgray;
+        const wireGlyph = wr === nr + 3 ? '│' : '▼';
+        put(wr, fc + Math.floor(nw / 2) - 1, wc + wireGlyph + $.reset);
+      }
+    }
+
+    // Rail labels beside RAILS node (index 2). Only the two rails we
+    // actually emit on `oracle.payment.settle` are shown — exactly one
+    // can be `done` per run, the other is `rejected` (truthful UI: the
+    // non-selected rail wasn't tried, but the visual contract is "lit
+    // = chosen, dim red = not chosen", which is accurate).
+    if (i === 2) {
+      const railCol = fc + nw + 2;
+      const rr = flow.rails;
+      const railLines: Array<{ label: string; ns: NS; tag: string }> = [
+        { label: 'x402        ', ns: rr.x402,        tag: rr.x402 === 'done' ? ' ◀' : '' },
+        { label: 'direct_split', ns: rr.direct_split, tag: rr.direct_split === 'done' ? ' ◀' : '' },
+      ];
+      railLines.forEach(({ label, ns: rns, tag }, ri) => {
+        const rrow = nr + ri;
+        if (rrow > logEnd) return;
+        const rc = rns === 'done'     ? $.bold + $.green
+                 : rns === 'active'   ? $.bold + $.green
+                 : rns === 'rejected' ? $.dim + $.dred
+                 : $.dgray;
+        put(rrow, railCol, rc + label + tag + $.reset);
+      });
+    }
+
+    // ✓ beside EXECUTE when done
+    if (i === 3 && ns === 'done') {
+      put(nr + 1, fc + nw + 1, $.bold + $.green + '✓ COMPLETE' + $.reset);
+    }
+  });
+
+  // Receipt JSON pane — fills the empty space at the bottom of the
+  // PAYMENT FLOW column. Renders the parsed `Split` and `NewFeedback`
+  // event payload (from receipt-feed.ts), or "no settlement yet" until
+  // a real tx lands.
+  const receiptPaneTop = nodeRow(3) + 4; // after EXECUTE node + 1 gap
+  const receiptPaneBottom = logEnd;
+  const receiptCol = fc;
+  const receiptWidth = w - receiptCol - 2;
+  if (receiptPaneTop <= receiptPaneBottom && receiptWidth > 8) {
+    put(receiptPaneTop, receiptCol, $.dgreenb + '─ RECEIPT (on-chain) ' + '─'.repeat(Math.max(0, receiptWidth - 21)) + $.reset);
+    const json = envelopeJson(receiptEnvelope);
+    const lines = json.split('\n').slice(0, Math.max(0, receiptPaneBottom - receiptPaneTop));
+    lines.forEach((ln, i) => {
+      const rr = receiptPaneTop + 1 + i;
+      if (rr > receiptPaneBottom) return;
+      put(rr, receiptCol, $.dwhite + ln.slice(0, receiptWidth) + $.reset);
+    });
+  }
+
+  // ── Log row (last legacy-flow log line) ───────────────────────────────────
+  const logRow = ROW_LOG();
+  put(logRow, 1, $.green + '╠' + '═'.repeat(w - 2) + '╣' + $.reset);
+
+  // ── Receipt status row ────────────────────────────────────────────────────
+  const receiptRow = ROW_RECEIPT();
+  put(receiptRow, 1, $.green + '║' + $.reset);
+  let receiptStatus: string;
+  if (receiptEnvelope.status === 'no settlement yet') {
+    receiptStatus = $.dgray + 'receipt: no settlement yet — dispatch an intent or grant + run --live' + $.reset;
+  } else if (receiptEnvelope.split) {
+    const s = receiptEnvelope.split;
+    receiptStatus = $.dgreen + `Split  blk=${s.blockNumber}  total=${s.totalAmount}  owner=${s.ownerCut}  k=${s.keeperCut}  z=${s.zhggCut}  c=${s.commonsCut}  tx=${shortHash(s.txHash)}` + $.reset;
+  } else {
+    receiptStatus = $.dgray + 'receipt: pending decode' + $.reset;
+  }
+  put(receiptRow, 3, receiptStatus.slice(0, w * 4));
+  put(receiptRow, w, $.green + '║' + $.reset);
+
+  // ── Persistent hint row (slice D) ─────────────────────────────────────────
+  // Always visible — eliminates the "what can I type" confusion the
+  // operator hits the first time they sit at the dashboard. The
+  // overlay (toggled via `?`) carries the full palette; this row is
+  // the breadcrumb that points at it.
+  const hintRow = ROW_HINT();
+  put(hintRow, 1, $.green + '║' + $.reset);
+  put(hintRow, 3, $.dgray + PERSISTENT_HINT + $.reset);
+  put(hintRow, w, $.green + '║' + $.reset);
+
+  // ── Intent input row ──────────────────────────────────────────────────────
+  const intentRow = ROW_INTENT();
+  put(intentRow, 1, $.green + '║' + $.reset);
+  const focused = intentMode === 'editing';
+  const prompt = focused ? $.bold + $.green + 'intent> ' + $.reset : $.dgray + 'intent> ' + $.reset;
+  let body: string;
+  if (intentBuffer.length === 0) {
+    body = focused
+      ? $.dgray + 'try: "audit oracle.zhgg.eth"  or  "ask oracle ETH/USD"' + $.reset
+      : $.dgray + '(TAB to edit)' + $.reset;
+  } else {
+    body = $.white + intentBuffer + $.reset + (focused ? $.bold + $.green + '█' + $.reset : '');
+  }
+  let trail = '';
+  if (intentHint.length > 0) trail = '  ' + $.yellow + intentHint + $.reset;
+  else if (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown') {
+    trail = '  ' + $.dgreen + 'staged: ' + formatStaged(stagedIntent) + ' [G] grant' + $.reset;
+  }
+  put(intentRow, 3, prompt + body + trail);
+  put(intentRow, w, $.green + '║' + $.reset);
+
+  // ── Status / footer ───────────────────────────────────────────────────────
+  const statusRow = ROW_STATUS();
+  // Slice C: phaseInfo is derived from `flow.nodes`, not a synthetic step
+  // counter. It picks the deepest-touched node + state so the status line
+  // shows whichever node was last moved by a real orchestrator emission.
+  // No auto-play, no SPACE-driven mock advance.
+  const phaseInfo =
+    flow.nodes[3] === 'rejected' ? $.red + 'EXECUTE rejected' + $.reset + $.dgray :
+    flow.nodes[3] === 'done'     ? $.green + 'EXECUTE done' + $.reset + $.dgray :
+    flow.nodes[3] === 'active'   ? $.amber + 'EXECUTE active' + $.reset + $.dgray :
+    flow.nodes[2] === 'rejected' ? $.red + 'RAILS rejected' + $.reset + $.dgray :
+    flow.nodes[2] === 'active'   ? $.amber + 'RAILS active' + $.reset + $.dgray :
+    flow.nodes[2] === 'done'     ? $.green + 'RAILS done' + $.reset + $.dgray :
+    flow.nodes[1] === 'rejected' ? $.red + 'POLICY rejected' + $.reset + $.dgray :
+    flow.nodes[1] === 'active'   ? $.amber + 'POLICY active' + $.reset + $.dgray :
+    flow.nodes[1] === 'done'     ? $.green + 'POLICY done' + $.reset + $.dgray :
+    flow.nodes[0] === 'active'   ? $.amber + 'INTENT active' + $.reset + $.dgray :
+    flow.nodes[0] === 'done'     ? $.green + 'INTENT done' + $.reset + $.dgray :
+                                   $.dgray + 'WAITING (no intent dispatched)' + $.reset + $.dgray;
+  const runInfo   = runningCommand === 'idle' ? '' : '  ' + $.amber + 'running ' + runningCommand + '…' + $.reset + $.dgray;
+  put(statusRow, 1, $.green + '║' + $.reset);
+  const left = $.dgray + 'FLOW: ' + phaseInfo + runInfo + $.reset;
+  const right = $.dgray + '[?] help  [Enter] dispatch  [G] grant  [TAB] focus  [Q] quit' + $.reset;
+  // Leave room for left + right; toast (if any) takes the centre.
+  put(statusRow, 3, left);
+  put(statusRow, Math.max(3, w - 70), right);
+  put(statusRow, w, $.green + '║' + $.reset);
+  put(ROW_FOOTER(), 1, $.green + '╚' + '═'.repeat(w - 2) + '╝' + $.reset);
+
+  // ── Toast overlay (centred above the status row) ──────────────────────────
+  if (toast) {
+    const tc = toast.kind === 'ok' ? $.green : toast.kind === 'err' ? $.red : $.yellow;
+    const text = ' ' + toast.text + ' ';
+    const col = Math.max(2, Math.floor((w - text.length) / 2));
+    put(receiptRow, col, tc + text + $.reset);
+  }
+
+  // ── Grant modal overlay (centred) ─────────────────────────────────────────
+  if (grantModalOpen) {
+    const modalW = Math.min(w - 8, 78);
+    const modalH = grantModalLines.length + 4;
+    const modalR = Math.max(2, Math.floor((h - modalH) / 2));
+    const modalC = Math.max(2, Math.floor((w - modalW) / 2));
+    put(modalR, modalC, $.bold + $.yellow + '╔' + '═'.repeat(modalW - 2) + '╗' + $.reset);
+    put(modalR + 1, modalC, $.bold + $.yellow + '║' + $.reset
+      + $.bgNode + $.yellow + pad(' SPEND CAP — confirm grant', modalW - 2) + $.reset
+      + $.bold + $.yellow + '║' + $.reset);
+    grantModalLines.forEach((ln, i) => {
+      put(modalR + 2 + i, modalC, $.bold + $.yellow + '║' + $.reset
+        + $.bgNode + $.white + pad(' ' + ln, modalW - 2) + $.reset
+        + $.bold + $.yellow + '║' + $.reset);
+    });
+    const lastInner = modalR + 2 + grantModalLines.length;
+    put(lastInner, modalC, $.bold + $.yellow + '║' + $.reset
+      + $.bgNode + $.dwhite + pad('   [Enter] confirm   [Esc] cancel', modalW - 2) + $.reset
+      + $.bold + $.yellow + '║' + $.reset);
+    put(lastInner + 1, modalC, $.bold + $.yellow + '╚' + '═'.repeat(modalW - 2) + '╝' + $.reset);
+  }
+
+  // ── Help overlay (slice D) ────────────────────────────────────────────────
+  // Floats over the FLOW + RECEIPT panel so the audit trail stays
+  // readable while the operator scans the palette. Anchored to the
+  // right half of the screen with a dimmed border to read as
+  // "informational, not modal" (the grant modal uses bold yellow for
+  // a real action; help uses dim-green for ambient guidance).
+  if (helpOverlayOpen) {
+    const helpBody = buildHelpLines();
+    // Compute width from the longest line (plus padding) but cap at
+    // the panel width so it never spills outside the FLOW column.
+    const longest = helpBody.reduce((m, ln) => Math.max(m, ln.length), 0);
+    const minW = Math.min(64, w - mid - 6);
+    const overlayW = Math.max(minW, Math.min(w - mid - 6, longest + 4));
+    const overlayH = helpBody.length + 2; // 2 = top + bottom border
+    const overlayC = Math.max(mid + 2, w - overlayW - 2);
+    const overlayR = Math.max(ROW_BOT_START() + 1, ROW_LOG() - overlayH - 1);
+    // Top border with title.
+    const title = '─ COMMAND HELP ';
+    const topFill = '─'.repeat(Math.max(0, overlayW - title.length - 2));
+    put(overlayR, overlayC, $.dgreen + '┌' + title + topFill + '┐' + $.reset);
+    helpBody.forEach((ln, i) => {
+      const r = overlayR + 1 + i;
+      // Pad to overlayW-2 to fully clear whatever pixels (FLOW glyphs)
+      // were underneath. Slice in case a line accidentally overruns.
+      const padded = pad(ln, overlayW - 2).slice(0, overlayW - 2);
+      put(r, overlayC, $.dgreen + '│' + $.reset + $.white + padded + $.reset + $.dgreen + '│' + $.reset);
+    });
+    put(overlayR + helpBody.length + 1, overlayC, $.dgreen + '└' + '─'.repeat(overlayW - 2) + '┘' + $.reset);
+  }
+
+  return f;
+}
