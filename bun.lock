@@ -52,6 +52,7 @@
         "@zhgg/router": "workspace:*",
         "@zhgg/tui": "workspace:*",
         "@zhgg/workflow": "workspace:*",
+        "viem": "^2.21.0",
       },
       "devDependencies": {
         "@types/bun": "latest",

@@ -10,6 +10,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "viem": "^2.21.0",
     "@keeperhub/wallet": "^0.1.8",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
