@@ -213,7 +213,7 @@ export async function submitExactInputSingle(
     args: [args.params],
     value: args.value,
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
 
 /// Variant: ETH → ERC-20 via SwapRouter02.multicall([exactInputSingle, refundETH]).
@@ -241,7 +241,7 @@ export async function submitEthInExactInputSingle(
     args: [[swapData, refundData]],
     value: args.value,
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
 
 /// Variant: ERC-20 → ETH via SwapRouter02.multicall([exactInputSingle, unwrapWETH9]).
@@ -275,5 +275,5 @@ export async function submitErc20OutEthExactInputSingle(
     args: [[swapData, unwrapData]],
     value: args.value,
   });
-  return deps.walletClient.writeContract(sim.request);
+  return deps.walletClient.writeContract({ ...sim.request, chain: null });
 }
