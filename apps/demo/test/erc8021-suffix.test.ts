@@ -5,7 +5,9 @@ import {
   appendSuffix,
   detectSuffix,
   encodeSchema0Suffix,
+  encodeSchema2Suffix,
   withErc8021,
+  withErc8021Schema2,
 } from '../src/erc8021-suffix.js';
 
 const SPLITTER_ABI = parseAbi([
@@ -36,9 +38,11 @@ describe('encodeSchema0Suffix', () => {
     const data = ('0xdeadbeef' + suffix.slice(2)) as `0x${string}`;
     const det = detectSuffix(data);
     expect(det.found).toBe(true);
-    if (det.found) {
+    if (det.found && det.schemaId === 0) {
       expect(det.codes).toEqual(['zhgg', 'baseapp']);
       expect(det.schemaId).toBe(0);
+    } else {
+      throw new Error('expected schemaId=0');
     }
   });
 });
@@ -66,9 +70,11 @@ describe('detectSuffix', () => {
     const tagged = withErc8021(inner, ['zhgg']);
     const det = detectSuffix(tagged);
     expect(det.found).toBe(true);
-    if (det.found) {
+    if (det.found && det.schemaId === 0) {
       expect(det.codes).toEqual(['zhgg']);
       expect(det.schemaId).toBe(0);
+    } else {
+      throw new Error('expected schemaId=0');
     }
   });
 });
@@ -97,5 +103,85 @@ describe('appendSuffix + withErc8021', () => {
     const out = appendSuffix(inner, suffix);
     expect(out.startsWith(inner)).toBe(true);
     expect(out.length).toBe(inner.length + suffix.length - 2); // -2 for the duplicate 0x
+  });
+});
+
+describe('encodeSchema2Suffix (CBOR via ox)', () => {
+  it('produces a suffix that ends with MAGIC', () => {
+    const suffix = encodeSchema2Suffix({ appCode: 'zhgg' });
+    expect(suffix.endsWith(ERC8021_MAGIC.slice(2))).toBe(true);
+  });
+
+  it('encodes appCode + walletCode + serviceCodes', () => {
+    // Pre-pad with a fake 4-byte selector so detect() clears the >=4 byte
+    // check (matches the Schema 0 test pattern at :36-43).
+    const suffix = encodeSchema2Suffix({
+      appCode: 'zhgg',
+      walletCode: 'phantom',
+      serviceCodes: ['keeperhub', '0xabc'],
+    });
+    const data = ('0xdeadbeef' + suffix.slice(2)) as `0x${string}`;
+    const det = detectSuffix(data);
+    expect(det.found).toBe(true);
+    if (det.found && det.schemaId === 2) {
+      expect(det.attribution.appCode).toBe('zhgg');
+      expect(det.attribution.walletCode).toBe('phantom');
+      expect(det.attribution.serviceCodes).toEqual(['keeperhub', '0xabc']);
+    } else {
+      throw new Error('expected schemaId=2');
+    }
+  });
+
+  it('survives the full audit-pay calldata shape end-to-end', () => {
+    // This mirrors apps/demo/src/live-deps.ts:settleOraclePayment exactly:
+    // encodeFunctionData(splitERC20Erc8021) + withErc8021Schema2(zhgg attribution)
+    // The bytes produced here are byte-identical to what the live tx sends.
+    const inner = encodeFunctionData({
+      abi: SPLITTER_ABI,
+      functionName: 'splitERC20Erc8021',
+      args: [
+        '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // USDC Base Sepolia
+        100_000n, // 0.1 USDC
+        '0x557E1E07652B75ABaA667223B11704165fC94d09', // oracleOwner
+      ],
+    });
+    const tagged = withErc8021Schema2(inner, {
+      appCode: 'zhgg',
+      walletCode: undefined,
+      serviceCodes: ['keeperhub', '0x557E1E07652B75ABaA667223B11704165fC94d09'],
+    });
+    const det = detectSuffix(tagged);
+    expect(det.found).toBe(true);
+    if (det.found && det.schemaId === 2) {
+      expect(det.attribution.appCode).toBe('zhgg');
+      expect(det.attribution.serviceCodes).toEqual([
+        'keeperhub',
+        '0x557E1E07652B75ABaA667223B11704165fC94d09',
+      ]);
+    } else {
+      throw new Error('expected schemaId=2');
+    }
+  });
+
+  it('round-trip preserves the canonical suffix bytes', () => {
+    const opts = { appCode: 'zhgg', serviceCodes: ['keeperhub'] };
+    const suffix = encodeSchema2Suffix(opts);
+    // detectSuffix re-encodes via encodeSchema2Suffix; both paths must
+    // produce byte-equal output (ox uses deterministic CBOR — sorted
+    // keys, definite-length).
+    const data = ('0xdeadbeef' + suffix.slice(2)) as `0x${string}`;
+    const det = detectSuffix(data);
+    expect(det.found).toBe(true);
+    if (det.found) {
+      expect(det.suffix).toBe(suffix);
+    }
+  });
+
+  it('detectSuffix on plain Schema 0 still works (no regression)', () => {
+    const inner = '0xdeadbeef' as `0x${string}`;
+    const tagged = withErc8021(inner, ['zhgg']);
+    const det = detectSuffix(tagged);
+    expect(det.found).toBe(true);
+    if (det.found) expect(det.schemaId).toBe(0);
   });
 });

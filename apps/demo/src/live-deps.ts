@@ -16,6 +16,7 @@
 import {
   createPublicClient,
   createWalletClient,
+  encodeFunctionData,
   http,
   maxUint256,
   parseAbi,
@@ -44,9 +45,11 @@ import {
   pinMemoryRoot as pinMemoryRootFn,
 } from './loop-helpers.js';
 import { syntheticInferImpl } from './live-deps-mock.js';
+import { withErc8021Schema2 } from './erc8021-suffix.js';
 
 const FEE_SPLITTER_ABI = parseAbi([
   'function splitERC20(address asset, uint256 totalAmount, address agentOwner)',
+  'function splitERC20Erc8021(address asset, uint256 totalAmount, address agentOwner)',
 ]);
 
 // Slice of AgentRegistry ABI containing only `giveFeedback`. The mint
@@ -266,16 +269,44 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       }
     }
 
-    // Trigger the actual split. Returns when mined.
-    const sim = await basePub.simulateContract({
-      account: baseAccount,
-      address: cfg.feeSplitter,
+    // Trigger the actual split, tagged with EIP-8021 Schema 2 attribution.
+    //
+    // We hand-build the calldata + suffix because viem's `writeContract`
+    // re-encodes from the ABI on every send and would strip the trailing
+    // suffix bytes (see apps/demo/src/erc8021-suffix.ts:5-13). The on-chain
+    // FeeSplitter reverts if the suffix is missing
+    // (contracts/src/FeeSplitter.sol:161-162), so we lose the simulateContract
+    // preflight; estimateGas + receipt-status check restore that safety.
+    const calldata = encodeFunctionData({
       abi: FEE_SPLITTER_ABI,
-      functionName: 'splitERC20',
+      functionName: 'splitERC20Erc8021',
       args: [cfg.usdc, ORACLE_PAYMENT_ATOMIC, cfg.oracleOwner],
     });
-    const txHash = await baseWallet.writeContract(sim.request);
-    await basePub.waitForTransactionReceipt({ hash: txHash });
+    const data = withErc8021Schema2(calldata, {
+      appCode: 'zhgg',
+      walletCode: cfg.walletCode || undefined,
+      serviceCodes: ['keeperhub', cfg.oracleOwner],
+    });
+    // Preflight gas estimation surfaces a revert before submission so
+    // the caller sees `feesplitter_revert` instead of a half-mined tx.
+    await basePub.estimateGas({
+      account: baseAccount,
+      to: cfg.feeSplitter,
+      data,
+    });
+    // `chain: null` because baseWallet is chainless (createWalletClient
+    // at :157 doesn't pin a chain). viem requires an explicit `chain`
+    // value here even though it's effectively a no-op.
+    const txHash = await baseWallet.sendTransaction({
+      account: baseAccount,
+      chain: null,
+      to: cfg.feeSplitter,
+      data,
+    });
+    const receipt = await basePub.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status !== 'success') {
+      throw new Error(`feesplitter_revert: tx ${txHash} status=${receipt.status}`);
+    }
     return {
       txHash,
       network: 'eip155:84532',
