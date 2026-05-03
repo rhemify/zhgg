@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "exportedAt": "2026-05-03T00:00:00.000Z",
+  "workflow": {
+    "name": "EU AI Act Audit (zhgg)",
+    "description": "Pay $0.10 USDC, get a tamper-proof EU AI Act compliance certificate for any AI agent. The audit runs on 0G Compute (TEE-verified Qwen inference) against Articles 5, 13, and 50 of Regulation (EU) 2024/1689. The verdict is anchored on 0G Storage and an ERC-8004 reputation receipt is posted on 0G Galileo (chain id 16602). \n\nARCHITECTURE (per ERC-8183 / Agentic Commerce Protocol): the workflow creates an on-chain Job on AgenticCommerce on Base Sepolia. zhgg's audit-agent — an ERC-7857 iNFT on 0G Galileo — picks up the JobFunded event off-chain, runs the audit on 0G's full stack (Compute + Storage + Chain + iNFT), posts an ERC-8004 reputation receipt on Galileo, then calls `submit` + `complete` on Base with the receipt's hash as the `completionReason`. Result: one cross-chain link between the on-chain ACP job (Base) and the on-chain audit verdict (0G). KH owns discovery + payment; 0G owns identity, memory, compute, storage, reputation. \n\nTO DEPLOY ON YOUR OWN ORG: (1) Import this JSON via the Hub upload UI. (2) Create a `web3` integration named `zhgg-author-wallet` bound to a Base Sepolia EOA that holds USDC and has approved the AgenticCommerce contract for at least the funding budget per call (the JSON ships with 50000 = $0.05 USDC budget, plus gas; pre-approve once via `usdc.approve(ACP_BASE_ADDRESS, MAX_UINT256)`). (3) Replace `0xa804098fDf00a90dD04A8d4661D3ff5E7769Ad44` and `0x036CbD53842c5426634e7929541eC2318f3dCF7e` placeholders in the createJob/fund-job nodes with the deployed addresses. (4) Bind the integration to both action nodes — already declared in `integrationBindings`. (5) Make sure zhgg's off-chain ACP listener (apps/acp-listener) is running so JobFunded events get picked up and audited. (6) Flip `marketplace.active` from `false` to `true` to list it in the public marketplace."
+  },
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger",
+      "position": { "x": 100, "y": 250 },
+      "data": {
+        "type": "trigger",
+        "label": "Manual",
+        "config": {
+          "triggerType": "Manual",
+          "inputSchema": {
+            "agentName": {
+              "type": "string",
+              "description": "Target agent's display name. The off-chain audit-agent resolves this to an iNFT token id and reads capabilities from 0G chain — no manifest needed in this surface. Use `oracle-agent` for zhgg's reference iNFT if you don't own one yet."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "create-job",
+      "type": "action",
+      "position": { "x": 400, "y": 250 },
+      "data": {
+        "type": "action",
+        "label": "AgenticCommerce.createJob (Base Sepolia)",
+        "config": {
+          "actionType": "web3/write-contract",
+          "chainId": 84532,
+          "address": "0xa804098fDf00a90dD04A8d4661D3ff5E7769Ad44",
+          "abi": "[{\"type\":\"function\",\"name\":\"createJob\",\"inputs\":[{\"name\":\"provider\",\"type\":\"address\"},{\"name\":\"evaluator\",\"type\":\"address\"},{\"name\":\"paymentToken\",\"type\":\"address\"},{\"name\":\"expiredAt\",\"type\":\"uint64\"},{\"name\":\"description\",\"type\":\"string\"},{\"name\":\"hook\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"jobId\",\"type\":\"uint256\"}],\"stateMutability\":\"nonpayable\"}]",
+          "functionName": "createJob",
+          "args": [
+            "0x0000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000",
+            "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "4102444800",
+            "{{@trigger:Manual.agentName}}",
+            "0x0000000000000000000000000000000000000000"
+          ]
+        }
+      }
+    },
+    {
+      "id": "fund-job",
+      "type": "action",
+      "position": { "x": 700, "y": 250 },
+      "data": {
+        "type": "action",
+        "label": "AgenticCommerce.fund (Base Sepolia)",
+        "config": {
+          "actionType": "web3/write-contract",
+          "chainId": 84532,
+          "address": "0xa804098fDf00a90dD04A8d4661D3ff5E7769Ad44",
+          "abi": "[{\"type\":\"function\",\"name\":\"fund\",\"inputs\":[{\"name\":\"jobId\",\"type\":\"uint256\"},{\"name\":\"expectedBudget\",\"type\":\"uint256\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"}]",
+          "functionName": "fund",
+          "args": [
+            "{{@create-job:AgenticCommerce.createJob.jobId}}",
+            "50000"
+          ]
+        }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "trigger", "target": "create-job" },
+    { "id": "e2", "source": "create-job", "target": "fund-job" }
+  ],
+  "integrationBindings": [
+    {
+      "integrationType": "web3",
+      "credentialName": "zhgg-author-wallet",
+      "nodeIds": ["create-job", "fund-job"]
+    }
+  ],
+  "marketplace": {
+    "slug": "eu-ai-act-audit",
+    "active": false,
+    "priceUsdc": "0.10",
+    "category": "compliance",
+    "protocols": ["0g", "erc-8004", "erc-8183"],
+    "description": "Real-time EU AI Act compliance certificate for any AI agent. Three TEE-verified probes against Articles 5 (prohibited practices), 13 (transparency), and 50 (disclosure to natural persons) of Regulation (EU) 2024/1689. Implemented as an ERC-8183 (Agentic Commerce Protocol) job: this workflow creates and funds the job on Base Sepolia; zhgg's audit-agent — an ERC-7857 iNFT on 0G Galileo — runs the audit on 0G's full stack (Compute + Storage + Chain + iNFT), posts an ERC-8004 reputation receipt on Galileo, then calls `complete` on the Base-side contract with the receipt's hash as the cross-chain link. The buyer can verify both the ACP job state on basescan and the audit verdict on 0G chainscan.",
+    "inputSchema": {
+      "agentName": {
+        "type": "string",
+        "description": "Target agent's display name (e.g. `oracle-agent`). The auditor resolves this to an iNFT on 0G and reads capabilities from chain."
+      }
+    },
+    "outputSchema": {
+      "jobId": {
+        "source": "create-job.jobId",
+        "type": "string",
+        "description": "ACP job id on Base Sepolia. Look up via AgenticCommerce.jobOf(jobId) for state + completionReason."
+      },
+      "fundTxHash": {
+        "source": "fund-job.transactionHash",
+        "type": "string",
+        "description": "Tx hash of the JobFunded event. The off-chain audit-agent watches for this event and triggers the audit pipeline."
+      }
+    }
+  }
+}
