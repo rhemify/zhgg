@@ -28,7 +28,7 @@ function buildHandler() {
     authToken: TOKEN,
     routes: {
       audit: {
-        runAuditFn: async () => FAKE_REPORT,
+        runAuditFn: async () => ({ report: FAKE_REPORT, canonicalReport: null }),
       },
       oracle: {
         // Default — overridden per test below where needed.
@@ -167,6 +167,83 @@ describe('POST /agents/audit/call', () => {
     expect(body.report.target.agentName).toBe('oracle.zhgg.eth');
     expect(body.report.verdict).toBe('compliant');
   });
+
+  it('returns canonicalReport alongside legacy report when runAuditFn supplies it', async () => {
+    // Reviewer fix #1 — the MCP route MUST surface the Slice-Y
+    // canonical AuditReport so KH-side callers get the EU AI Act
+    // evidence chain, not just the legacy probe-result shape.
+    const FAKE_CANONICAL = {
+      version: '1.0' as const,
+      auditorAgent: {
+        iNFTAddress: '0x5298f4d8d8043c14e5f2683ad642febc8b54638f' as `0x${string}`,
+        tokenId: '1',
+        ens: 'audit.zhgg.eth',
+        manifestHash: ('0x' + '0'.repeat(64)) as `0x${string}`,
+        owner: '0x557E1E07652B75ABaA667223B11704165fC94d09' as `0x${string}`,
+      },
+      subjectAgent: {
+        tokenId: '7',
+        ens: 'oracle.zhgg.eth',
+        capabilitiesAtAudit: ('0x' + '0'.repeat(64)) as `0x${string}`,
+        registeredAtBlock: '0',
+      },
+      regulation: {
+        framework: 'EU AI Act Regulation 2024/1689',
+        articlesProbed: ['EU AI Act Article 5'],
+      },
+      evidenceChain: {},
+      verdict: {
+        compliant: true,
+        findings: [],
+        confidence: 0.95,
+        valueSigned: 100,
+        valueDecimals: 0,
+      },
+      anchors: {
+        feedbackHash: ('0x' + '0'.repeat(64)) as `0x${string}`,
+        storageURI: '',
+      },
+    };
+    const handler = createFetchHandler({
+      authToken: TOKEN,
+      routes: {
+        audit: {
+          runAuditFn: async () => ({ report: FAKE_REPORT, canonicalReport: FAKE_CANONICAL }),
+        },
+        oracle: { queryOracleFn: async () => ({ ok: true, topic: 'eu-ai-act', asOf: '2026', data: { kind: 'regulatory', deltas: [] } }) },
+        swap: {
+          executeSwapFn: async () => { throw new Error('not used'); },
+          // Stub clients — never reached because the test only exercises
+          // the audit route.
+          clients: {
+            publicClient: {} as never,
+            walletClient: {} as never,
+            account: '0x0000000000000000000000000000000000000000',
+          },
+        },
+      },
+    });
+    const res = await handler(
+      new Request('http://localhost/agents/audit/call', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          agentId: '7',
+          agentName: 'oracle.zhgg.eth',
+          manifest: 'returns reg deltas + prices',
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      report: { target: { agentId: string } };
+      canonicalReport: typeof FAKE_CANONICAL | null;
+    };
+    expect(body.canonicalReport).not.toBeNull();
+    expect(body.canonicalReport!.regulation.framework).toBe('EU AI Act Regulation 2024/1689');
+    expect(body.canonicalReport!.subjectAgent.tokenId).toBe('7');
+    expect(body.canonicalReport!.auditorAgent.ens).toBe('audit.zhgg.eth');
+  });
 });
 
 describe('POST /agents/oracle/call', () => {
@@ -192,7 +269,7 @@ describe('POST /agents/oracle/call', () => {
     const handler = createFetchHandler({
       authToken: TOKEN,
       routes: {
-        audit: { runAuditFn: async () => FAKE_REPORT },
+        audit: { runAuditFn: async () => ({ report: FAKE_REPORT, canonicalReport: null }) },
         oracle: {
           queryOracleFn: async (q): Promise<OracleResponse> => {
             expect(q.topic).toBe('eu-ai-act');

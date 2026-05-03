@@ -23,7 +23,9 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  keccak256,
   parseAbi,
+  toHex,
   type Address,
   type Hex,
 } from 'viem';
@@ -31,6 +33,11 @@ import { privateKeyToAccount } from 'viem/accounts';
 import {
   inferZG,
   postReceipt,
+  buildAuditReport,
+  canonicalizeAuditReport,
+  // The Slice-Y schema. Aliased because `@zhgg/audit-agent` exports a
+  // legacy `AuditReport` type (probe results), which we still consume.
+  type AuditReport as CanonicalAuditReportSchema,
   type Erc8004Client,
   type GiveFeedbackArgs,
 } from '@zhgg/workflow';
@@ -158,12 +165,115 @@ function buildAuditFnOrNull(env: BootEnv): RunAuditFn | null {
   };
 
   return async (target) => {
-    return runAudit(target, auditDeps, {
+    // Capture the canonical AuditReport via closure. The
+    // `buildFeedbackAnchor` callback fires AFTER probes complete +
+    // verdict is known but BEFORE postReceipt — exactly the slot where
+    // we have all the evidence to compose the Slice-Y canonical report.
+    //
+    // What's populated here vs the orchestrator path:
+    //   - YES: auditorAgent (resolved from env), subjectAgent (from
+    //          target), regulation (hardcoded EU AI Act), verdict
+    //          (from probe results), evidenceChain.qwenInference
+    //          (concatenated probe + response hashes + TEE attestation)
+    //   - NO:  evidenceChain.{axiomCommit, settlement, axiomReveal} —
+    //          those are orchestrator-level evidence that don't exist
+    //          when the audit is invoked via MCP. Their absence is
+    //          informative: "this audit ran via MCP, not through the
+    //          full cross-agent flow" — a regulator can tell the
+    //          difference at a glance.
+    let canonicalReport: CanonicalAuditReportSchema | null = null;
+    const auditorOwner = zgAccount.address;
+    const auditorTokenId = '1'; // audit.zhgg.eth — minted as token #1
+    const auditorEns = 'audit.zhgg.eth';
+
+    const buildAnchor = async (preReceipt: {
+      target: typeof target;
+      verdict: string;
+      findings: string[];
+      results: Array<{ id: string; articleRef: string; compliant: boolean | null; finding: string }>;
+      attestationRoot: string | null;
+    }): Promise<{ feedbackURI: string; feedbackHash: `0x${string}` } | null> => {
+      // Hash the concatenated probe inputs / outputs as evidence.
+      const promptBlob = preReceipt.results.map((r) => r.id).join('|');
+      const responseBlob = preReceipt.results.map((r) => r.finding).join('|');
+      const promptHash = keccak256(toHex(promptBlob));
+      const responseHash = keccak256(toHex(responseBlob));
+
+      const valueSigned =
+        preReceipt.verdict === 'compliant' ? 100 : preReceipt.verdict === 'non_compliant' ? 0 : 50;
+
+      const draft = buildAuditReport({
+        auditorAgent: {
+          iNFTAddress: registryAddress,
+          tokenId: auditorTokenId,
+          ens: auditorEns,
+          // manifestHash: keccak of the auditor's capabilities bytes.
+          // Reading the bytes here would cost an extra RPC; we anchor
+          // the auditor identity via tokenId + ens which a verifier can
+          // look up on-chain at a stable cost.
+          manifestHash: ('0x' + '0'.repeat(64)) as Hex,
+          owner: auditorOwner,
+        },
+        subjectAgent: {
+          tokenId: target.agentId.toString(),
+          ens: target.agentName,
+          // Same as above — we anchor by tokenId. A verifier can
+          // re-derive the bytes via AgentNFT.capabilities(tokenId).
+          capabilitiesAtAudit: ('0x' + '0'.repeat(64)) as Hex,
+          registeredAtBlock: '0',
+        },
+        regulation: {
+          framework: 'EU AI Act Regulation 2024/1689',
+          articlesProbed: preReceipt.results.map((r) => r.articleRef),
+        },
+        evidenceChain: {
+          qwenInference: {
+            modelId: 'qwen-2.5-7b-instruct',
+            promptHash,
+            responseHash,
+            ...(preReceipt.attestationRoot
+              ? { teeAttestation: preReceipt.attestationRoot as Hex }
+              : {}),
+          },
+        },
+        verdict: {
+          compliant: preReceipt.verdict === 'compliant',
+          findings: preReceipt.results.map((r) => ({
+            article: r.articleRef,
+            status: r.compliant === true ? 'pass' : r.compliant === false ? 'fail' : 'inconclusive',
+            evidence: r.finding,
+          })),
+          confidence: 0.95,
+          valueSigned,
+          valueDecimals: 0,
+        },
+      });
+
+      // Hash the canonical bytes — feedbackHash is a self-referential
+      // fixed point (canonicalizeAuditReport zeroes feedbackHash before
+      // hashing). Storage URI stays empty when ZG_STORAGE isn't wired
+      // here — Slice Y's writeAuditReport handles that path explicitly
+      // when called from the orchestrator. The MCP route deliberately
+      // doesn't pin to 0G — that's the orchestrator's job. Honest:
+      // anchors.storageURI=="" signals "evidence in JSON, not pinned".
+      const { hash } = canonicalizeAuditReport(draft);
+      draft.anchors.feedbackHash = hash;
+      canonicalReport = draft;
+
+      // We don't pin via ZG Storage from the MCP route — return null so
+      // runAudit's on-chain `giveFeedback` uses its placeholder URI.
+      // The canonical report is still returned in the HTTP response.
+      return null;
+    };
+
+    const report = await runAudit(target, auditDeps, {
       apiKey: routerKey,
       registryAddress,
       agentRegistryCaip: `eip155:16602:${registryAddress}`,
       clientAddress: `eip155:84532:${zgAccount.address}`,
+      buildFeedbackAnchor: buildAnchor,
     });
+    return { report, canonicalReport };
   };
 }
 

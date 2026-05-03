@@ -82,6 +82,31 @@ describe('canonicalJsonStringify', () => {
   it('preserves null literally', () => {
     expect(canonicalJsonStringify({ a: null })).toBe('{"a":null}');
   });
+
+  // Reviewer fix #3 — bigint guard
+  it('throws AuditReportError(invalid_hex) on raw bigint values, with field path', () => {
+    let err: unknown = null;
+    try {
+      canonicalJsonStringify({ outer: { tokenId: 123n } });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AuditReportError);
+    expect((err as AuditReportError).kind).toBe('invalid_hex');
+    expect((err as AuditReportError).field).toContain('outer.tokenId');
+    expect((err as AuditReportError).field).toContain('bigint must be string-encoded');
+  });
+
+  it('bigint guard fires inside arrays with index in path', () => {
+    let err: unknown = null;
+    try {
+      canonicalJsonStringify({ ids: [1n, 2n] });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(AuditReportError);
+    expect((err as AuditReportError).field).toContain('ids[0]');
+  });
 });
 
 describe('buildAuditReport', () => {
@@ -123,6 +148,41 @@ describe('buildAuditReport', () => {
       regulation: { ...validInput.regulation, articlesProbed: 'oops' as unknown as string[] },
     };
     expect(() => buildAuditReport(broken)).toThrow(/regulation\.articlesProbed/);
+  });
+
+  // Reviewer fix #2 — hex shape validation
+  it('rejects auditorAgent.iNFTAddress when it is not 0x-hex', () => {
+    const broken = {
+      ...validInput,
+      auditorAgent: { ...validInput.auditorAgent, iNFTAddress: 'not-an-address' as `0x${string}` },
+    };
+    let err: unknown = null;
+    try { buildAuditReport(broken); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(AuditReportError);
+    expect((err as AuditReportError).kind).toBe('invalid_hex');
+    expect((err as AuditReportError).field).toBe('auditorAgent.iNFTAddress');
+  });
+
+  it('rejects subjectAgent.capabilitiesAtAudit when missing 0x prefix', () => {
+    const broken = {
+      ...validInput,
+      subjectAgent: {
+        ...validInput.subjectAgent,
+        capabilitiesAtAudit: 'abcd1234' as `0x${string}`, // no 0x prefix
+      },
+    };
+    expect(() => buildAuditReport(broken)).toThrow(/invalid_hex/);
+  });
+
+  it('rejects auditorAgent.manifestHash with non-hex chars', () => {
+    const broken = {
+      ...validInput,
+      auditorAgent: {
+        ...validInput.auditorAgent,
+        manifestHash: '0xZZZZZZ' as `0x${string}`,
+      },
+    };
+    expect(() => buildAuditReport(broken)).toThrow(/auditorAgent\.manifestHash/);
   });
 });
 

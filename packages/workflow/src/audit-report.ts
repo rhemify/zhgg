@@ -129,13 +129,16 @@ export interface BuildAuditReportInput {
 /// when a required slot is missing. Optional fields (axiomCommit,
 /// settlement, etc.) are passed through verbatim.
 export function buildAuditReport(input: BuildAuditReportInput): AuditReport {
-  requireString(input.auditorAgent?.iNFTAddress, 'auditorAgent.iNFTAddress');
+  // Reviewer fix #2 — hex slots are validated against `0x[0-9a-fA-F]+`
+  // so a typo doesn't silently produce a "valid" report that fails
+  // strict viem decoders or regulator-side hash verification.
+  requireHex(input.auditorAgent?.iNFTAddress, 'auditorAgent.iNFTAddress');
   requireString(input.auditorAgent?.tokenId, 'auditorAgent.tokenId');
   requireString(input.auditorAgent?.ens, 'auditorAgent.ens');
-  requireString(input.auditorAgent?.manifestHash, 'auditorAgent.manifestHash');
-  requireString(input.auditorAgent?.owner, 'auditorAgent.owner');
+  requireHex(input.auditorAgent?.manifestHash, 'auditorAgent.manifestHash');
+  requireHex(input.auditorAgent?.owner, 'auditorAgent.owner');
   requireString(input.subjectAgent?.tokenId, 'subjectAgent.tokenId');
-  requireString(input.subjectAgent?.capabilitiesAtAudit, 'subjectAgent.capabilitiesAtAudit');
+  requireHex(input.subjectAgent?.capabilitiesAtAudit, 'subjectAgent.capabilitiesAtAudit');
   requireString(input.subjectAgent?.registeredAtBlock, 'subjectAgent.registeredAtBlock');
   requireString(input.regulation?.framework, 'regulation.framework');
   if (!Array.isArray(input.regulation?.articlesProbed)) {
@@ -177,21 +180,33 @@ export function buildAuditReport(input: BuildAuditReportInput): AuditReport {
 // ─── Canonicalize ────────────────────────────────────────────────────
 
 /// Recursive key-sorted JSON.stringify. No whitespace, stable across
-/// runs, BigInts must already be string-encoded by the caller.
-/// `undefined` properties are dropped (matches JSON.stringify). Arrays
-/// keep insertion order — only object keys sort.
-export function canonicalJsonStringify(value: unknown): string {
+/// runs. `undefined` properties are dropped (matches JSON.stringify).
+/// Arrays keep insertion order — only object keys sort.
+///
+/// Reviewer fix #3 — `bigint` values are explicitly rejected with a
+/// typed `AuditReportError(invalid_hex)` (re-using the kind because
+/// the field path is named for grepability). The schema documents
+/// "bigint encoded as decimal string for cross-language JSON parity"
+/// but nothing else enforces it; without this guard, `JSON.stringify`
+/// would throw `TypeError: Do not know how to serialize a BigInt` mid-
+/// canonicalization with no breadcrumbs about which field. We surface
+/// the field path so the operator can fix the caller, not chase a
+/// stack trace.
+export function canonicalJsonStringify(value: unknown, path = '<root>'): string {
   if (value === undefined) return 'null';
+  if (typeof value === 'bigint') {
+    throw new AuditReportError('invalid_hex', `${path} (bigint must be string-encoded)`);
+  }
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) {
-    return '[' + value.map(canonicalJsonStringify).join(',') + ']';
+    return '[' + value.map((v, i) => canonicalJsonStringify(v, `${path}[${i}]`)).join(',') + ']';
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj)
     .filter((k) => obj[k] !== undefined)
     .sort();
   const inner = keys
-    .map((k) => JSON.stringify(k) + ':' + canonicalJsonStringify(obj[k]))
+    .map((k) => JSON.stringify(k) + ':' + canonicalJsonStringify(obj[k], `${path}.${k}`))
     .join(',');
   return '{' + inner + '}';
 }
@@ -330,7 +345,12 @@ export async function writeAuditReport(
 
 export class AuditReportError extends Error {
   constructor(
-    public readonly kind: 'missing_field',
+    /// `missing_field` — required slot absent or empty.
+    /// `invalid_hex`   — string present but doesn't match `0x[0-9a-fA-F]+`.
+    ///                   Reviewer fix #2: catches typos that would silently
+    ///                   pass strict viem decoders downstream and corrupt
+    ///                   the regulator's verification flow.
+    public readonly kind: 'missing_field' | 'invalid_hex',
     public readonly field: string
   ) {
     super(`AuditReportError(${kind}): ${field}`);
@@ -339,9 +359,22 @@ export class AuditReportError extends Error {
 }
 
 const ZERO_HASH: Hex = `0x${'0'.repeat(64)}` as Hex;
+const HEX_RE = /^0x[a-fA-F0-9]+$/;
 
 function requireString(v: unknown, field: string): asserts v is string {
   if (typeof v !== 'string' || v.length === 0) {
     throw new AuditReportError('missing_field', field);
+  }
+}
+
+/// Reviewer fix #2 — validates `0x[0-9a-fA-F]+` shape on top of the
+/// presence check. Empty / non-string still surfaces as `missing_field`
+/// (cheap-to-grep test) so the error kind matches operator intuition;
+/// malformed hex surfaces as `invalid_hex` so it's distinguishable from
+/// a missing slot.
+function requireHex(v: unknown, field: string): asserts v is `0x${string}` {
+  requireString(v, field);
+  if (!HEX_RE.test(v)) {
+    throw new AuditReportError('invalid_hex', field);
   }
 }
