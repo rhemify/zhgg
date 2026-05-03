@@ -134,11 +134,11 @@ export function buildFrame(state: FrameState): string {
     const r1 = ROW_TOP_START + 1;
     const r2 = r1 + 1;
     const headline =
-      runningCommand === 'audit' ? `audit-agent → running on token ${stagedIntent?.kind === 'audit' ? '#' + stagedIntent.tokenId.toString() : '?'}` :
+      runningCommand === 'audit' ? `audit-agent → running on token ${stagedIntent?.kind === 'audit' ? '#' + stagedIntent.tokenId.toString() : '?'} topic=${stagedIntent?.kind === 'audit' ? stagedIntent.topic : '?'}` :
       runningCommand === 'ask-oracle' ? 'oracle-agent → query in flight' :
       runningCommand === 'swap' ? 'swap-agent → swap in flight' :
       runningCommand === 'transfer' ? 'transfer-agent → tx in flight' :
-      stagedIntent?.kind === 'audit' ? `audit-agent → audit token #${stagedIntent.tokenId}` :
+      stagedIntent?.kind === 'audit' ? `audit-agent → audit token #${stagedIntent.tokenId} topic=${stagedIntent.topic}` :
       stagedIntent?.kind === 'ask-oracle' ? `oracle-agent → ${stagedIntent.topic}` :
       stagedIntent?.kind === 'swap' ? `swap-agent → ${stagedIntent.amount} ${stagedIntent.fromSym}→${stagedIntent.toSym}` :
       'idle';

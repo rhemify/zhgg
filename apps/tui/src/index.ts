@@ -329,7 +329,7 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
           // string is a fallback descriptor only.
           manifest: `iNFT ${intent.target} — capabilities read on-chain`,
         },
-        oracleTopic: 'eu-ai-act',
+        oracleTopic: intent.topic,
         events,
         auditOptions: bundle.demo.auditOptions,
       },

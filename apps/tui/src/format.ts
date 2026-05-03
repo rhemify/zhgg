@@ -16,7 +16,7 @@ export function shortHash(h: string): string {
 
 export function formatStaged(intent: IntentCommand): string {
   switch (intent.kind) {
-    case 'audit': return `audit ${intent.target} (#${intent.tokenId})`;
+    case 'audit': return `audit ${intent.target} (#${intent.tokenId}) topic=${intent.topic}`;
     case 'ask-oracle': return `ask oracle ${intent.raw} (topic=${intent.topic})`;
     case 'swap': return `swap ${intent.amount} ${intent.fromSym} → ${intent.toSym}`;
     case 'transfer': return `transfer ${intent.amount} ${intent.symbol} → ${intent.recipient}`;

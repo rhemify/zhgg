@@ -41,6 +41,9 @@ export type IntentCommand =
       /// the orchestrator chase ENS.
       target: string;
       tokenId: bigint;
+      /// Oracle topic to run the compliance check against.
+      /// Defaults to 'eu-ai-act' when omitted.
+      topic: OracleTopic;
     }
   | { kind: 'ask-oracle'; topic: OracleTopic; raw: string }
   | {

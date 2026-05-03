@@ -78,8 +78,9 @@ export function buildHelpLines(): HelpLine[] {
   lines.push(h(''));
   lines.push(h(`  ── AUDIT / 0G COMPUTE ${zgRouter ? '✓' : '✗ needs ZG_ROUTER_KEY'} ─────────────────────────────────────`));
   if (zgRouter) {
-    lines.push(ok('  audit <tokenId>             cross-agent oracle audit (TEE inference on 0G)'));
-    lines.push(h ('    e.g.  audit 1   audit 2'));
+    lines.push(ok('  audit <tokenId> [topic]     cross-agent oracle audit (TEE inference on 0G)'));
+    lines.push(h ('    topics: eu-ai-act (default) · mica · gdpr-ai · price'));
+    lines.push(h ('    e.g.  audit 1   audit 1 mica   audit 2 gdpr-ai   audit 1 price'));
     lines.push(ok('  ask oracle <topic>          live price (Pyth) or regulatory deltas'));
     lines.push(h ('    e.g.  ask oracle ETH/USD   →  ETH/USD = $2,309.63  (Pyth live, 14s ago)'));
     lines.push(h ('           ask oracle eu-ai-act →  Article 6 (eff. 2026-08-02): High-risk AI…'));
