@@ -109,7 +109,7 @@ export interface CrossAgentDemoDeps {
   axiomCommit?: (args: {
     tokenId: bigint;
     plan: Uint8Array;
-  }) => Promise<{ ok: boolean; commitId?: `0x${string}`; txHash?: `0x${string}`; error?: string }>;
+  }) => Promise<{ ok: boolean; commitId?: `0x${string}`; txHash?: `0x${string}`; commitBlock?: bigint; error?: string }>;
   /// Step 10 — reveal plan + result after receipt post.
   axiomReveal?: (args: {
     tokenId: bigint;
@@ -357,6 +357,7 @@ export async function runCrossAgentDemo(
   //     oracle context. Hash-only on chain; bytes revealed at Step 10.
   let axiomCommitId: `0x${string}` | null = null;
   let axiomCommitTx: `0x${string}` | null = null;
+  let axiomCommitBlock: bigint | null = null;
   let axiomPlanBytes: Uint8Array | null = null;
   if (deps.axiomCommit) {
     axiomPlanBytes = new TextEncoder().encode(
@@ -370,7 +371,8 @@ export async function runCrossAgentDemo(
     if (c.ok && c.commitId) {
       axiomCommitId = c.commitId;
       axiomCommitTx = c.txHash ?? null;
-      emit('audit.axiom.commit', { commitId: c.commitId, txHash: c.txHash });
+      axiomCommitBlock = c.commitBlock ?? null;
+      emit('audit.axiom.commit', { commitId: c.commitId, txHash: c.txHash, commitBlock: c.commitBlock?.toString() });
     } else {
       emit('audit.axiom.commit', { ok: false, error: c.error });
     }
@@ -460,7 +462,14 @@ export async function runCrossAgentDemo(
       evidenceChain: {
         axiomCommit:
           axiomCommitId && axiomCommitTx
-            ? { commitId: axiomCommitId, commitTx: axiomCommitTx, commitBlock: '0' }
+            ? {
+                commitId: axiomCommitId,
+                commitTx: axiomCommitTx,
+                // Receipt-derived block when available (post-Commit 5
+                // fix); the legacy '0' fallback is kept for the test
+                // path that mocks axiomCommit without a real block.
+                commitBlock: axiomCommitBlock ? axiomCommitBlock.toString() : '0',
+              }
             : undefined,
         qwenInference: {
           modelId: 'qwen3.6-plus',

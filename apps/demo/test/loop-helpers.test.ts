@@ -30,11 +30,20 @@ type MockWalletStub = {
   writeContract: ReturnType<typeof mock>;
 };
 
-function mockPublic(read: unknown): MockPublicStub & LoopPublicClient {
+function mockPublic(
+  read: unknown,
+  receiptOverride?: { blockNumber?: bigint; logs?: unknown[] }
+): MockPublicStub & LoopPublicClient {
   const stub: MockPublicStub = {
     readContract: mock(async () => read),
     simulateContract: mock(async () => ({ request: { foo: 'bar' } })),
-    waitForTransactionReceipt: mock(async () => ({ blockNumber: 42n })),
+    // Default receipt has no logs — the helper's PlanCommitted parse
+    // loop is a no-op and the fallback recompute path fires using
+    // receipt.blockNumber. Tests for the event-parse path pass `logs`.
+    waitForTransactionReceipt: mock(async () => ({
+      blockNumber: receiptOverride?.blockNumber ?? 42n,
+      logs: receiptOverride?.logs ?? [],
+    })),
   };
   return stub as unknown as MockPublicStub & LoopPublicClient;
 }
@@ -111,9 +120,54 @@ describe('commitPlan', () => {
       expect(r.value.commitId.length).toBe(66);
       expect(r.value.txHash.startsWith('0x')).toBe(true);
       expect(r.value.planHash.length).toBe(66);
+      // commitBlock now sourced from receipt; default mock returns 42n.
+      expect(r.value.commitBlock).toBe(42n);
     }
     expect(pc.simulateContract).toHaveBeenCalled();
     expect(wc.writeContract).toHaveBeenCalled();
+  });
+
+  it('parses commitId from PlanCommitted event when present in receipt', async () => {
+    // Event-parsed commitId should win over the recompute fallback.
+    // Build a PlanCommitted event log matching AXIOM_COMMIT_ABI:
+    //   event PlanCommitted(uint256 indexed tokenId, bytes32 indexed commitId,
+    //                       bytes32 planHash, address indexed committer,
+    //                       uint256 blockNumber)
+    // topics = [eventSig, tokenId, commitId, committer]
+    // data = abi.encode(planHash, blockNumber)
+    const eventSig = keccak256(
+      toHex('PlanCommitted(uint256,bytes32,bytes32,address,uint256)')
+    );
+    const onChainCommitId = ('0x' + 'cc'.repeat(32)) as Hex;
+    const tokenIdTopic = ('0x' + '0'.repeat(63) + '1') as Hex;
+    // address topic = 12 zero bytes (24 hex) + 20 address bytes (40 hex) = 32 bytes
+    const committerTopic = ('0x' + '0'.repeat(24) + 'beef'.repeat(10)) as Hex;
+    const planHashTopic = ('0x' + 'aa'.repeat(32)) as Hex;
+    const blockTopic = ('0x' + '0'.repeat(62) + '63') as Hex; // 99
+    const dataField = (planHashTopic + blockTopic.slice(2)) as Hex;
+    const pc = mockPublic(null, {
+      blockNumber: 99n,
+      logs: [
+        {
+          address: ADDR,
+          topics: [eventSig, tokenIdTopic, onChainCommitId, committerTopic],
+          data: dataField,
+        },
+      ],
+    });
+    const wc = mockWallet();
+    const r = await commitPlan({
+      axiomAddress: ADDR,
+      tokenId: 1n,
+      plan: new Uint8Array([1, 2, 3]),
+      publicClient: pc,
+      walletClient: wc,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.commitId).toBe(onChainCommitId);
+      expect(r.value.commitBlock).toBe(99n);
+    }
   });
 
   it('classifies write failures as commit_failed', async () => {

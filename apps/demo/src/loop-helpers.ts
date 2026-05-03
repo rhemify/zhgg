@@ -13,6 +13,7 @@
 /// the pattern in `packages/workflow/src/storage-log.ts`.
 
 import {
+  decodeEventLog,
   encodePacked,
   getAddress,
   keccak256,
@@ -46,6 +47,7 @@ const AGENT_NFT_LOOP_ABI = parseAbi([
 const AXIOM_COMMIT_ABI = parseAbi([
   'function commitPlan(uint256 tokenId, bytes32 planHash) returns (bytes32 commitId)',
   'function revealPlan(uint256 tokenId, bytes32 commitId, bytes plan, bytes result)',
+  'event PlanCommitted(uint256 indexed tokenId, bytes32 indexed commitId, bytes32 planHash, address indexed committer, uint256 blockNumber)',
 ]);
 
 // ---------------------------------------------------------------------
@@ -103,6 +105,12 @@ export interface AxiomCommitResult {
   commitId: Hex;
   txHash: Hex;
   planHash: Hex;
+  /// Block number at which the commit landed. Pre-fix this used a
+  /// pre-tx `getBlockNumber()` snapshot which races against the
+  /// execution block — `commitId` then derived from the wrong block
+  /// and reveal would fail `CommitNotFound`. Now sourced from the
+  /// receipt (or the parsed PlanCommitted event when present).
+  commitBlock: bigint;
 }
 
 export async function commitPlan(
@@ -120,21 +128,50 @@ export async function commitPlan(
       args: [args.tokenId, planHash],
     });
     const txHash = (await args.walletClient.writeContract(sim.request)) as Hex;
-    // Wait for confirmation and use receipt.blockNumber — the contract stores
-    // block.number at mine time, so computing commitId from a pre-submission
-    // snapshot produces a wrong hash and causes reveal to fail with CommitNotFound.
+    // Wait for the receipt and derive `commitId` from chain truth.
+    // Pre-fix used `getBlockNumber()` post-send (race) — but the contract
+    // uses `block.number` AT EXECUTION (AxiomCommit.sol:128), so the
+    // snapshot diverged when 0G node lag pushed the tx to a later block.
+    // Reveal then failed CommitNotFound because the computed commitId
+    // didn't match the on-chain entry.
     //
-    // 0G Galileo's RPC sometimes returns receipts with blockTimestamp: "0x0"
-    // which causes viem's waitForTransactionReceipt to reject them. We poll
-    // getTransactionReceipt directly instead.
+    // We use `pollReceipt` (custom helper) instead of viem's
+    // `waitForTransactionReceipt` because 0G Galileo's RPC sometimes
+    // returns receipts with `blockTimestamp: "0x0"` which viem rejects.
+    // Then we parse the PlanCommitted event from logs to recover the
+    // canonical commitId — falls back to recomputing with
+    // receipt.blockNumber if the event isn't present (defense-in-depth
+    // against ABI drift; should never fire in practice).
     const receipt = await pollReceipt(args.publicClient, txHash, 150_000, 2_000);
-    const commitId = computeCommitId(
-      args.tokenId,
-      planHash,
-      args.walletClient.account.address as Address,
-      receipt.blockNumber,
-    );
-    return { ok: true, value: { commitId, txHash, planHash } };
+    let commitId: Hex | null = null;
+    for (const log of receipt.logs) {
+      try {
+        const decoded = decodeEventLog({
+          abi: AXIOM_COMMIT_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded.eventName === 'PlanCommitted') {
+          commitId = (decoded.args as { commitId: Hex }).commitId;
+          break;
+        }
+      } catch {
+        // Skip non-AXIOM logs in the receipt (no other contract
+        // contributes here today, but keep the parse defensive).
+      }
+    }
+    if (commitId === null) {
+      commitId = computeCommitId(
+        args.tokenId,
+        planHash,
+        args.walletClient.account.address as Address,
+        receipt.blockNumber,
+      );
+    }
+    return {
+      ok: true,
+      value: { commitId, txHash, planHash, commitBlock: receipt.blockNumber },
+    };
   } catch (e) {
     return { ok: false, error: { kind: 'commit_failed', reason: errMsg(e) } };
   }
@@ -242,19 +279,26 @@ export function computeCommitId(
 /// Poll `eth_getTransactionReceipt` directly, bypassing viem's
 /// `waitForTransactionReceipt` which rejects receipts with
 /// `blockTimestamp: "0x0"` (a quirk of 0G Galileo's RPC).
+/// Returns logs alongside blockNumber so callers can parse contract
+/// events from the receipt (e.g. AxiomCommit's PlanCommitted event
+/// for the canonical commitId).
 async function pollReceipt(
   client: LoopPublicClient,
   hash: Hex,
   timeoutMs: number,
   intervalMs: number,
-): Promise<{ blockNumber: bigint; status: 'success' | 'reverted' }> {
+): Promise<{
+  blockNumber: bigint;
+  status: 'success' | 'reverted';
+  logs: Awaited<ReturnType<LoopPublicClient['getTransactionReceipt']>>['logs'];
+}> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const r = await client.getTransactionReceipt({ hash });
       if (r) {
         if (r.status === 'reverted') throw new Error('transaction reverted');
-        return { blockNumber: r.blockNumber, status: r.status };
+        return { blockNumber: r.blockNumber, status: r.status, logs: r.logs };
       }
     } catch (e) {
       // getTransactionReceipt throws when not yet found — keep polling

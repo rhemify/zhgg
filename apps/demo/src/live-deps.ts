@@ -358,7 +358,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       walletClient: zgWallet,
     });
     return r.ok
-      ? { ok: true, commitId: r.value.commitId, txHash: r.value.txHash }
+      ? { ok: true, commitId: r.value.commitId, txHash: r.value.txHash, commitBlock: r.value.commitBlock }
       : { ok: false, error: r.error.kind === 'commit_failed' ? r.error.reason : r.error.kind };
   };
 
