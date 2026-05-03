@@ -17,6 +17,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  maxUint256,
   parseAbi,
   type Address,
   type Hex,
@@ -219,19 +220,27 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     }
 
     // Fallback path: caller-funds direct FeeSplitter call.
-    // Always re-approve before each split — avoids stale-allowance reverts
-    // that happen when a prior run consumed the exact-amount approval and
-    // the RPC node returns a cached (zero) value for the new simulate call.
+    // Approve maxUint256 once — avoids the stale-allowance race where an
+    // exact-amount approval is consumed and the RPC node hasn't propagated
+    // the new approval before the next simulate call runs.
     {
-      const sim = await basePub.simulateContract({
-        account: baseAccount,
+      const currentAllowance = await basePub.readContract({
         address: cfg.usdc,
         abi: ERC20_ABI,
-        functionName: 'approve',
-        args: [cfg.feeSplitter, ORACLE_PAYMENT_ATOMIC],
-      });
-      const approveTx = await baseWallet.writeContract(sim.request);
-      await basePub.waitForTransactionReceipt({ hash: approveTx });
+        functionName: 'allowance',
+        args: [baseAccount.address, cfg.feeSplitter],
+      }) as bigint;
+      if (currentAllowance < ORACLE_PAYMENT_ATOMIC) {
+        const sim = await basePub.simulateContract({
+          account: baseAccount,
+          address: cfg.usdc,
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [cfg.feeSplitter, maxUint256],
+        });
+        const approveTx = await baseWallet.writeContract(sim.request);
+        await basePub.waitForTransactionReceipt({ hash: approveTx });
+      }
     }
 
     // Trigger the actual split. Returns when mined.
