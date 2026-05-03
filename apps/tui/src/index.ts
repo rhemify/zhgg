@@ -174,6 +174,11 @@ let intentHint = ''
 let stagedIntent: IntentCommand | null = null
 let runningCommand: RunningCommand = 'idle'
 
+// Command history — most-recent first, navigated with Up/Down like a shell.
+let cmdHistory: string[] = []
+let historyIdx = -1       // -1 = not navigating history
+let historyBuffer = ''    // snapshot of intentBuffer before Up was pressed
+
 /// Cancellation flag — flipped on by the `cancel` intent (or Esc while
 /// a dispatch is running). Long-running dispatchers check this between
 /// awaits and abort early. Reset to `false` before every fresh dispatch
@@ -2065,6 +2070,12 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'aa-deploy') void dispatchAaDeployIntent(parsed)
     // ERC-4337 UserOp send through Pimlico bundler (gas via paymaster)
     else if (parsed.kind === 'aa-send') void dispatchAaSendIntent(parsed)
+    // Push to history (deduplicate consecutive identical commands).
+    const trimmed = intentBuffer.trim()
+    if (trimmed && trimmed !== cmdHistory[0]) cmdHistory.unshift(trimmed)
+    historyIdx = -1
+    historyBuffer = ''
+    intentBuffer = ''
     return true
   }
   // Backspace (0x7f / 0x08).
@@ -2192,6 +2203,26 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
   // Editing mode — buffer chars unless the keypress is a global hotkey
   // unrecognised by handleIntentKey (in which case it falls through).
   if (intentMode === 'editing') {
+    // Up/Down — shell-style history navigation.
+    if (ev.name === 'up') {
+      if (cmdHistory.length > 0) {
+        if (historyIdx === -1) historyBuffer = intentBuffer
+        historyIdx = Math.min(historyIdx + 1, cmdHistory.length - 1)
+        intentBuffer = cmdHistory[historyIdx]!
+        refreshLivePreview()
+        render()
+      }
+      return
+    }
+    if (ev.name === 'down') {
+      if (historyIdx > -1) {
+        historyIdx--
+        intentBuffer = historyIdx === -1 ? historyBuffer : cmdHistory[historyIdx]!
+        refreshLivePreview()
+        render()
+      }
+      return
+    }
     if (handleIntentKey(key)) {
       render()
       return
