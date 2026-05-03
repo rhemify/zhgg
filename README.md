@@ -59,7 +59,7 @@ AxiomCommit.revealPlan (0G)                  apps/demo/src/loop-helpers.ts
 ```
 
 zhgg consumes KH (left arrow), zhgg agents are exposed AS KH-callable
-workflows (right arrow). Same x402 + EIP-3009 settlement, same MCP-shaped
+workflows (right arrow). Same x402 settlement, same MCP-shaped
 JSON envelopes, same ERC-8004 reputation evidence on both directions.
 
 ## Quick links
@@ -132,7 +132,7 @@ Full walkthrough: [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md).
 | `@zhgg/workflow` | Audit report writer, x402 settle, delegation EIP-712, storage-log, multi-leg relay, 0G TEE inference plugin |
 | `@zhgg/router` | Mode classifier + provider pool (mock-stack, demo-only path) |
 | `@zhgg/oracle-data` | Static EU AI Act + MiCA + GDPR-AI deltas (no I/O) |
-| `@zhgg/wallet-aa` | ERC-4337 user-op + paymaster encoder (deployed but not yet on TUI dispatch path — see "What's NOT yet wired") |
+| `@zhgg/wallet-aa` | ERC-4337 user-op + paymaster encoder — `aa deploy` + `aa send` wired on TUI dispatch path |
 | `@my-better-t-app/env` | Web env schema |
 | `@my-better-t-app/ui` | Web component lib |
 | `@my-better-t-app/config` | Shared tsconfig presets |
@@ -176,12 +176,11 @@ iNFTs minted: `audit=#1`, `oracle=#2`, `swap=#3` — identity lives on the Agent
 | **ERC-7857** (iNFT) | Tokens 1/2/3 live on Galileo | [`contracts/src/AgentNFT.sol`](./contracts/src/AgentNFT.sol) |
 | **ERC-8004** (reputation) | `giveFeedback` per audit + CAIP-2 endpoint | [`contracts/src/AgentRegistry.sol`](./contracts/src/AgentRegistry.sol) |
 | **ERC-7710** (delegations) | EIP-712 sign + on-chain `redeemDelegations` | [`contracts/src/DelegationManager.sol`](./contracts/src/DelegationManager.sol); [`apps/tui/src/index.ts:799-878`](./apps/tui/src/index.ts) |
-| **ERC-7715** (spend caps) | Audit pre-flight + grant `[G]` | [`contracts/src/SpendCap.sol`](./contracts/src/SpendCap.sol); [`apps/demo/src/spend-cap.ts`](./apps/demo/src/spend-cap.ts) |
-| **ERC-8183** (agentic commerce / ACP escrow) | First on 0G Galileo; `acp create / acp release` | [`contracts/src/AgenticCommerce.sol`](./contracts/src/AgenticCommerce.sol); [`apps/tui/src/acp-intents.ts`](./apps/tui/src/acp-intents.ts) |
-| **ERC-4626** (yield vault) | `parkIdle/withdrawIdle` via `MockERC4626` | [`contracts/src/AgentReceiverWallet.sol:60-321`](./contracts/src/AgentReceiverWallet.sol) |
-| **ERC-4337** (account abstraction) | Factory deployed; user-op + paymaster encoder ready | [`contracts/src/AgentSimpleAccount.sol`](./contracts/src/AgentSimpleAccount.sol); [`packages/wallet-aa/`](./packages/wallet-aa/) — ⚠ no TUI callsite yet |
-| **EIP-3009** (transferWithAuthorization) | Used through KH x402 + facilitator settle | [`packages/workflow/src/x402.ts:7-90`](./packages/workflow/src/x402.ts) |
-| **EIP-8021** (calldata-suffix attribution) | Magic suffix `0x8021…8021` on FeeSplitter | [`contracts/src/lib/ERC8021Suffix.sol`](./contracts/src/lib/ERC8021Suffix.sol); [`contracts/src/FeeSplitter.sol:42-44`](./contracts/src/FeeSplitter.sol) |
+| **ERC-7715** (spend caps) | Audit pre-flight + grant `[G]`; deployed with `enforced=false` (checks + logs, does not hard-block) | [`contracts/src/SpendCap.sol`](./contracts/src/SpendCap.sol); [`apps/demo/src/spend-cap.ts`](./apps/demo/src/spend-cap.ts) |
+| **ERC-8183** (agentic commerce / ACP escrow) | `acp create / acp release` on 0G Galileo | [`contracts/src/AgenticCommerce.sol`](./contracts/src/AgenticCommerce.sol); [`apps/tui/src/acp-intents.ts`](./apps/tui/src/acp-intents.ts) |
+| **ERC-4626** (yield vault) | `parkIdle/withdrawIdle` via `AgentReceiverWallet` + `MockERC4626` | [`contracts/src/AgentReceiverWallet.sol:60-321`](./contracts/src/AgentReceiverWallet.sol) |
+| **ERC-4337** (account abstraction) | `aa deploy` + `aa send` UserOp via Pimlico bundler; factory on Base Sepolia | [`contracts/src/AgentSimpleAccount.sol`](./contracts/src/AgentSimpleAccount.sol); [`packages/wallet-aa/`](./packages/wallet-aa/); [`apps/tui/src/index.ts`](./apps/tui/src/index.ts) |
+| **EIP-8021** (calldata-suffix attribution) | `0x8021…8021` suffix appended by FeeSplitter on every split | [`contracts/src/lib/ERC8021Suffix.sol`](./contracts/src/lib/ERC8021Suffix.sol); [`contracts/src/FeeSplitter.sol:42-44`](./contracts/src/FeeSplitter.sol) |
 | ERC-721 / ERC-20 | Underlying primitives | OpenZeppelin v5 |
 
 **Honesty note** — synthetic-inference fallback exists at [`apps/demo/src/live-deps.ts:180-200`](./apps/demo/src/live-deps.ts) (returns `provider_id: 'qwen3.6-plus-mock'`, `receipt: cmpl-mock-N`, marker `0x6d6f636b…`). The TUI dispatch path bails at [`apps/tui/src/index.ts:223`](./apps/tui/src/index.ts) (`if (!bundle.inferenceReady)`) so this branch is **unreachable from TUI dispatch**. CLI `--live` mode without `ZG_ROUTER_KEY` does reach it. The marker is greppable on purpose so judges can confirm.
@@ -284,7 +283,7 @@ locally; tier table mirrored here).
 | **T4 yield** | `park <amt> <USDC\|WETH>`, `unpark <amt> <USDC\|WETH>` | gas | ERC-4626 deposit/withdraw via AgentReceiverWallet — ⏳ blocked on `YIELD_VAULT_ADDRESS` |
 | **T5 0G writes** | `mint <role>`, `commit <id> <plan>`, `reveal <commitId> <plan>` | ~0.001 OG | ERC-7857 mint, AxiomCommit commit/reveal |
 | **T6 ACP escrow** | `acp create <agent> <amount>`, `acp release <jobId>` | gas + token | EIP-8183 createJob+approve+fund (3 txs); evaluator-only release |
-| **T7 router-gated** | `audit <tokenId\|ens>` | ~0.005 OG + 0G Compute | Full 10-step orchestrator: capabilities → cap → commit → TEE infer → settle → ERC-8021 → ERC-8004 → storage → memoryRoot → reveal |
+| **T7 router-gated** | `audit <tokenId\|ens> [eu-ai-act\|mica\|gdpr-ai\|price]` | ~0.005 OG + 0G Compute | Full 10-step orchestrator: capabilities → cap → commit → TEE infer → settle → ERC-8021 → ERC-8004 → storage → memoryRoot → reveal |
 
 29 distinct intents, parser tested at [`apps/tui/src/intent-parser/parsers/`](./apps/tui/src/intent-parser/parsers/).
 
@@ -320,7 +319,6 @@ From [`tasks/integration-audit-final.md`](./tasks/integration-audit-final.md) §
 
 | Feature | Why deployed but isolated | Severity |
 |---|---|---|
-| `AgentSimpleAccountFactory` (ERC-4337) + `@zhgg/wallet-aa` | Built for paymaster demo; no TUI callsite. ~80 LOC to wire `aa send <addr>` UserOp | 🔴 critical |
 | `apps/tee-verifier` Bun server | `inferZG` runs `verifyTee:true` non-strict; sidecar's `verifierUrl` only set in tests | 🔴 critical |
 | `OwnerMirror` cross-chain attestor | Designed to mirror AgentNFT owner across chains; orchestrator reads owner directly via `AgentNFT.ownerOf` | 🟠 major |
 | `packages/workflow/src/across.ts` (Across V3 bridge) | Re-exported, not imported by any app | 🟠 major |
