@@ -417,7 +417,7 @@ async function dispatchSwapIntent(
       {
         publicClient: bundle.basePub,
         walletClient: bundle.baseWallet,
-        account: bundle.baseAccount.address,
+        account: bundle.baseAccount,
       },
       intent.amount,
       intent.fromSym,

@@ -7,12 +7,24 @@
 /// writeContract / waitForTransactionReceipt) so the test runs offline.
 
 import { describe, expect, it, mock } from 'bun:test';
-import type { Address, Hex, PublicClient, WalletClient } from 'viem';
+import type { Account, Address, Hex, PublicClient, WalletClient } from 'viem';
 import { executeSwap, TOKEN_ADDRESSES } from '../src/index.js';
 import { SWAP_ROUTER_02, V3_FACTORY } from '../src/uniswap-v3.js';
 import { WETH9_BASE_SEPOLIA } from '../src/wrap-fallback.js';
 
-const ACCOUNT: Address = '0x557E1E07652B75ABaA667223B11704165fC94d09';
+const ACCOUNT_ADDR: Address = '0x557E1E07652B75ABaA667223B11704165fC94d09';
+/// Minimal mock account satisfying the `Account` interface used in tests.
+/// Tests use mock clients so no actual signing occurs; the address field
+/// is what matters for recipient / allowance reads.
+const ACCOUNT: Account = {
+  address: ACCOUNT_ADDR,
+  type: 'local',
+  publicKey: '0x00',
+  source: 'privateKey',
+  signMessage: async () => '0x',
+  signTransaction: async () => '0x',
+  signTypedData: async () => '0x',
+} as unknown as Account;
 const POOL_500: Address = '0x94bfc0574FF48E92cE43d495376C477B1d0EEeC0';
 const STUB_TX_FOR_TEST: Hex = '0xfeedface00000000000000000000000000000000000000000000000000000001';
 const ZERO_ADDR: Address = '0x0000000000000000000000000000000000000000';

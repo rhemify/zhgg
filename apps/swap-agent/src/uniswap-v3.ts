@@ -22,6 +22,7 @@
 import {
   encodeFunctionData,
   erc20Abi,
+  type Account,
   type Address,
   type Hex,
   type PublicClient,
@@ -152,7 +153,11 @@ export async function findUniswapV3Pool(
 export interface EnsureAllowanceArgs {
   publicClient: PublicClient;
   walletClient: WalletClient;
-  account: Address;
+  /// Full account object (LocalAccount from privateKeyToAccount). Must not
+  /// be an Address string — passing an Address causes viem to coerce it to
+  /// a json-rpc account, which attempts eth_sendTransaction (not supported
+  /// on public RPCs) instead of signing locally via eth_sendRawTransaction.
+  account: Account;
   token: Address;
   spender: Address;
   amount: bigint;
@@ -166,18 +171,18 @@ export async function ensureErc20Allowance(args: EnsureAllowanceArgs): Promise<H
     address: args.token,
     abi: erc20Abi,
     functionName: 'allowance',
-    args: [args.account, args.spender],
+    args: [args.account.address, args.spender],
   });
   if (current >= args.amount) return null;
   const max = (1n << 256n) - 1n;
-  const txHash = await args.walletClient.writeContract({
+  const sim = await args.publicClient.simulateContract({
     account: args.account,
-    chain: null,
     address: args.token,
     abi: erc20Abi,
     functionName: 'approve',
     args: [args.spender, max],
   });
+  const txHash = await args.walletClient.writeContract(sim.request);
   await args.publicClient.waitForTransactionReceipt({ hash: txHash });
   return txHash;
 }
@@ -190,7 +195,11 @@ export interface ExactInputSingleDeps {
 }
 
 export interface ExactInputSingleArgs {
-  account: Address;
+  /// Full account object (LocalAccount from privateKeyToAccount). Must not
+  /// be an Address string — viem coerces bare addresses to json-rpc type,
+  /// which triggers eth_sendTransaction (rejected by public RPCs) instead
+  /// of the correct eth_sendRawTransaction path.
+  account: Account;
   params: ExactInputSingleParams;
   /// When `tokenIn` is the zero-address sentinel for native ETH, the
   /// caller passes the value to send with the call. SwapRouter02 wraps
