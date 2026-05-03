@@ -430,7 +430,12 @@ export async function runCrossAgentDemo(
       subjectAgent: {
         tokenId: preReceipt.target.agentId.toString(),
         ens: subject?.ens,
-        capabilitiesAtAudit: subject?.capabilitiesAtAudit ?? '0x',
+        // `buildAuditReport` validates this slot against
+        // `/^0x[0-9a-fA-F]+$/` — the literal `'0x'` (no payload) fails the
+        // regex. Use a single-byte zero placeholder when capabilities
+        // weren't read on this run; downstream verifiers see "0x00" and
+        // treat it as an unknown-but-shape-valid manifest snapshot.
+        capabilitiesAtAudit: subject?.capabilitiesAtAudit ?? '0x00',
         registeredAtBlock: subject?.registeredAtBlock ?? '0',
       },
       regulation: {
