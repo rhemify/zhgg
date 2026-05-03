@@ -14,6 +14,7 @@
 /// target on each frame (kept in `render.ts`, not here).
 
 import type { Verdict } from '@zhgg/audit-agent';
+import type { FeeSplitResult } from '../tx-proof.js';
 
 export type Phase = 'idle' | 'running' | 'complete' | 'failed';
 
@@ -40,6 +41,12 @@ export interface SpotlightState {
   /// Optional human-readable reason on `phase === 'failed'`. Surfaces in
   /// the spotlight as the failure caption.
   failureReason: string | null;
+  /// True when Step 1 (read iNFT capabilities) returned ok:true.
+  /// Drives the AgenticID pillar in the "0G stack used" line.
+  capabilitiesRead: boolean;
+  /// Decoded 4-way fee split — populated asynchronously after the payment
+  /// tx is confirmed. Null until fetchSplit resolves.
+  feeSplit: FeeSplitResult | null;
 }
 
 export type SpotlightEvent =
@@ -50,7 +57,9 @@ export type SpotlightEvent =
   | { type: 'audit.report.pin'; uri: string; hash: string }
   | { type: 'audit.receipt.post'; txHash: string }
   | { type: 'oracle.payment.settle'; txHash: string }
-  | { type: 'audit.attestation'; root: string };
+  | { type: 'audit.attestation'; root: string }
+  | { type: 'audit.capabilities.read'; ok: boolean }
+  | { type: 'fee.split.resolved'; split: FeeSplitResult };
 
 export function initialState(target: string, now: number): SpotlightState {
   return {
@@ -67,6 +76,8 @@ export function initialState(target: string, now: number): SpotlightState {
     attestationRoot: null,
     startedAt: now,
     failureReason: null,
+    capabilitiesRead: false,
+    feeSplit: null,
   };
 }
 
@@ -109,6 +120,10 @@ export function reduce(state: SpotlightState, ev: SpotlightEvent): SpotlightStat
       return { ...state, paymentTx: ev.txHash };
     case 'audit.attestation':
       return { ...state, attestationRoot: ev.root };
+    case 'audit.capabilities.read':
+      return { ...state, capabilitiesRead: ev.ok };
+    case 'fee.split.resolved':
+      return { ...state, feeSplit: ev.split };
   }
 }
 

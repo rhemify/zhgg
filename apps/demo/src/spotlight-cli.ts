@@ -7,7 +7,7 @@
 ///
 /// Usage:
 ///   bun run apps/demo/src/spotlight-cli.ts <ens>
-///   bun run apps/demo/src/spotlight-cli.ts oracle.zhgg.eth
+///   bun run apps/demo/src/spotlight-cli.ts oracle-agent
 ///
 /// No-mock policy: this runtime refuses to start without the same env
 /// `--live` mode requires. Earlier revisions silently fell back to
@@ -22,6 +22,7 @@ import {
   type TranscriptStep,
 } from './cross-agent.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from './live-deps.js';
+import { readFeeSplit, fmtUsdc } from './tx-proof.js';
 import { PROBE_PROMPTS } from '@zhgg/audit-agent';
 import type { AuditDeps, Verdict } from '@zhgg/audit-agent';
 import type { ZGInferenceResult } from '@zhgg/workflow';
@@ -187,7 +188,7 @@ function writeEnvHelp(out: NodeJS.WriteStream, missingMessage: string): void {
   out.write(`${C_DIM}  AGENT_REGISTRY_ADDRESS     0x...${C_RESET}\n`);
   out.write(`${C_DIM}  ORACLE_OWNER_ADDRESS       0x...${C_RESET}\n\n`);
   out.write(`${C_DIM}for an offline transcript without live testnet, use:${C_RESET}\n`);
-  out.write(`${C_DIM}  bun run apps/demo/src/cross-agent-cli.ts oracle.zhgg.eth${C_RESET}\n\n`);
+  out.write(`${C_DIM}  bun run apps/demo/src/cross-agent-cli.ts oracle-agent${C_RESET}\n\n`);
 }
 
 export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult> {
@@ -217,6 +218,11 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
     const live = buildLiveDeps(cfg);
     bundle = { deps: live.deps, auditOptions: live.auditOptions };
   }
+
+  // Base Sepolia RPC for decoding the FeeSplitter.Split event from the
+  // payment tx. Falls back to env so __depsOverride (test) paths work too.
+  const baseRpcForSplit = process.env.BASE_SEPOLIA_RPC_URL ?? '';
+  let splitFetchPromise: Promise<import('./tx-proof.js').FeeSplitResult | null> | null = null;
 
   const events = new EventEmitter();
 
@@ -270,6 +276,18 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
   };
 
   // ─── Event handlers ────────────────────────────────────────────────
+
+  events.on('audit.capabilities.read', (step: TranscriptStep) => {
+    const ok = (step.detail?.ok as boolean | undefined) === true;
+    state = reduce(state, { type: 'audit.capabilities.read', ok });
+    if (ok) {
+      // Print a dim iNFT line above the verdict morph. This fires before
+      // audit.start so the cursor is still on the blank line after the
+      // target header — the verdict animation starts on the next fresh line.
+      out.write(`${C_DIM}  iNFT #${demoAgentId} · capabilities: oracle.regulatory,oracle.price${C_RESET}\n`);
+    }
+  });
+
   events.on('audit.start', () => {
     state = reduce(state, {
       type: 'audit.start',
@@ -307,7 +325,7 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
     writeBlank();
     writeSectionHeader('Receipts');
     writeKv('Cost', `$${state.costUsd.toFixed(4)}`);
-    if (state.paymentTx) writeKv('Payment TX', shortHash(state.paymentTx));
+    // Payment TX replaced by the SETTLEMENT block rendered after receipt.post.
     if (state.reportUri) writeKv('Report', shortHash(state.reportUri));
     if (state.attestationRoot) writeKv('Attestation', shortHash(state.attestationRoot));
   });
@@ -334,6 +352,46 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
     if (state.phase === 'complete') {
       writeKv('Receipt TX', shortHash(txHash));
     }
+    // Render "0G stack used" pillar line listing only the pillars whose
+    // evidence is non-null at this point (all artifacts are in state now).
+    if (state.phase === 'complete') {
+      const pillars: string[] = [];
+      if (state.attestationRoot) pillars.push('Compute');
+      if (state.reportUri) pillars.push('Storage');
+      if (state.receiptTx) pillars.push('Chain');
+      if (state.capabilitiesRead) pillars.push('iNFT');
+      if (pillars.length > 0) {
+        writeBlank();
+        out.write(`  ${C_DIM}0G stack used: ${pillars.join(' · ')}${C_RESET}\n`);
+      }
+    }
+    // Render SETTLEMENT block once the split fetch resolves. This typically
+    // takes ~1s (tx already confirmed by the time receipt is posted), so the
+    // block appears as a natural epilogue after the receipt line.
+    if (splitFetchPromise) {
+      void splitFetchPromise.then((split) => {
+        if (!split) return;
+        const payTx = state.paymentTx ?? '';
+        const explorerUrl = payTx
+          ? `https://sepolia.basescan.org/tx/${payTx}`
+          : null;
+        writeBlank();
+        writeSectionHeader('Settlement');
+        // 85% line — bold green (the auditor did the work)
+        out.write(
+          `  ${C_BRIGHT}${C_GREEN}85% → audit-agent #${demoAgentId}  ${fmtUsdc(split.author)}${C_RESET}\n`
+        );
+        // 5% lines — dim gray
+        out.write(`  ${C_GRAY} 5% → KeeperHub       ${fmtUsdc(split.kh)}${C_RESET}\n`);
+        out.write(`  ${C_GRAY} 5% → zhgg             ${fmtUsdc(split.zhgg)}${C_RESET}\n`);
+        out.write(`  ${C_GRAY} 5% → Commons          ${fmtUsdc(split.commons)}${C_RESET}\n`);
+        out.write(`  ${C_DIM}${'─'.repeat(36)}${C_RESET}\n`);
+        const txRef = explorerUrl
+          ? `${shortHash(payTx, 16)} · ${explorerUrl}`
+          : shortHash(payTx, 24);
+        out.write(`  ${C_DIM}tx ${txRef}${C_RESET}\n`);
+      });
+    }
   });
 
   /// Fires when the audit verdict landed but the on-chain ERC-8004
@@ -351,6 +409,16 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
     const txHash = (step.detail?.txHash as string | undefined) ?? '';
     if (!txHash) return;
     state = reduce(state, { type: 'oracle.payment.settle', txHash });
+    // Kick off the split fetch in the background — resolves after the tx
+    // confirms (~1s). The settlement block renders once the receipt is posted.
+    if (baseRpcForSplit) {
+      splitFetchPromise = readFeeSplit(txHash as `0x${string}`, baseRpcForSplit).then(
+        (split) => {
+          if (split) state = reduce(state, { type: 'fee.split.resolved', split });
+          return split;
+        }
+      );
+    }
   });
 
   // The orchestrator early-returns on spend-cap rejection — without
@@ -384,11 +452,15 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
   // target before any probes fire. No "INTENT" / "FLOW" / borders.
   out.write(`\n${C_DIM}  ${opts.target}${C_RESET}\n\n`);
 
+  // Resolve audit-agent iNFT id. Defaults to 1 (minted in A2 setup).
+  // Override via DEMO_AUDIT_AGENT_ID=<decimal> for multi-agent demos.
+  const demoAgentId = BigInt(process.env.DEMO_AUDIT_AGENT_ID ?? '1');
+
   let exitCode = 0;
   try {
     await runCrossAgentDemo(wrappedDeps, {
       target: {
-        agentId: 7n,
+        agentId: demoAgentId,
         agentName: opts.target,
         manifest: `placeholder manifest for ${opts.target}`,
       },
@@ -418,7 +490,7 @@ export async function runSpotlight(opts: RuntimeOptions): Promise<RuntimeResult>
 
 // Direct-invoke entrypoint
 if (import.meta.main) {
-  const target = process.argv[2] ?? 'oracle.zhgg.eth';
+  const target = process.argv[2] ?? 'oracle-agent';
   runSpotlight({ target })
     .then((r) => process.exit(r.exitCode))
     .catch((err) => {
