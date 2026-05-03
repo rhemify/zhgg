@@ -53,12 +53,14 @@ export function pushAudit(agent: string, event: string, ok: AuditRow['ok'] = 'in
   AUDIT.push(row);
   if (AUDIT.length > 400) AUDIT.splice(0, AUDIT.length - 400);
 
-  // Persist to disk (non-blocking best-effort)
-  try {
-    ensureDir();
-    const { flashUntil: _f, ...storable } = row;
-    appendFileSync(AUDIT_FILE, JSON.stringify(storable) + '\n');
-  } catch { /* disk write failure is non-fatal */ }
+  // Persist to disk — skip 'system' rows (session noise, not audit events)
+  if (agent !== 'system') {
+    try {
+      ensureDir();
+      const { flashUntil: _f, ...storable } = row;
+      appendFileSync(AUDIT_FILE, JSON.stringify(storable) + '\n');
+    } catch { /* disk write failure is non-fatal */ }
+  }
 }
 
 // Persist the receipt envelope whenever it changes.

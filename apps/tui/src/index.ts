@@ -307,11 +307,15 @@ async function dispatchAskOracleIntent(
     if (res.ok) {
       const data = res.data
       if (data.kind === 'price') {
-        pushAudit('oracle', `price ${data.quote.symbol} = ${data.quote.price} (10^${data.quote.exponent}) @ ${data.quote.publishTime}`, 'ok')
+        const q = data.quote
+        const usd = (Number(q.price) * Math.pow(10, q.exponent)).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const ago = Math.round(Date.now() / 1000 - q.publishTime)
+        const freshness = ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`
+        pushAudit('oracle', `${q.symbol} = ${usd}  (Pyth live, ${freshness})`, 'ok')
       } else if (data.kind === 'regulatory') {
-        pushAudit('oracle', `regulatory ${data.deltas.length} delta(s)`, 'ok')
-        for (const d of data.deltas.slice(0, 3)) {
-          pushAudit('oracle', `${d.article}: ${d.summary}`.slice(0, 96), 'info')
+        pushAudit('oracle', `${data.deltas.length} regulatory update(s) loaded`, 'ok')
+        for (const d of data.deltas) {
+          pushAudit('oracle', `${d.article} (eff. ${d.effectiveDate}): ${d.summary}`.slice(0, 110), 'info')
         }
       } else {
         pushAudit('oracle', `unsupported: ${data.reason}`, 'err')
