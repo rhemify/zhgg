@@ -532,7 +532,7 @@ export async function runCrossAgentDemo(
         auditReport.receiptTxHash
       );
     } else {
-      emit('audit.receipt.failed', { reason: 'postReceipt returned null' });
+      emit('audit.receipt.failed', { reason: auditReport.receiptError ?? 'postReceipt returned null' });
     }
   } catch (e) {
     auditError = e instanceof Error ? e.message : String(e);

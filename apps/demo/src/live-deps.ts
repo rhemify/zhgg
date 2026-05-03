@@ -74,6 +74,12 @@ export interface LiveDepsConfig {
   /// 0G Galileo signer — posts ERC-8004 receipts. Often the same key as
   /// Base Sepolia (same EOA across chains is fine for EVM).
   zgPrivateKey: Hex;
+  /// Optional separate signer for ERC-8004 giveFeedback. When set, this
+  /// account posts receipts instead of zgPrivateKey — required when the
+  /// zgPrivateKey account also OWNS the agent NFT (AgentRegistry reverts
+  /// with SelfFeedbackForbidden when caller == owner). Fund this address
+  /// with a small amount of 0G testnet gas from https://faucet.0g.ai.
+  zgFeedbackPrivateKey?: Hex;
   baseSepoliaRpc: string;
   zgRpc: string;
   /// FeeSplitter contract on Base Sepolia.
@@ -128,18 +134,25 @@ export interface LiveBundle {
 export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
   const baseAccount = privateKeyToAccount(cfg.baseSepoliaPrivateKey);
   const zgAccount = privateKeyToAccount(cfg.zgPrivateKey);
+  // Use a separate feedback account when ZG_FEEDBACK_PRIVATE_KEY is set.
+  // AgentRegistry reverts SelfFeedbackForbidden when caller == NFT owner,
+  // so the feedback poster must be a different address than the agent minter.
+  const zgFeedbackAccount = cfg.zgFeedbackPrivateKey
+    ? privateKeyToAccount(cfg.zgFeedbackPrivateKey)
+    : zgAccount;
   const baseTransport = http(cfg.baseSepoliaRpc);
   const zgTransport = http(cfg.zgRpc);
   const baseWallet = createWalletClient({ account: baseAccount, transport: baseTransport });
   const basePub = createPublicClient({ transport: baseTransport });
   const zgWallet = createWalletClient({ account: zgAccount, transport: zgTransport });
+  const zgFeedbackWallet = createWalletClient({ account: zgFeedbackAccount, transport: zgTransport });
   const zgPub = createPublicClient({ transport: zgTransport });
 
   // Real ERC-8004 client: writes giveFeedback to AgentRegistry on 0G.
   const erc8004Client: Erc8004Client = {
     giveFeedback: async (args: GiveFeedbackArgs): Promise<Hex> => {
       const sim = await zgPub.simulateContract({
-        account: zgAccount,
+        account: zgFeedbackAccount,
         address: args.registry,
         abi: AGENT_REGISTRY_GIVE_FEEDBACK_ABI,
         functionName: 'giveFeedback',
@@ -154,7 +167,7 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
           args.feedbackHash,
         ],
       });
-      const txHash = await zgWallet.writeContract(sim.request);
+      const txHash = await zgFeedbackWallet.writeContract(sim.request);
       await zgPub.waitForTransactionReceipt({ hash: txHash });
       return txHash;
     },
@@ -420,6 +433,9 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
       : undefined,
     baseSepoliaPrivateKey: needHex('BASE_SEPOLIA_PRIVATE_KEY', 64),
     zgPrivateKey: needHex('ZG_PRIVATE_KEY', 64),
+    zgFeedbackPrivateKey: process.env.ZG_FEEDBACK_PRIVATE_KEY
+      ? (needHex('ZG_FEEDBACK_PRIVATE_KEY', 64))
+      : undefined,
     baseSepoliaRpc: need('BASE_SEPOLIA_RPC_URL'),
     zgRpc: need('ZG_RPC_URL'),
     feeSplitter: needHex('FEE_SPLITTER_ADDRESS', 40) as unknown as Address,

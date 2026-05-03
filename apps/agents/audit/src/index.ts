@@ -181,6 +181,7 @@ export async function runAudit(
 
   const post = await deps.postReceipt(deps.erc8004Client, receiptCtx);
   const receiptTxHash = post.ok ? post.value : null;
+  const receiptError = post.ok ? undefined : `${post.error.kind}: ${post.error.reason}`;
 
   return {
     target: { agentId: target.agentId, agentName: target.agentName },
@@ -189,5 +190,6 @@ export async function runAudit(
     findings,
     attestationRoot: lastAttestation,
     receiptTxHash,
+    receiptError,
   };
 }

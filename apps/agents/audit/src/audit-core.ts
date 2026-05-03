@@ -82,6 +82,7 @@ export interface AuditReport {
   findings: string[];
   attestationRoot: string | null;
   receiptTxHash: string | null;
+  receiptError?: string;
 }
 
 export function renderProbe(probe: ProbePrompt, manifest: string): string {
