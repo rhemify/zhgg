@@ -251,7 +251,7 @@ export async function runCrossAgentDemo(
     asset: opts.asset ?? DEFAULT_USDC,
     network: opts.network ?? DEFAULT_NETWORK,
     resource: {
-      url: 'https://oracle.zhgg.eth/query',
+      url: 'https://oracle-agent.zhgg/query',
       description: `oracle.query topic=${opts.oracleTopic}`,
     },
   });
@@ -423,7 +423,7 @@ export async function runCrossAgentDemo(
       auditorAgent: {
         iNFTAddress: auditor?.iNFTAddress ?? ZERO_ADDR,
         tokenId: (auditor?.tokenId ?? 0n).toString(),
-        ens: auditor?.ens ?? 'audit.zhgg.eth',
+        ens: auditor?.ens ?? 'audit-agent #1',
         manifestHash: auditor?.manifestHash ?? ZERO_HASH,
         owner: auditor?.owner ?? ZERO_ADDR,
       },

@@ -18,7 +18,7 @@ export function parseDelegate(parts: string[], trimmed: string): IntentCommand {
     return {
       kind: 'unknown',
       raw: trimmed,
-      reason: 'delegate needs <to> <permissionId> (e.g. "delegate oracle.zhgg.eth 0x0000…0001")',
+      reason: 'delegate needs <to> <permissionId> (e.g. "delegate 2 0x0000…0001")',
     };
   }
   if (!permissionId) {

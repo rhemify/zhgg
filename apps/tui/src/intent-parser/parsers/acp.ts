@@ -30,7 +30,7 @@ export function parseAcp(parts: string[], trimmed: string): IntentCommand {
       return {
         kind: 'unknown',
         raw: trimmed,
-        reason: 'acp create needs <agentTokenId|ens> <usdcAmount> (e.g. "acp create oracle.zhgg.eth 0.5")',
+        reason: 'acp create needs <agentTokenId> <usdcAmount> (e.g. "acp create 2 0.5")',
       };
     }
     if (parts.length > 4) {

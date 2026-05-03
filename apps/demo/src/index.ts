@@ -110,7 +110,7 @@ async function entry(): Promise<void> {
   if (args[0] === 'audit') {
     // Parse positional + flags after `audit`. First non-flag is the
     // target; `--live` switches to real testnet wiring.
-    let target = 'oracle.zhgg.eth';
+    let target = 'oracle-agent';
     let live = false;
     for (let i = 1; i < args.length; i++) {
       const a = args[i];
