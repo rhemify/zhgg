@@ -134,7 +134,7 @@ export function buildHelpLines(): HelpLine[] {
   // ── Keys ─────────────────────────────────────────────────────────────────
   lines.push(h(''));
   lines.push(h('  ── KEYS ──────────────────────────────────────────────────────────'));
-  lines.push(ok('  [Enter] dispatch  [Esc] blur/close  [G] grant SpendCap  [Q] quit'));
+  lines.push(ok('  [Enter] dispatch  [Esc] blur/close  [G] grant SpendCap (anytime)  [Q] quit'));
   lines.push(ok('  [Z] audit full-view  [X] receipt full-view  [R] reset  [TAB] focus'));
   lines.push(h(''));
 
@@ -142,4 +142,4 @@ export function buildHelpLines(): HelpLine[] {
 }
 
 /// Persistent one-line hint above the intent input.
-export const PERSISTENT_HINT = '[?] command palette  │  [G] grant SpendCap  │  [Enter] dispatch  │  [Esc] blur';
+export const PERSISTENT_HINT = '[?] commands  │  [G] grant SpendCap (anytime, 0.5 USDC/hr)  │  [Enter] dispatch  │  [Esc] blur';

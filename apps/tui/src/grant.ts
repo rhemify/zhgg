@@ -47,17 +47,24 @@ export interface GrantEnv {
   render: () => void;
 }
 
+// Default permissionId used when no intent is staged — matches the audit
+// workflow bucket so [G] works at any time without requiring a staged intent.
+const DEFAULT_AUDIT_PERMISSION_ID = keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
+
 export function openGrantModal(env: GrantEnv): void {
   const { stagedIntent, setToast, setGrantModal } = env;
-  if (!stagedIntent || stagedIntent.kind === 'empty' || stagedIntent.kind === 'unknown') {
-    setToast('err', 'no intent staged — type one and Enter to stage');
-    return;
-  }
-  const permissionId = permissionIdFor(stagedIntent);
-  if (!permissionId) {
-    // kh hire, swap, transfer etc. pay via x402 or direct tx — SpendCap not involved.
-    setToast('info', `[G] grant is only for audit/ask-oracle — ${stagedIntent.kind} uses its own payment path`);
-    return;
+
+  // Resolve permissionId from staged intent, or fall back to the audit bucket
+  // so [G] works at any time — no need to stage an intent first.
+  let permissionId: Hex | null = null;
+  if (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown') {
+    permissionId = permissionIdFor(stagedIntent);
+    if (!permissionId) {
+      setToast('info', `[G] grant is for audit/ask-oracle — ${stagedIntent.kind} uses its own payment path`);
+      return;
+    }
+  } else {
+    permissionId = DEFAULT_AUDIT_PERMISSION_ID;
   }
   const bundle = tryBuildLiveBundle();
   if (!bundle) {
@@ -68,10 +75,13 @@ export function openGrantModal(env: GrantEnv): void {
     setToast('err', 'SPEND_CAP_ADDRESS not set — cannot grant');
     return;
   }
+  const bucketLabel = (stagedIntent && permissionId !== DEFAULT_AUDIT_PERMISSION_ID)
+    ? `${stagedIntent.kind} workflow`
+    : 'audit (eu-ai-act) — default bucket';
   const lines = [
-    `Grant 0.5 USDC spend permission to ${bundle.baseAccount.address}`,
-    `via SpendCap.grantPermission(...)`,
+    `Grant 0.5 USDC spend cap  [${bucketLabel}]`,
     ``,
+    `  account       = ${bundle.baseAccount.address}`,
     `  asset         = ${bundle.usdc}`,
     `  permissionId  = ${permissionId}`,
     `  maxPerPeriod  = 500000   (0.5 USDC, atomic)`,
@@ -84,11 +94,11 @@ export function openGrantModal(env: GrantEnv): void {
 export async function confirmGrant(env: GrantEnv): Promise<void> {
   const { stagedIntent, setToast, setGrantModal, render } = env;
   setGrantModal([], false);
-  if (!stagedIntent) { setToast('err', 'no staged intent'); return; }
   const bundle = tryBuildLiveBundle();
   if (!bundle || !bundle.spendCap) { setToast('err', 'live env unavailable'); return; }
-  const permissionId = permissionIdFor(stagedIntent);
-  if (!permissionId) { setToast('err', 'staged intent has no permissionId'); return; }
+  const permissionId = (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown')
+    ? permissionIdFor(stagedIntent) ?? DEFAULT_AUDIT_PERMISSION_ID
+    : DEFAULT_AUDIT_PERMISSION_ID;
   const expiresAt = BigInt(Math.floor(Date.now() / 1000)) + ONE_DAY_SECONDS;
   pushAudit('spend-cap', 'grant tx submitting…', 'info');
   render();
