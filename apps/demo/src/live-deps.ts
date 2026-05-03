@@ -168,7 +168,9 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
         ],
       });
       const txHash = await zgFeedbackWallet.writeContract(sim.request);
-      await zgPub.waitForTransactionReceipt({ hash: txHash });
+      // 0G testnet can take 60-120s to mine — raise timeout to avoid
+      // a TransactionReceiptNotFoundError before the tx is confirmed.
+      await zgPub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
       return txHash;
     },
   };
