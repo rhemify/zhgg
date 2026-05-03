@@ -120,7 +120,7 @@ export async function commitPlan(
       args: [args.tokenId, planHash],
     });
     const txHash = (await args.walletClient.writeContract(sim.request)) as Hex;
-    const receipt = await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
+    const receipt = await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
     // Derive commitId locally — keccak256(abi.encodePacked(uint256, bytes32, address, uint256)).
     // Using the simulated `result` is unreliable across viem versions; the
     // local derivation is what off-chain indexers use anyway.
@@ -166,7 +166,7 @@ export async function revealPlan(
       args: [args.tokenId, args.commitId, planHex, resultHex],
     });
     const txHash = (await args.walletClient.writeContract(sim.request)) as Hex;
-    await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
+    await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
     return { ok: true, value: { txHash } };
   } catch (e) {
     return { ok: false, error: { kind: 'reveal_failed', reason: errMsg(e) } };
@@ -202,7 +202,7 @@ export async function pinMemoryRoot(
       args: [args.tokenId, args.rootHash],
     });
     const txHash = (await args.walletClient.writeContract(sim.request)) as Hex;
-    await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
+    await args.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
     return { ok: true, value: { txHash } };
   } catch (e) {
     return { ok: false, error: { kind: 'pin_failed', reason: errMsg(e) } };
