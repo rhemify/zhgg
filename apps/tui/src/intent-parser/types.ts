@@ -212,6 +212,20 @@ export type IntentCommand =
       /// time so the dispatcher never sees a malformed id.
       permissionId: `0x${string}`;
     }
+  /// AA / ERC-4337 intent (Slice — AgentSimpleAccountFactory). Predicts +
+  /// deploys a SimpleAccount via `factory.createAccount(owner, salt)` on
+  /// Base Sepolia. Idempotent — calling twice returns the same address.
+  /// `salt` defaults to `bytes32(0)` (the canonical first account for an
+  /// owner); explicit `<0x..64hex>` lets the operator stamp out additional
+  /// AA addresses controlled by the same EOA.
+  | {
+      kind: 'aa-deploy';
+      /// 0x + 40 hex (20-byte address), case preserved so the dispatcher
+      /// can echo the operator's literal back without checksumming.
+      owner: `0x${string}`;
+      /// 0x + 64 hex (bytes32). Defaults to all zeros when omitted.
+      salt: `0x${string}`;
+    }
   | { kind: 'empty' }
   | { kind: 'unknown'; raw: string; reason: string }
   /// Surfaced when the user types an `*.eth` target that isn't in

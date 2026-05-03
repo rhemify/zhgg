@@ -1028,6 +1028,98 @@ async function dispatchOperatorCancel(): Promise<void> {
   render()
 }
 
+// ── ERC-4337 SimpleAccount dispatcher ────────────────────────────────────────
+//
+// `aa <owner> [salt]` — predicts the SimpleAccount address via
+// AgentSimpleAccountFactory.predict(owner, salt) and then deploys it
+// with createAccount (idempotent: if codeSize > 0 the factory short-
+// circuits and returns the existing address). Every step posts an audit
+// row; on success we echo the deployed AA address and tx hash so the
+// operator can verify on basescan.
+//
+// Required env: AGENT_AA_FACTORY_ADDRESS + BASE_SEPOLIA_PRIVATE_KEY +
+// BASE_SEPOLIA_RPC_URL. Refuses honestly with a precise reason when any
+// is missing — never silently mocks.
+
+const AA_FACTORY_ABI = parseAbi([
+  'function createAccount(address owner, bytes32 salt) returns (address)',
+  'function predict(address owner, bytes32 salt) view returns (address)',
+])
+
+async function dispatchAaDeployIntent(
+  intent: Extract<IntentCommand, { kind: 'aa-deploy' }>,
+): Promise<void> {
+  const factory = process.env.AGENT_AA_FACTORY_ADDRESS as Address | undefined
+  if (!factory || !isAddress(factory)) {
+    pushAudit('aa', 'aa blocked: AGENT_AA_FACTORY_ADDRESS unset/invalid', 'err')
+    setToast('err', 'AGENT_AA_FACTORY_ADDRESS missing')
+    render()
+    return
+  }
+  const pkRaw = process.env.BASE_SEPOLIA_PRIVATE_KEY
+  if (!pkRaw || !/^0x[0-9a-fA-F]{64}$/.test(pkRaw)) {
+    pushAudit('aa', 'aa blocked: BASE_SEPOLIA_PRIVATE_KEY missing/invalid', 'err')
+    render()
+    return
+  }
+  const rpc = process.env.BASE_SEPOLIA_RPC_URL
+  if (!rpc) {
+    pushAudit('aa', 'aa blocked: BASE_SEPOLIA_RPC_URL missing', 'err')
+    render()
+    return
+  }
+
+  runningCommand = 'audit'
+  pushAudit('aa', `predict factory=${shortHash(factory)} owner=${shortHash(intent.owner)}`, 'info')
+  render()
+
+  const account = privateKeyToAccount(pkRaw as Hex)
+  const transport = http(rpc)
+  const pub = createPublicClient({ transport })
+  const wallet = createWalletClient({ account, transport })
+
+  let predicted: Address
+  try {
+    predicted = await pub.readContract({
+      address: factory,
+      abi: AA_FACTORY_ABI,
+      functionName: 'predict',
+      args: [intent.owner, intent.salt as Hex],
+    })
+  } catch (err) {
+    pushAudit('aa', `predict failed: ${(err as Error).message}`.slice(0, 160), 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+  pushAudit('aa', `predicted aa=${shortHash(predicted)}`, 'info')
+  render()
+
+  // Idempotent — if codesize > 0 at predicted, createAccount short-circuits
+  // and returns the existing address without redeploying.
+  let txHash: Hex
+  try {
+    const sim = await pub.simulateContract({
+      account,
+      address: factory,
+      abi: AA_FACTORY_ABI,
+      functionName: 'createAccount',
+      args: [intent.owner, intent.salt as Hex],
+    })
+    txHash = await wallet.writeContract(sim.request)
+  } catch (err) {
+    pushAudit('aa', `createAccount failed: ${(err as Error).message}`.slice(0, 160), 'err')
+    runningCommand = 'idle'
+    render()
+    return
+  }
+
+  await pub.waitForTransactionReceipt({ hash: txHash })
+  pushAudit('aa', `aa.deployed addr=${shortHash(predicted)} tx=${shortHash(txHash)}`, 'ok')
+  runningCommand = 'idle'
+  render()
+}
+
 // ── Yield-vault dispatchers (Slice K — ERC-4626) ─────────────────────────────
 //
 // Real on-chain `parkIdle` / `withdrawIdle` against the user's
@@ -1668,6 +1760,8 @@ function handleIntentKey(key: string): boolean {
     else if (parsed.kind === 'kh-hire') {
       void dispatchKHHireIntent(parsed)
     }
+    // ERC-4337 SimpleAccount predict + deploy via AgentSimpleAccountFactory
+    else if (parsed.kind === 'aa-deploy') void dispatchAaDeployIntent(parsed)
     return true
   }
   // Backspace (0x7f / 0x08).

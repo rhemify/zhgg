@@ -25,6 +25,7 @@ import { parseTransfer } from './parsers/transfer.js';
 import { parseAskOracle } from './parsers/ask-oracle.js';
 import { parseMint } from './parsers/mint.js';
 import { parseKh } from './parsers/kh.js';
+import { parseAa } from './parsers/aa.js';
 
 export type {
   IntentCommand,
@@ -80,6 +81,9 @@ export function parseIntent(input: string): IntentCommand {
 
   // ── KeeperHub direct-API intents (Phase 2) ───────────────────────────
   if (head === 'kh') return parseKh(parts, trimmed);
+
+  // ── ERC-4337 AgentSimpleAccountFactory intent ────────────────────────
+  if (head === 'aa') return parseAa(parts, trimmed);
 
   return {
     kind: 'unknown',
