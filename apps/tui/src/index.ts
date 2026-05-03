@@ -318,7 +318,10 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
       {
         target: {
           agentId: intent.tokenId,
-          agentName: intent.target,
+          // Prefer the canonical role name (e.g. "oracle") over a bare tokenId
+          // string — the KH marketplace workflow validates agentName is a
+          // recognisable identifier and treats digit-only strings as missing.
+          agentName: Object.entries(AGENT_REGISTRY).find(([, id]) => id === intent.tokenId)?.[0] ?? intent.target,
           // Real ERC-7857 capabilities are read by AuditDeps in live mode
           // via the readCapabilities dep wired in buildLiveDeps; this manifest
           // string is a fallback descriptor only.

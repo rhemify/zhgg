@@ -211,15 +211,24 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
       // takes 30%, sends 70% to keeperhub.walletAddress (Turnkey custody).
       // The 85/5/5/5 sub-split on the 70% is a documented manual step
       // for V1 since the receiving wallet is server-custodied.
-      const settlement = await payViaKeeperHubMarketplace(cfg.keeperhub, {
-        agentName,
-      });
-      return {
-        txHash: settlement.paymentTxHash,
-        network: settlement.network,
-        payer: settlement.payerAddress,
-        rail: 'x402',
-      };
+      // Falls back to direct_split if the KH call fails (402 without
+      // payment challenge, 400 validation error, network error, etc.)
+      // so the audit can still complete with an auditable on-chain trace.
+      try {
+        const settlement = await payViaKeeperHubMarketplace(cfg.keeperhub, {
+          agentName,
+        });
+        return {
+          txHash: settlement.paymentTxHash,
+          network: settlement.network,
+          payer: settlement.payerAddress,
+          rail: 'x402',
+        };
+      } catch (khErr) {
+        // Surface the KH error without crashing the audit — direct_split
+        // path below will still produce an on-chain FeeSplitter settlement.
+        console.warn(`[live-deps] KH marketplace failed (${agentName}):`, khErr instanceof Error ? khErr.message : String(khErr));
+      }
     }
 
     // Fallback path: caller-funds direct FeeSplitter call.
