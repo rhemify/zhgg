@@ -219,19 +219,10 @@ export function buildLiveDeps(cfg: LiveDepsConfig): LiveBundle {
     }
 
     // Fallback path: caller-funds direct FeeSplitter call.
-    // Pre-condition: baseAccount has USDC + JIT-approves the splitter.
-    // Ensure approval (idempotent — only writes if allowance is short).
-    const allowance = await basePub.readContract({
-      address: cfg.usdc,
-      abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [baseAccount.address, cfg.feeSplitter],
-    });
-    if (allowance < ORACLE_PAYMENT_ATOMIC) {
-      // JIT approval: grant exactly the amount needed for THIS settlement.
-      // Trades one extra approve tx per call (~2s on Base Sepolia) for
-      // zero standing approval — if FeeSplitter is ever compromised, the
-      // attacker can drain at most one in-flight payment, not 10×.
+    // Always re-approve before each split — avoids stale-allowance reverts
+    // that happen when a prior run consumed the exact-amount approval and
+    // the RPC node returns a cached (zero) value for the new simulate call.
+    {
       const sim = await basePub.simulateContract({
         account: baseAccount,
         address: cfg.usdc,
