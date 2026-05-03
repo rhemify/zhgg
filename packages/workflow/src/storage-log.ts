@@ -55,7 +55,12 @@ export interface Storage0GClient {
   /// Upload UTF-8 bytes to the 0G Storage Log layer. Returns the local
   /// Merkle root (computed deterministically from `bytes`) and the
   /// Flow-contract anchor tx hash (from the Galileo on-chain submission).
-  upload(bytes: Uint8Array): Promise<{ rootHash: Hex; txHash: Hex }>;
+  /// `txSeq` is the indexer's monotonic submission number — what
+  /// `https://storagescan-galileo.0g.ai/submission/<txSeq>` indexes
+  /// against. Without it the rootHash has no canonical explorer URL
+  /// (the SPA homepage doesn't resolve `?root=`). Optional because some
+  /// adapters / mock paths can't compute it.
+  upload(bytes: Uint8Array): Promise<{ rootHash: Hex; txHash: Hex; txSeq?: number }>;
 }
 
 export type StorageError =

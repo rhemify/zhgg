@@ -20,18 +20,34 @@ export function chainscanTxUrl(txHash: string): string {
   return `https://chainscan-galileo.0g.ai/tx/${txHash}`;
 }
 
-/// 0G Galileo storage explorer — for content lookup by rootHash. Lets a
-/// regulator fetch the canonical AuditReport bytes pinned at upload time
-/// and re-verify the keccak256 against the on-chain feedbackHash.
+/// 0G Galileo storage explorer — submission page (preferred). The SPA
+/// indexes uploaded files by `txSeq` (the indexer's monotonic submission
+/// number returned at upload time), NOT by rootHash. URL pattern verified
+/// with `curl -L` 2026-05-03.
 ///
-/// URL pattern is `?root=<rootHash>` (query string), NOT `/tx/<rootHash>`.
-/// The latter 308-redirects to chainscan-galileo, which doesn't index
-/// storage rootHashes — verified with `curl -I` 2026-05-03. Storagescan's
-/// SPA reads `?root=` from window.location.search and resolves the file
-/// view client-side. The bytes ARE downloadable via the indexer API:
+/// Why not rootHash directly? `/tx/<rootHash>` 308-redirects to
+/// chainscan-galileo (which doesn't index storage roots → "not found");
+/// `?root=<rootHash>` only resolves the homepage SPA (no file view).
+/// The submission view at `/submission/<txSeq>` is the canonical page.
+/// The bytes themselves are always downloadable via the indexer API:
 /// `https://indexer-storage-testnet-turbo.0g.ai/file?root=<rootHash>`.
-export function storagescanRootUrl(rootHash: string): string {
-  return `https://storagescan-galileo.0g.ai/?root=${rootHash}`;
+export function storagescanSubmissionUrl(txSeq: number): string {
+  return `https://storagescan-galileo.0g.ai/submission/${txSeq}`;
+}
+
+/// 0G Galileo storage explorer — wallet's submissions page. Useful as a
+/// fallback when txSeq isn't available (e.g. mock storage paths) — points
+/// the operator at every file the depositor wallet has ever uploaded.
+export function storagescanAddressUrl(address: string): string {
+  return `https://storagescan-galileo.0g.ai/address/${address}`;
+}
+
+/// Direct indexer download URL — returns the raw uploaded bytes (not a
+/// browser-friendly view). The "regulator's verification path": fetch
+/// these bytes, recompute keccak256, compare to the on-chain feedbackHash.
+/// No browser page; this is the API endpoint.
+export function indexerDownloadUrl(rootHash: string): string {
+  return `https://indexer-storage-testnet-turbo.0g.ai/file?root=${rootHash}`;
 }
 
 /// Base Sepolia block explorer — for the FeeSplitter settlement leg + any

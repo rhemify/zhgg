@@ -17,7 +17,7 @@ import type { TranscriptStep } from '../../demo/src/cross-agent.js';
 import type { FlowState } from './flow-state.js';
 import type { ReceiptEnvelope } from './receipt-feed.js';
 import { pushAudit } from './audit-trail.js';
-import { basescanTxUrl, chainscanTxUrl, storagescanRootUrl } from '../../demo/src/explorer-urls.js';
+import { basescanTxUrl, chainscanTxUrl, storagescanSubmissionUrl } from '../../demo/src/explorer-urls.js';
 import { shortHash } from './format.js';
 import { tryBuildLiveBundle } from './live-bundle.js';
 
@@ -225,8 +225,12 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       // verify against the on-chain feedbackHash.
       const uri = typeof detail.uri === 'string' ? detail.uri : null;
       const hash = typeof detail.hash === 'string' ? detail.hash : null;
+      const txSeq = typeof detail.txSeq === 'number' ? detail.txSeq : null;
       pushAudit('storage', `pinned uri=${uri ? shortHash(uri) : '—'} hash=${hash ? shortHash(hash) : '—'}`, 'ok');
-      if (uri) pushAudit('storage', `0G Storage: ${storagescanRootUrl(uri)}`, 'info');
+      // Storagescan indexes by txSeq (`/submission/<txSeq>`), NOT by
+      // rootHash. We emit the URL only when txSeq is available; mock
+      // paths skip it rather than print a misleading link.
+      if (txSeq !== null) pushAudit('storage', `0G Storage: ${storagescanSubmissionUrl(txSeq)}`, 'info');
       break;
     }
     case 'audit.report.unpinned':

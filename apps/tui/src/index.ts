@@ -72,7 +72,7 @@ import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js'
 import { tryBuildLiveBundle, getLiveBundleError, type LiveBundle } from './live-bundle.js';
 import { type PanelOverlay } from './render.js';
 import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
-import { storagescanRootUrl } from '../../demo/src/explorer-urls.js';
+import { storagescanSubmissionUrl } from '../../demo/src/explorer-urls.js';
 import {
   openGrantModal as openGrantModalImpl,
   confirmGrant as confirmGrantImpl,
@@ -1915,10 +1915,19 @@ async function dispatchKHHireIntent(
     pushAudit('kh', `audit ${slug} → running EU AI Act probes (~30s) before payment`, 'info')
     render()
     const auditEvents = new EventEmitter()
+    // Capture the storage txSeq from the audit.report.pin event so we
+    // can build a canonical /submission/<txSeq> URL after the run.
+    // canonicalAuditReport.anchors.storageURI is the rootHash, but
+    // storagescan indexes by txSeq, NOT rootHash. Without the closure
+    // capture here we'd have no way to surface a clickable URL.
+    let capturedTxSeq: number | null = null
     // Compact handler — render audit sub-steps in the kh channel for visual
     // cohesion with the kh hire flow. kh panel is narrow so detail summary
     // truncates long hex values to 8 chars + ellipsis.
     const onAny = (step: TranscriptStep): void => {
+      if (step.name === 'audit.report.pin' && typeof step.detail?.txSeq === 'number') {
+        capturedTxSeq = step.detail.txSeq
+      }
       const detail = step.detail
         ? Object.entries(step.detail)
             .filter(([, v]) => v !== undefined && v !== null)
@@ -1975,13 +1984,23 @@ async function dispatchKHHireIntent(
         const kind = r.compliant === true ? 'ok' : r.compliant === false ? 'err' : 'info'
         pushAudit('kh', `  ${status} ${r.articleRef}: ${r.finding}`, kind)
       }
-      if (tx.canonicalAuditReport?.anchors.storageURI) {
-        // Surface the FULL 0G Storage explorer URL so judges / regulators
-        // can ⌘+click (modern terminals auto-detect URLs) to view the
-        // canonical AuditReport bytes pinned at this rootHash, then
-        // re-verify the keccak256 against the on-chain feedbackHash.
+      if (capturedTxSeq !== null) {
+        // Surface the FULL 0G Storage submission URL — judges / regulators
+        // can ⌘+click (modern terminals auto-detect URLs) to see the
+        // canonical AuditReport in storagescan's file view, download the
+        // bytes, and re-verify the keccak256 against the on-chain
+        // feedbackHash. We use txSeq (NOT rootHash) because storagescan
+        // indexes by `/submission/<txSeq>` — `?root=<rootHash>` only
+        // resolves the homepage SPA, `/tx/<rootHash>` 308-redirects to
+        // chainscan (which doesn't index storage roots). Verified
+        // 2026-05-03 with curl.
+        pushAudit('kh', `  audit anchored: ${storagescanSubmissionUrl(capturedTxSeq)}`, 'info')
+      } else if (tx.canonicalAuditReport?.anchors.storageURI) {
+        // Storage upload reported no txSeq (mock or older SDK shape).
+        // Fall back to the rootHash for direct indexer download — not a
+        // clickable web view but the bytes are still verifiable.
         const uri = tx.canonicalAuditReport.anchors.storageURI
-        pushAudit('kh', `  audit anchored: ${storagescanRootUrl(uri)}`, 'info')
+        pushAudit('kh', `  audit anchored (rootHash, no submission seq): ${uri}`, 'info')
       }
       if (verdict === 'non_compliant') {
         pushAudit('kh', `  ⚠️  non-compliant — proceeding to payment but flagged on chain`, 'err')

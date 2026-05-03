@@ -7,7 +7,7 @@
 /// x402 protocol).
 
 import { runCrossAgentDemo, type TranscriptStep } from './cross-agent.js';
-import { basescanTxUrl, chainscanTxUrl, storagescanRootUrl } from './explorer-urls.js';
+import { basescanTxUrl, chainscanTxUrl, indexerDownloadUrl, storagescanSubmissionUrl } from './explorer-urls.js';
 import { buildLiveDeps, readLiveConfigFromEnv } from './live-deps.js';
 import type { AuditDeps } from '@zhgg/audit-agent';
 import type {
@@ -67,8 +67,13 @@ function stepExplorerUrls(step: TranscriptStep): string[] {
       if (tx) out.push(chainscanTxUrl(tx));
       break;
     case 'audit.report.pin': {
+      // Prefer storagescan submission URL (indexed by txSeq). Fall back
+      // to indexer download URL when txSeq isn't available — exposes the
+      // raw bytes even without a browser-friendly view.
+      const txSeq = typeof d.txSeq === 'number' ? d.txSeq : null;
       const uri = typeof d.uri === 'string' ? d.uri : null;
-      if (uri) out.push(storagescanRootUrl(uri));
+      if (txSeq !== null) out.push(storagescanSubmissionUrl(txSeq));
+      else if (uri) out.push(indexerDownloadUrl(uri));
       break;
     }
   }
@@ -293,9 +298,16 @@ export async function runAuditCli(target: string, opts: RunAuditCliOptions = {})
   if (transcript.oraclePaymentTx && /^0x[0-9a-fA-F]{64}$/.test(transcript.oraclePaymentTx)) {
     console.log(`    payment (Base Sepolia): ${basescanTxUrl(transcript.oraclePaymentTx)}`);
   }
+  // Storage anchor — find the audit.report.pin step's txSeq for the
+  // canonical /submission/<txSeq> URL. Falls back to the raw indexer
+  // download URL if the run produced a rootHash but no submission seq.
+  const pinStep = transcript.steps.find((s) => s.name === 'audit.report.pin');
+  const pinTxSeq = typeof pinStep?.detail?.txSeq === 'number' ? pinStep.detail.txSeq : null;
   const storageURI = transcript.canonicalAuditReport?.anchors.storageURI;
-  if (storageURI && storageURI.length > 0) {
-    console.log(`    audit report (0G Storage): ${storagescanRootUrl(storageURI)}`);
+  if (pinTxSeq !== null) {
+    console.log(`    audit report (0G Storage): ${storagescanSubmissionUrl(pinTxSeq)}`);
+  } else if (storageURI && storageURI.length > 0) {
+    console.log(`    audit report (raw bytes): ${indexerDownloadUrl(storageURI)}`);
   }
   if (transcript.auditReceiptTx && /^0x[0-9a-fA-F]{64}$/.test(transcript.auditReceiptTx)) {
     console.log(`    ERC-8004 receipt (0G):    ${chainscanTxUrl(transcript.auditReceiptTx)}`);

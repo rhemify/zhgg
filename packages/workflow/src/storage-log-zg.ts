@@ -64,7 +64,7 @@ export function createZGStorageClient(opts: ZGStorageClientOptions): Storage0GCl
   const privateKey = normalizeKey(opts.privateKey);
 
   return {
-    async upload(bytes: Uint8Array): Promise<{ rootHash: Hex; txHash: Hex }> {
+    async upload(bytes: Uint8Array): Promise<{ rootHash: Hex; txHash: Hex; txSeq?: number }> {
       const sdk = opts.__sdkOverride ?? (await loadSdk());
 
       const provider = new sdk.JsonRpcProvider(rpcUrl);
@@ -128,6 +128,8 @@ export function createZGStorageClient(opts: ZGStorageClientOptions): Storage0GCl
         const txAny = tx as {
           txHash?: unknown;
           txHashes?: unknown;
+          txSeq?: unknown;
+          txSeqs?: unknown;
         };
         const rawTxHash =
           typeof txAny.txHash === 'string'
@@ -141,8 +143,18 @@ export function createZGStorageClient(opts: ZGStorageClientOptions): Storage0GCl
           );
         }
         const txHash = ensureHex(rawTxHash, 'txHash');
+        // txSeq — what `https://storagescan-galileo.0g.ai/submission/<txSeq>`
+        // indexes against. Single-result returns `txSeq: number`; sharded
+        // returns `txSeqs: number[]` (we take [0]). Optional in the type
+        // because mock adapters skip it.
+        const rawTxSeq =
+          typeof txAny.txSeq === 'number'
+            ? txAny.txSeq
+            : Array.isArray(txAny.txSeqs) && typeof txAny.txSeqs[0] === 'number'
+              ? (txAny.txSeqs[0] as number)
+              : undefined;
 
-        return { rootHash, txHash };
+        return { rootHash, txHash, txSeq: rawTxSeq };
       } finally {
         if (zgFile) {
           try {

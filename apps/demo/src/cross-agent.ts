@@ -575,6 +575,10 @@ export async function runCrossAgentDemo(
       emit('audit.report.pin', {
         uri: writeResult.value.uri,
         hash: writeResult.value.hash,
+        // txSeq is what storagescan's `/submission/<txSeq>` resolves
+        // against. The rootHash alone has no canonical explorer page —
+        // querystring-based `?root=` just opens the homepage SPA.
+        txSeq: writeResult.value.txSeq,
       });
       return { feedbackURI: writeResult.value.uri, feedbackHash: writeResult.value.hash };
     }

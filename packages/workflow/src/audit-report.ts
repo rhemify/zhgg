@@ -282,6 +282,12 @@ export interface WriteAuditReportSuccess {
   /// keccak256 of the canonical bytes — same value baked into the
   /// returned report's `anchors.feedbackHash`.
   hash: Hex;
+  /// 0G Storage indexer's submission sequence number — what
+  /// `https://storagescan-galileo.0g.ai/submission/<txSeq>` indexes
+  /// against. Surfaced so callers can build clickable explorer URLs
+  /// without an extra `/file/info?root=` round-trip. Optional because
+  /// the mock storage path / older SDK shapes can't compute it.
+  txSeq?: number;
   /// The mutated copy of the input report, with `anchors.storageURI`
   /// and `anchors.feedbackHash` populated. Caller passes this to
   /// ERC-8004 `giveFeedback`.
@@ -327,9 +333,11 @@ export async function writeAuditReport(
   const { bytes, hash } = canonicalizeAuditReport(report);
 
   let rootHash: Hex;
+  let txSeq: number | undefined;
   try {
     const out = await opts.client.upload(bytes);
     rootHash = out.rootHash;
+    txSeq = out.txSeq;
   } catch (e) {
     return {
       ok: false,
@@ -352,7 +360,7 @@ export async function writeAuditReport(
 
   return {
     ok: true,
-    value: { uri: rootHash, hash, report: populated },
+    value: { uri: rootHash, hash, txSeq, report: populated },
   };
 }
 
