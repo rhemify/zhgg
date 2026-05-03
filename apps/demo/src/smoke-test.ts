@@ -173,7 +173,7 @@ async function main(): Promise<void> {
         args: [tokenId, realPlanHash],
       });
       const txHash = await zgWallet.writeContract(sim.request);
-      const receipt = await zgPub.waitForTransactionReceipt({ hash: txHash });
+      const receipt = await zgPub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
       // commitId is computed locally — it's keccak(uint256, bytes32, address, uint256).
       commitIdCaptured = keccak256(
         encodePacked(
@@ -239,7 +239,7 @@ async function main(): Promise<void> {
         args: [tokenId, commitIdCaptured, toHex(planBytesCaptured), toHex(resultBytes)],
       });
       const txHash = await zgWallet.writeContract(sim.request);
-      await zgPub.waitForTransactionReceipt({ hash: txHash });
+      await zgPub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
       recordPass('AxiomCommit.revealPlan', `tx=${txHash.slice(0, 14)}…`);
     } catch (e) {
       recordFail('AxiomCommit.revealPlan', e instanceof Error ? e.message : String(e));

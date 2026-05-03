@@ -617,7 +617,7 @@ async function dispatchAxiomCommitIntent(
     // the JSON pane renders, and let an off-chain indexer decode the
     // PlanCommitted log topic later via `parseEventLogs`.
     try {
-      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash })
+      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash, timeout: 120_000 })
       receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
       pushAudit(
         'receipt',
@@ -723,7 +723,7 @@ async function dispatchAxiomRevealIntent(
     const v = res.value
     pushAudit('axiom', `axiom.reveal.confirmed tx=${shortHash(v.txHash)}`, 'ok')
     try {
-      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash })
+      const rcpt = await ax.zgPub.waitForTransactionReceipt({ hash: v.txHash, timeout: 120_000 })
       receiptEnvelope = { ...receiptEnvelope, status: 'settled' }
       pushAudit(
         'receipt',

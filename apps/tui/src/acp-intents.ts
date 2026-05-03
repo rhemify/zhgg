@@ -205,7 +205,7 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
       ],
     });
     createTx = await input.zgWalletClient.writeContract(sim.request);
-    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: createTx });
+    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: createTx, timeout: 120_000 });
     if (rcpt.status !== 'success') {
       const reason = `createJob tx reverted (status=${rcpt.status})`;
       emit({ agent: 'acp', event: `acp.create.failed ${reason}`, ok: 'err' });
@@ -272,7 +272,7 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
       args: [input.acpAddress, budgetAtomic],
     });
     approveTx = await input.zgWalletClient.writeContract(sim.request);
-    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: approveTx });
+    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 120_000 });
     if (rcpt.status !== 'success') {
       const reason = `approve tx reverted (status=${rcpt.status})`;
       emit({ agent: 'acp', event: `acp.approve.failed ${reason}`, ok: 'err' });
@@ -305,7 +305,7 @@ export async function dispatchAcpCreate(input: AcpCreateInput): Promise<AcpCreat
       args: [jobId, budgetAtomic],
     });
     fundTx = await input.zgWalletClient.writeContract(sim.request);
-    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: fundTx });
+    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: fundTx, timeout: 120_000 });
     if (rcpt.status !== 'success') {
       const reason = `fund tx reverted (status=${rcpt.status})`;
       emit({ agent: 'acp', event: `acp.fund.failed ${reason}`, ok: 'err' });
@@ -376,7 +376,7 @@ export async function dispatchAcpRelease(input: AcpReleaseInput): Promise<AcpRel
       args: [input.jobId, reason],
     });
     txHash = await input.zgWalletClient.writeContract(sim.request);
-    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: txHash });
+    const rcpt = await input.zgPublicClient.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
     if (rcpt.status !== 'success') {
       const r = `complete tx reverted (status=${rcpt.status})`;
       emit({ agent: 'acp', event: `acp.release.failed ${r}`, ok: 'err' });

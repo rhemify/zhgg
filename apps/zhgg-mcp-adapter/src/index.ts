@@ -152,7 +152,7 @@ function buildAuditFnOrNull(env: BootEnv): RunAuditFn | null {
         ],
       });
       const txHash = await zgWallet.writeContract(sim.request);
-      await zgPub.waitForTransactionReceipt({ hash: txHash });
+      await zgPub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
       return txHash;
     },
   };
