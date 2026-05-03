@@ -150,6 +150,10 @@ export async function inspectWorkflow(
 ): Promise<KHResult<KHPublicWorkflow | null>> {
   const r = await discoverWorkflows(client, { limit: 10_000 });
   if (!r.ok) return r;
-  const found = r.value.find((w) => w.id === workflowId) ?? null;
+  const q = workflowId.toLowerCase();
+  const found =
+    r.value.find((w) => w.id === workflowId) ??
+    r.value.find((w) => (w.listedSlug ?? '').toLowerCase() === q) ??
+    null;
   return { ok: true, value: found };
 }

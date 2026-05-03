@@ -1701,14 +1701,11 @@ async function dispatchKHIntent(
     pushAudit('kh', `marketplace: ${list.length} MCP-callable workflows`, 'ok')
     for (const w of list.slice(0, 12)) {
       const price = w.priceUsdcPerCall ? `$${w.priceUsdcPerCall}` : 'free'
-      pushAudit(
-        'kh',
-        `  ${w.id.slice(0, 14).padEnd(14)} ${price.padStart(5)}  ${w.name.slice(0, 60)}`,
-        'info',
-      )
+      const ref = (w.listedSlug ?? w.id).slice(0, 38).padEnd(38)
+      pushAudit('kh', `  ${ref} ${price.padStart(5)}  ${w.name.slice(0, 40)}`, 'info')
     }
     if (list.length > 12) pushAudit('kh', `  …+${list.length - 12} more (refine: kh discover <search>)`, 'info')
-    pushAudit('kh', `  (broader public-readable set: 85 via /api/workflows/public — not yet wired)`, 'info')
+    pushAudit('kh', `  use slug above with: kh inspect <slug>  or  kh hire <slug>`, 'info')
   } else if (out.kind === 'inspect') {
     const w = out.value
     if (!w) {
@@ -1816,30 +1813,7 @@ async function dispatchKHHireIntent(
     render()
     return
   }
-  let workflow = inspectResult.value.kind === 'inspect' ? inspectResult.value.value : null
-
-  // The inspect helper looks up by `id`. If the operator passed a slug,
-  // it'll miss — fall back to a discover-then-find-by-listedSlug pass so
-  // both shapes (`kh hire <id>` and `kh hire <slug>`) work uniformly.
-  if (!workflow) {
-    const discoverResult = await executeKHCall(
-      { kind: 'discover', filters: { limit: 1000 } },
-      { env: { ...process.env, KH_API_KEY: apiKey, KEEPERHUB_API_URL: baseUrl } as NodeJS.ProcessEnv },
-    )
-    if (!discoverResult.ok) {
-      const e = discoverResult.error
-      pushAudit('kh', `hire failed (discover ${e.kind}): ${e.reason.slice(0, 140)}`, 'err')
-      setToast('err', `kh hire ${e.kind}`)
-      render()
-      return
-    }
-    if (discoverResult.value.kind === 'discover') {
-      const found = discoverResult.value.value.find(
-        (w) => w.listedSlug === intent.slugOrId || w.id === intent.slugOrId,
-      )
-      workflow = found ?? null
-    }
-  }
+  const workflow = inspectResult.value.kind === 'inspect' ? inspectResult.value.value : null
 
   if (!workflow) {
     pushAudit(

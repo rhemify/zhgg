@@ -5,12 +5,12 @@ KeeperHub workflows over x402, and KeeperHub workflows can hire yours via
 the same MCP-callable HTTP surface. Every audit produces a tamper-proof
 EU AI Act evidence chain anchored on 0G Storage + ERC-8004.**
 
-> Last verified: 2026-05-03 against branch `siewwin`.
->
 > Status: contracts deployed on 0G Galileo (16602) + Base Sepolia (84532).
 > 220 forge tests + 51 bun test files across 11 EIPs and 9 workspace agents.
 > Built for ETHGlobal OpenAgents — submitting to **0G Labs** ($15K), **KeeperHub**
 > ($4.5K + $500 feedback), and **EIP-standards** depth signals.
+
+Live testnet addresses — see [Deployed contracts](#deployed-contracts) below.
 
 ## Headline scenario
 
@@ -72,6 +72,7 @@ JSON envelopes, same ERC-8004 reputation evidence on both directions.
 | [`docs/AUDIT-REPORT-SCHEMA.md`](./docs/AUDIT-REPORT-SCHEMA.md) | EU AI Act canonical report + verification recipe |
 | [`docs/INTEGRATION-MAP.md`](./docs/INTEGRATION-MAP.md) | package import graph + contract caller map |
 | [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md) | end-to-end testnet deploy (forge + smoke + MCP) |
+| [Deployed contracts](#deployed-contracts) | all 10 contract addresses by chain (0G Galileo + Base Sepolia) |
 | [`tasks/integration-audit-final.md`](./tasks/integration-audit-final.md) | what's wired, gaps, risk register |
 | [`tasks/partner-alignment.md`](./tasks/partner-alignment.md) | KH/0G/EIP scoring with file:line evidence |
 | [`tasks/intent-commands.md`](./tasks/intent-commands.md) | every TUI intent + verified status |
@@ -138,20 +139,6 @@ Full walkthrough: [`docs/DEPLOY_RUNBOOK.md`](./docs/DEPLOY_RUNBOOK.md).
 | `@my-better-t-app/ui` | Web component lib |
 | `@my-better-t-app/config` | Shared tsconfig presets |
 
-Live testnet addresses (verified from `contracts/broadcast/Deploy0GContracts.s.sol/16602/run-latest.json` and `.../84532/run-latest.json`):
-
-| Contract | Chain | Address |
-|---|---|---|
-| `AgentNFT` (ERC-7857) | 0G Galileo | `0x5298f4d8d8043c14e5f2683ad642febc8b54638f` |
-| `AgentRegistry` (ERC-8004) | 0G Galileo | `0xe78f6c235fd1686547dbea41f742d649607316b1` |
-| `AxiomCommit` | 0G Galileo | `0xa471d2c45f03518e47c7fc71c897d244df01859d` |
-| `AgenticCommerce` (EIP-8183) | 0G Galileo | `0x6b90618b48d199e1d0df75179d26c2b97e80af44` |
-| `SpendCap` (ERC-7715) | Base Sepolia | `0x666a6466bddd1fb79bda32f00a045c1ec77c61a8` |
-| `FeeSplitter` (ERC-8021) | Base Sepolia | `0xb3a9ea5a72caab795bcf16c7bc5fd2d4863b47dd` |
-| `OwnerMirror` | Base Sepolia | `0x49976ae86d28665232c164713c3379e6301a63c7` |
-| `AgentReceiverWalletFactory` | Base Sepolia | `0x6848f17d55b8df970df17c7a04b1c0e0b6565dd1` |
-| `DelegationManager` (ERC-7710) | Base Sepolia | `0xdee1f561d685cdced4c6caaa40f8c6f7112dffef` |
-| `AgentSimpleAccountFactory` (ERC-4337) | Base Sepolia | `0x1eea5c29d671af30a2436078caf523919fd44304` |
 
 iNFTs minted: `audit.zhgg.eth=1`, `oracle.zhgg.eth=2`, `swap.zhgg.eth=3` ([`apps/tui/src/agent-registry.ts:19-23`](./apps/tui/src/agent-registry.ts)).
 
@@ -200,6 +187,47 @@ iNFTs minted: `audit.zhgg.eth=1`, `oracle.zhgg.eth=2`, `swap.zhgg.eth=3` ([`apps
 | ERC-721 / ERC-20 | Underlying primitives | OpenZeppelin v5 |
 
 **Honesty note** — synthetic-inference fallback exists at [`apps/demo/src/live-deps.ts:180-200`](./apps/demo/src/live-deps.ts) (returns `provider_id: 'qwen3.6-plus-mock'`, `receipt: cmpl-mock-N`, marker `0x6d6f636b…`). The TUI dispatch path bails at [`apps/tui/src/index.ts:223`](./apps/tui/src/index.ts) (`if (!bundle.inferenceReady)`) so this branch is **unreachable from TUI dispatch**. CLI `--live` mode without `ZG_ROUTER_KEY` does reach it. The marker is greppable on purpose so judges can confirm.
+
+---
+
+## Deployed contracts
+
+All contracts verified on-chain. Sources pinned to commit
+[`1cbf6ee`](https://github.com/LingSiewWin/zhgg/commit/1cbf6ee) — the
+deployment commit. If local source has diverged, run `scripts/verify-contracts.sh`
+from a worktree at that commit (see comment at top of the script).
+
+### 0G Galileo — chain 16602
+
+Explorer: <https://chainscan-galileo.0g.ai>
+
+| Contract | Standard | Address | Verified |
+|---|---|---|---|
+| `AgentNFT` | ERC-7857 (iNFT) | [`0x5298f4d8…638f`](https://chainscan-galileo.0g.ai/address/0x5298f4d8d8043c14e5f2683ad642febc8b54638f) | ✓ |
+| `AgentRegistry` | ERC-8004 (reputation) | [`0xe78f6c23…16b1`](https://chainscan-galileo.0g.ai/address/0xe78f6c235fd1686547dbea41f742d649607316b1) | ✓ |
+| `AxiomCommit` | — | [`0xa471d2c4…859d`](https://chainscan-galileo.0g.ai/address/0xa471d2c45f03518e47c7fc71c897d244df01859d) | ✓ |
+| `AgenticCommerce` | EIP-8183 (ACP escrow) | [`0x6b90618b…af44`](https://chainscan-galileo.0g.ai/address/0x6b90618b48d199e1d0df75179d26c2b97e80af44) | ✓ |
+
+Constructor args: `AxiomCommit(AgentNFT)`, `AgenticCommerce(owner=0x557E…d09, feeBps=250)`.
+
+### Base Sepolia — chain 84532
+
+Explorer: <https://sepolia.basescan.org>
+
+| Contract | Standard | Address | Verified |
+|---|---|---|---|
+| `SpendCap` | ERC-7715 (spend permissions) | [`0x666a6466…61a8`](https://sepolia.basescan.org/address/0x666a6466bddd1fb79bda32f00a045c1ec77c61a8) | ✓ |
+| `FeeSplitter` | EIP-8021 (calldata attribution) | [`0xb3a9ea5a…47dd`](https://sepolia.basescan.org/address/0xb3a9ea5a72caab795bcf16c7bc5fd2d4863b47dd) | ✓ |
+| `OwnerMirror` | — | [`0x49976ae8…3c7`](https://sepolia.basescan.org/address/0x49976ae86d28665232c164713c3379e6301a63c7) | ✓ |
+| `AgentReceiverWalletFactory` | ERC-4626 (yield vault) | [`0x6848f17d…dd1`](https://sepolia.basescan.org/address/0x6848f17d55b8df970df17c7a04b1c0e0b6565dd1) | ✓ |
+| `DelegationManager` | ERC-7710 (delegations) | [`0xdee1f561…fef`](https://sepolia.basescan.org/address/0xdee1f561d685cdced4c6caaa40f8c6f7112dffef) | ✓ |
+| `AgentSimpleAccountFactory` | ERC-4337 (account abstraction) | [`0x1eea5c29…304`](https://sepolia.basescan.org/address/0x1eea5c29d671af30a2436078caf523919fd44304) | ✓ |
+
+Constructor args: `FeeSplitter(keeperhub, zhgg, commons)` all `0x557E…d09`,
+`OwnerMirror(owner=0x557E…d09)`,
+`AgentReceiverWalletFactory(OwnerMirror, FeeSplitter)`,
+`DelegationManager(SpendCap)`,
+`AgentSimpleAccountFactory(entryPoint=0x00000000…7da032)`.
 
 ---
 
