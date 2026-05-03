@@ -15,9 +15,10 @@
 ///      the report itself is `anchors.feedbackHash`, computed over the
 ///      report-with-feedbackTx-cleared (a self-referential fixed point).
 ///   3. `writeAuditReport(report, opts)` — uploads canonical bytes to 0G
-///      Storage when enabled, returns the storage CID as `uri`. Refuses
-///      with a named error when `ZG_STORAGE_ENABLED !== '1'` and no
-///      explicit client is supplied. NEVER falls back to a fake URI.
+///      Storage when enabled (default-on; opt out via `ZG_STORAGE_ENABLED=0`),
+///      returns the storage CID as `uri`. Refuses with a named error when
+///      `ZG_STORAGE_ENABLED === '0'` or no explicit client is supplied.
+///      NEVER falls back to a fake URI.
 ///
 /// Determinism is the whole point: any verifier in any language can
 /// re-canonicalize the report (with `anchors.feedbackTx = null`) and
@@ -254,8 +255,9 @@ export interface WriteAuditReportOptions {
   /// 0G Storage adapter. When omitted, writeAuditReport refuses with
   /// `no_client`. Live wiring lives in `./storage-log-zg.ts`.
   client?: Storage0GClient;
-  /// Defaults to `process.env.ZG_STORAGE_ENABLED === '1'`. Pass an
-  /// explicit value for deterministic tests.
+  /// Defaults to `process.env.ZG_STORAGE_ENABLED !== '0'` (default-on;
+  /// opt out by setting `ZG_STORAGE_ENABLED=0`). Pass an explicit value
+  /// for deterministic tests.
   enabled?: boolean;
 }
 
@@ -276,7 +278,7 @@ export interface WriteAuditReportSuccess {
 /// Pin canonical AuditReport bytes to 0G Storage. Returns the rootHash
 /// as `uri` (same convention as ERC-8004 spec — a CID-shaped string
 /// uniquely identifying the bytes). Refuses with a named error when
-/// `ZG_STORAGE_ENABLED !== '1'` or no client is supplied — NEVER falls
+/// `ZG_STORAGE_ENABLED === '0'` or no client is supplied — NEVER falls
 /// back to a fake URI. The orchestrator can still emit a 0-URI receipt
 /// (`feedbackURI=""`, `feedbackHash=0x0`) to indicate "evidence not yet
 /// pinned" — that's an honest signal a regulator can verify.
@@ -284,13 +286,13 @@ export async function writeAuditReport(
   report: AuditReport,
   opts: WriteAuditReportOptions = {}
 ): Promise<Result<WriteAuditReportSuccess, WriteAuditReportError>> {
-  const enabled = opts.enabled ?? process.env.ZG_STORAGE_ENABLED === '1';
+  const enabled = opts.enabled ?? process.env.ZG_STORAGE_ENABLED !== '0';
   if (!enabled) {
     return {
       ok: false,
       error: {
         kind: 'storage_disabled',
-        reason: 'ZG_STORAGE_ENABLED !== "1"; refusing to fabricate a fake URI',
+        reason: 'ZG_STORAGE_ENABLED === "0"; refusing to fabricate a fake URI',
       },
     };
   }

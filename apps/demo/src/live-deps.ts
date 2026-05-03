@@ -491,7 +491,7 @@ export function readLiveConfigFromEnv(): LiveDepsConfig {
     axiomCommit: process.env.AXIOM_COMMIT_ADDRESS
       ? (needHex('AXIOM_COMMIT_ADDRESS', 40) as unknown as Address)
       : undefined,
-    zgStorageEnabled: process.env.ZG_STORAGE_ENABLED === '1',
+    zgStorageEnabled: process.env.ZG_STORAGE_ENABLED !== '0',
     zgIndexerRpc: process.env.ZG_INDEXER_RPC,
     zgRouterUrl: process.env.ZG_ROUTER_URL,
     walletCode: process.env.WALLET_CODE,

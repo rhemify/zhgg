@@ -262,6 +262,39 @@ describe('writeAuditReport', () => {
     expect(result.error.kind).toBe('no_client');
   });
 
+  it('default-on: env unset → enabled, surfaces no_client when client missing', async () => {
+    const prev = process.env.ZG_STORAGE_ENABLED;
+    delete process.env.ZG_STORAGE_ENABLED;
+    try {
+      const r = buildAuditReport(validInput);
+      const result = await writeAuditReport(r);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      // env-unset must reach the no_client branch (enabled=true path)
+      // rather than short-circuiting on storage_disabled.
+      expect(result.error.kind).toBe('no_client');
+    } finally {
+      if (prev === undefined) delete process.env.ZG_STORAGE_ENABLED;
+      else process.env.ZG_STORAGE_ENABLED = prev;
+    }
+  });
+
+  it('opt-out: ZG_STORAGE_ENABLED=0 → storage_disabled', async () => {
+    const prev = process.env.ZG_STORAGE_ENABLED;
+    process.env.ZG_STORAGE_ENABLED = '0';
+    try {
+      const r = buildAuditReport(validInput);
+      const result = await writeAuditReport(r);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.error.kind).toBe('storage_disabled');
+      expect(result.error.reason).toContain('ZG_STORAGE_ENABLED');
+    } finally {
+      if (prev === undefined) delete process.env.ZG_STORAGE_ENABLED;
+      else process.env.ZG_STORAGE_ENABLED = prev;
+    }
+  });
+
   it('uploads canonical bytes and stamps feedbackHash + storageURI on success', async () => {
     const fakeRoot: Hex = '0x9999999999999999999999999999999999999999999999999999999999999999';
     const fakeTx: Hex = '0x8888888888888888888888888888888888888888888888888888888888888888';
