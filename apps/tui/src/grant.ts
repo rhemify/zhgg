@@ -13,9 +13,6 @@ import { pushAudit } from './audit-trail.js';
 import { shortHash } from './format.js';
 
 // Verbatim slice from contracts/src/SpendCap.sol — `grantPermission(...)`.
-// The default-bucket alias `grant(...)` would also work but we use the
-// per-permission API so the typed intent's hashed topic scopes the cap
-// (matches what `cross-agent.ts` reads on the spend leg).
 const SPENDCAP_ABI = parseAbi([
   'function grantPermission(address account, address asset, bytes32 permissionId, uint128 maxPerPeriod, uint64 periodLength, uint64 expiresAt)',
 ]);
@@ -25,7 +22,7 @@ const ONE_DAY_SECONDS  = 86_400n;
 
 function parseCapAtomic(capStr: string): bigint {
   const usdc = parseFloat(capStr);
-  if (!isFinite(usdc) || usdc <= 0) return 500_000n;
+  if (!isFinite(usdc) || usdc <= 0) return 500_000n; // fall back to 0.5 USDC
   return BigInt(Math.round(usdc * 1_000_000));
 }
 
@@ -36,55 +33,43 @@ export function buildGrantLines(
   capStr: string,
 ): string[] {
   const capAtomic = parseCapAtomic(capStr);
+  const displayVal = capStr || '0.5';
   return [
-    `Grant ${capStr} USDC spend cap  [${bucketLabel}]`,
+    `Grant ${displayVal} USDC spend cap  [${bucketLabel}]`,
     ``,
     `  account       = ${bundle.baseAccount.address}`,
     `  asset         = ${bundle.usdc}`,
     `  permissionId  = ${permissionId}`,
-    `  maxPerPeriod  = ${capAtomic}   (${capStr} USDC, atomic)`,
+    `  maxPerPeriod  = ${capAtomic}   (${displayVal} USDC, atomic)`,
     `  periodLength  = 3600s    expiresAt = now + 86400s`,
     `  spendCap      = ${bundle.spendCap}`,
     ``,
-    `  amount (USDC): ${capStr}_`,
+    `  Amount: [${displayVal}] USDC  ← type to edit, [Enter] confirm, [Esc] cancel`,
   ];
 }
 
 export function permissionIdFor(intent: IntentCommand): Hex | null {
-  // Same hash recipe the orchestrator uses (see cross-agent.ts comment
-  // "Per-workflow ERC-7715 scope") so the grant we issue here matches
-  // the bucket the next audit run will read.
   if (intent.kind === 'audit') return keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
   if (intent.kind === 'ask-oracle') return keccak256(toHex(`zhgg.oracle.${intent.topic}.v1`));
   return null;
 }
 
 export interface GrantEnv {
-  /// The currently-staged intent (typed but not yet dispatched). Reads
-  /// only — neither the modal opener nor the confirmer mutate this.
   stagedIntent: IntentCommand | null;
   /// Editable spend cap string (e.g. '0.5'). Operator types a new value
   /// while the modal is open; confirmGrant parses it to atomic units.
   capStr: string;
   /// Surface a toast (success / failure / pre-flight refusal).
   setToast: (kind: 'ok' | 'err' | 'info', text: string) => void;
-  /// Set the modal lines + open flag. The render loop reads these on
-  /// next tick.
   setGrantModal: (lines: string[], open: boolean) => void;
-  /// Re-paint the frame after a state change (the on-chain confirm
-  /// flow flips the modal closed and pushes audit rows mid-flight).
   render: () => void;
 }
 
-// Default permissionId used when no intent is staged — matches the audit
-// workflow bucket so [G] works at any time without requiring a staged intent.
 const DEFAULT_AUDIT_PERMISSION_ID = keccak256(toHex('zhgg.oracle.eu-ai-act.v1'));
 
 export function openGrantModal(env: GrantEnv): void {
   const { stagedIntent, capStr, setToast, setGrantModal } = env;
 
-  // Resolve permissionId from staged intent, or fall back to the audit bucket
-  // so [G] works at any time — no need to stage an intent first.
   let permissionId: Hex | null = null;
   if (stagedIntent && stagedIntent.kind !== 'empty' && stagedIntent.kind !== 'unknown') {
     permissionId = permissionIdFor(stagedIntent);
@@ -136,8 +121,9 @@ export async function confirmGrant(env: GrantEnv): Promise<void> {
     ? permissionIdFor(stagedIntent) ?? DEFAULT_AUDIT_PERMISSION_ID
     : DEFAULT_AUDIT_PERMISSION_ID;
   const capAtomic = parseCapAtomic(capStr);
+  const capDisplay = capStr || '0.5';
   const expiresAt = BigInt(Math.floor(Date.now() / 1000)) + ONE_DAY_SECONDS;
-  pushAudit('spend-cap', `grant tx submitting… (${capStr} USDC)`, 'info');
+  pushAudit('spend-cap', `grant tx submitting… (${capDisplay} USDC)`, 'info');
   render();
   try {
     const sim = await bundle.basePub.simulateContract({
@@ -157,7 +143,7 @@ export async function confirmGrant(env: GrantEnv): Promise<void> {
     const txHash = await bundle.baseWallet.writeContract(sim.request);
     await bundle.basePub.waitForTransactionReceipt({ hash: txHash });
     setToast('ok', `grant ok tx=${shortHash(txHash)}`);
-    pushAudit('spend-cap', `granted ${capStr} USDC tx=${shortHash(txHash)}`, 'ok');
+    pushAudit('spend-cap', `granted ${capDisplay} USDC tx=${shortHash(txHash)}`, 'ok');
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setToast('err', `grant failed: ${msg}`.slice(0, 120));

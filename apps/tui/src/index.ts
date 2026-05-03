@@ -2085,7 +2085,7 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
         setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
         render,
       }).then(() => render())
-    } else if (ev.name === 'escape' || key === 'q' || key === 'Q' || (ev.ctrl && ev.name === 'c')) {
+    } else if (ev.name === 'escape' || (ev.ctrl && ev.name === 'c')) {
       grantModalOpen = false
       if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
     } else if (ev.name === 'backspace' || key === '\x7f' || key === '\b') {
