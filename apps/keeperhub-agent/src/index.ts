@@ -223,11 +223,71 @@ export { getWorkflowStatus } from './endpoints/workflow-status.js';
 
 // ─── CLI entrypoint (one-shot) ───────────────────────────────────────────
 
+async function runHire(slug: string, inputsJson?: string): Promise<void> {
+  const { payViaKeeperHubMarketplace } = await import('../../demo/src/keeperhub-marketplace.js');
+
+  const subOrgId = process.env.KH_AUTHOR_SUBORG_ID;
+  const walletAddress = process.env.KH_AUTHOR_WALLET;
+  const hmacSecret = process.env.KH_AUTHOR_HMAC_SECRET;
+
+  if (!subOrgId || !walletAddress || !hmacSecret) {
+    const missing = [
+      !subOrgId && 'KH_AUTHOR_SUBORG_ID',
+      !walletAddress && 'KH_AUTHOR_WALLET',
+      !hmacSecret && 'KH_AUTHOR_HMAC_SECRET',
+    ].filter(Boolean).join(', ');
+    console.error(`hire: missing env vars: ${missing} — add them to .env`);
+    process.exit(1);
+  }
+
+  let requestBody: Record<string, unknown> = {};
+  if (inputsJson) {
+    try {
+      const v = JSON.parse(inputsJson);
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('must be a JSON object');
+      requestBody = v as Record<string, unknown>;
+    } catch (e) {
+      console.error(`hire: inputs parse error — ${(e as Error).message}`);
+      process.exit(2);
+    }
+  }
+
+  console.log(`wallet:        ${walletAddress}`);
+  console.log(`slug:          ${slug}`);
+  console.log('paying via x402 ...');
+
+  const settlement = await payViaKeeperHubMarketplace(
+    { subOrgId, walletAddress: walletAddress as `0x${string}`, hmacSecret, marketplaceSlug: slug },
+    requestBody,
+  );
+
+  console.log(`tx:            ${settlement.paymentTxHash} · https://sepolia.basescan.org/tx/${settlement.paymentTxHash}`);
+  console.log(`network:       ${settlement.network}`);
+  console.log('response:');
+  console.log(JSON.stringify(settlement.marketplaceResponse, null, 2));
+  console.log('✓ done.');
+}
+
 async function main(): Promise<void> {
   const [sub, ...rest] = process.argv.slice(2);
   if (!sub) {
-    console.error('usage: bun run keeperhub-agent <trigger|status|workflows|integrations> [args]');
+    console.error('usage: bun run keeperhub-agent <trigger|status|workflows|integrations|hire> [args]');
     process.exit(2);
+  }
+
+  if (sub === 'hire') {
+    const [slug, inputsJson] = rest;
+    if (!slug) {
+      console.error('usage: bun run keeperhub-agent hire <slug> [<jsonInputs>]');
+      process.exit(2);
+    }
+    try {
+      await runHire(slug, inputsJson);
+    } catch (e) {
+      console.error(`hire failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+    return;
   }
 
   let call: KHCall;
@@ -273,7 +333,7 @@ async function main(): Promise<void> {
     }
     call = { kind: 'inspect', workflowId };
   } else {
-    console.error(`unknown subcommand: ${sub} — try trigger|status|workflows|integrations|discover|inspect`);
+    console.error(`unknown subcommand: ${sub} — try trigger|status|workflows|integrations|discover|inspect|hire`);
     process.exit(2);
   }
 
