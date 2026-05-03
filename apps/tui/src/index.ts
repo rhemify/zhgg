@@ -327,15 +327,26 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
   for (const name of KNOWN_STEPS) events.on(name, onAny)
 
   try {
+    // Resolve the registry entry once. Per CLAUDE.md "iNFT (ERC-7857) ≠
+    // AgentRegistry agent (ERC-8004)": AgentNFT.tokenId and AgentRegistry
+    // .agentId are independent ID spaces — currently 1:1 for audit/oracle/
+    // swap by mint order, but always pass both so the pipeline survives a
+    // future divergence (e.g. re-mint out-of-order, mint-only-on-one-side).
+    // Reused for `agentName` lookup that previously did the same find inline.
+    const role = Object.entries(AGENT_REGISTRY).find(([, e]) => e.inftTokenId === intent.tokenId)
     await runCrossAgentDemo(
       bundle.demo.deps,
       {
         target: {
           agentId: intent.tokenId,
+          // ERC-8004 giveFeedback path — registryAgentId can drift from
+          // inftTokenId; falls back to inftTokenId so unknown agents fail
+          // loudly downstream rather than swallowing the mismatch here.
+          registryAgentId: role?.[1].registryAgentId ?? intent.tokenId,
           // Prefer the canonical role name (e.g. "oracle") over a bare tokenId
           // string — the KH marketplace workflow validates agentName is a
           // recognisable identifier and treats digit-only strings as missing.
-          agentName: Object.entries(AGENT_REGISTRY).find(([, e]) => e.inftTokenId === intent.tokenId)?.[0] ?? intent.target,
+          agentName: role?.[0] ?? intent.target,
           // Real ERC-7857 capabilities are read by AuditDeps in live mode
           // via the readCapabilities dep wired in buildLiveDeps; this manifest
           // string is a fallback descriptor only.
