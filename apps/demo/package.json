@@ -10,14 +10,15 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
-    "viem": "^2.21.0",
     "@keeperhub/wallet": "^0.1.8",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/oracle-agent": "workspace:*",
     "@zhgg/oracle-data": "workspace:*",
     "@zhgg/router": "workspace:*",
+    "@zhgg/tui": "workspace:*",
     "@zhgg/workflow": "workspace:*",
-    "@zhgg/tui": "workspace:*"
+    "ox": "^0.14.20",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/bun": "latest"
