@@ -55,25 +55,19 @@ import {
 import { parseIntent, type IntentCommand } from './intent-parser.js';
 import { AGENT_REGISTRY } from './agent-registry.js';
 import { buildHelpLines, PERSISTENT_HINT } from './help-overlay.js';
+import { initUI, updateUI, renderer as tuiRenderer } from './ui.js';
+import { type KeyEvent, type PasteEvent } from '@opentui/core';
 import {
   envelopeJson,
   EMPTY_RECEIPT,
   type ReceiptEnvelope,
 } from './receipt-feed.js';
-import { $, E, at } from './theme.js';
-import {
-  W, H, MID,
-  ROW_HEADER_TOP, ROW_HEADER_BOT, ROW_TOP_START, ROW_TOP_END,
-  ROW_MID_DIV, ROW_BOT_START,
-  ROW_LOG, ROW_RECEIPT, ROW_HINT, ROW_INTENT, ROW_STATUS, ROW_FOOTER,
-  FLOW_COL, FLOW_NODE_W, nodeRow,
-} from './layout.js';
-import { pad, shortHash, formatStaged } from './format.js';
+import { shortHash, formatStaged } from './format.js';
 import { AUDIT, pushAudit, loadAuditFromDisk, saveReceiptToDisk, loadReceiptFromDisk } from './audit-trail.js';
 import { mkFlow, type FlowState, type NS } from './flow-state.js';
 import { liveAgents, agentStatus, type RunningCommand } from './agent-status.js';
 import { tryBuildLiveBundle, getLiveBundleError, type LiveBundle } from './live-bundle.js';
-import { buildFrame, type PanelOverlay } from './render.js';
+import { type PanelOverlay } from './render.js';
 import { applyOrchestratorStep, KNOWN_STEPS } from './orchestrator-step.js';
 import {
   openGrantModal as openGrantModalImpl,
@@ -245,16 +239,8 @@ function formatViemCrash(e: unknown): { summary: string; reason: string | null }
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
-let renderTimer: ReturnType<typeof setInterval> | null = null
-
-function render() {
-  const tooSmall = W() < 100 || H() < 32
-  if (tooSmall) {
-    process.stdout.write(`${E}[2J${E}[H` +
-      $.red + "\n  Terminal too small — resize to at least 100×32\n" + $.reset)
-    return
-  }
-  process.stdout.write(`${E}[?25l${E}[2J${E}[H` + buildFrame({
+function getState() {
+  return {
     flow,
     stagedIntent,
     runningCommand,
@@ -268,7 +254,11 @@ function render() {
     helpOverlayOpen,
     panelOverlay,
     balanceHint,
-  }))
+  };
+}
+
+function render() {
+  updateUI(getState());
 }
 
 // ── Step logic ────────────────────────────────────────────────────────────────
@@ -2009,10 +1999,6 @@ async function dispatchKHHireIntent(
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 
-process.stdin.setRawMode(true)
-process.stdin.resume()
-process.stdin.setEncoding("utf8")
-
 function handleIntentKey(key: string): boolean {
   // `?` — toggle help overlay even while editing. Intent commands
   // never contain `?`, so claiming the key here is unambiguous.
@@ -2141,95 +2127,14 @@ function refreshLivePreview(): void {
   intentHint = ''
 }
 
-process.stdin.on("data", (key: string) => {
-  if (toast) toast = null
-
-  // Modal eats everything.
-  if (grantModalOpen) {
-    if (key === '\r' || key === '\n') {
-      void confirmGrantImpl({
-        stagedIntent,
-        setToast,
-        setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
-        render,
-      }).then(() => render())
-    } else if (key === '\x1b' || key === 'q' || key === 'Q' || key === '\x03') {
-      grantModalOpen = false
-      if (key === '\x03') { cleanup(); process.exit(0) }
-    }
-    render()
-    return
-  }
-
-  // Editing mode — buffer chars unless the keypress is a global hotkey
-  // unrecognised by handleIntentKey (in which case it falls through).
-  if (intentMode === 'editing') {
-    if (handleIntentKey(key)) {
-      render()
-      return
-    }
-    // Fall-through: unrecognised keys (e.g. Ctrl+C) hit the global
-    // handler below. Most users won't reach this path.
-  }
-
-  // Global hotkeys (Ctrl+C always escapes).
-  if (key === '\x03') { cleanup(); process.exit(0) }
-  if (key === 'q' || key === 'Q') {
-    if (intentMode === 'idle') { cleanup(); process.exit(0) }
-  }
-  if (key === '?') {
-    // `?` toggles the help overlay regardless of focus.
-    helpOverlayOpen = !helpOverlayOpen
-  } else if (key === '\x1b' && helpOverlayOpen) {
-    // Esc closes the overlay when in idle mode (handleIntentKey
-    // already handles the editing-mode case).
-    helpOverlayOpen = false
-  } else if (key === '\t') {
-    intentMode = intentMode === 'editing' ? 'idle' : 'editing'
-  } else if (key === 'g' || key === 'G') {
-    openGrantModalImpl({
-      stagedIntent,
-      setToast,
-      setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
-      render,
-    })
-  } else if (key === 'z' || key === 'Z') {
-    panelOverlay = panelOverlay === 'audit' ? 'none' : 'audit'
-  } else if (key === 'x' || key === 'X') {
-    panelOverlay = panelOverlay === 'flow' ? 'none' : 'flow'
-  } else if (key === '\x1b' && panelOverlay !== 'none') {
-    panelOverlay = 'none'
-  } else if (key === 'r' || key === 'R') {
-    // Reset the FLOW panel + audit trail. Slice C dropped the
-    // synthetic walkthrough (advance/setAuto), so this is the only
-    // surviving "back to a clean slate" hotkey. Idle-mode only — we
-    // don't want a stray `R` while typing an intent to wipe state.
-    if (intentMode === 'idle') {
-      flow = mkFlow()
-      AUDIT.length = 0
-      receiptEnvelope = EMPTY_RECEIPT
-      stagedIntent = null
-      intentBuffer = ''
-      render()
-    }
-  }
-  render()
-})
-
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
 function cleanup() {
-  if (renderTimer)  clearInterval(renderTimer)
-  process.stdout.write(`${E}[?25h${E}[2J${E}[H`)
+  tuiRenderer?.destroy();
 }
 
 process.on("exit",   cleanup)
 process.on("SIGINT", () => { cleanup(); process.exit(0) })
-process.stdout.on("resize", render)
-
-// Refresh clock + receipt JSON in header every second. Async dispatchers
-// mutate state in the background; this tick is what paints them.
-renderTimer = setInterval(render, 1000)
 
 // Background balance refresh — polls 0G OG + Base Sepolia USDC every 30s
 // so the header always shows current holdings without blocking the UI.
@@ -2252,6 +2157,95 @@ setInterval(refreshBalances, 30_000);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-process.stdout.write(`${E}[2J`)
-pushAudit('system', 'tui ready — type an intent below and Enter to dispatch', 'info')
-render()
+await initUI();
+pushAudit('system', 'tui ready — type an intent below and Enter to dispatch', 'info');
+
+// OpenTUI frame callback — called at targetFps (12 fps). Keeps panels
+// up-to-date between explicit render() calls triggered by dispatchers.
+tuiRenderer.setFrameCallback(async () => { updateUI(getState()); });
+
+// ── Keyboard wiring ───────────────────────────────────────────────────────────
+
+tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
+  if (toast) toast = null;
+
+  // raw byte sequence — same values the old stdin data handler compared against
+  const key = ev.raw;
+
+  // Modal eats everything.
+  if (grantModalOpen) {
+    if (ev.name === 'return') {
+      void confirmGrantImpl({
+        stagedIntent,
+        setToast,
+        setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
+        render,
+      }).then(() => render())
+    } else if (ev.name === 'escape' || key === 'q' || key === 'Q' || (ev.ctrl && ev.name === 'c')) {
+      grantModalOpen = false
+      if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
+    }
+    render()
+    return
+  }
+
+  // Editing mode — buffer chars unless the keypress is a global hotkey
+  // unrecognised by handleIntentKey (in which case it falls through).
+  if (intentMode === 'editing') {
+    if (handleIntentKey(key)) {
+      render()
+      return
+    }
+    // Fall-through: unrecognised keys (e.g. Ctrl+C) hit the global
+    // handler below. Most users won't reach this path.
+  }
+
+  // Global hotkeys (Ctrl+C always escapes).
+  if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
+  if (key === 'q' || key === 'Q') {
+    if (intentMode === 'idle') { cleanup(); process.exit(0) }
+  }
+  if (key === '?') {
+    helpOverlayOpen = !helpOverlayOpen
+  } else if (ev.name === 'escape' && helpOverlayOpen) {
+    helpOverlayOpen = false
+  } else if (ev.name === 'tab') {
+    intentMode = intentMode === 'editing' ? 'idle' : 'editing'
+  } else if (key === 'g' || key === 'G') {
+    openGrantModalImpl({
+      stagedIntent,
+      setToast,
+      setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
+      render,
+    })
+  } else if (key === 'z' || key === 'Z') {
+    panelOverlay = panelOverlay === 'audit' ? 'none' : 'audit'
+  } else if (key === 'x' || key === 'X') {
+    panelOverlay = panelOverlay === 'flow' ? 'none' : 'flow'
+  } else if (ev.name === 'escape' && panelOverlay !== 'none') {
+    panelOverlay = 'none'
+  } else if (key === 'r' || key === 'R') {
+    if (intentMode === 'idle') {
+      flow = mkFlow()
+      AUDIT.length = 0
+      receiptEnvelope = EMPTY_RECEIPT
+      stagedIntent = null
+      intentBuffer = ''
+      render()
+    }
+  }
+  render()
+});
+
+// Paste handler — treat pasted text as intent buffer input.
+tuiRenderer.keyInput.on('paste', (ev: PasteEvent) => {
+  const text = new TextDecoder().decode(ev.bytes);
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code >= 32 && code !== 127) intentBuffer += ch;
+  }
+  refreshLivePreview();
+  render();
+});
+
+render();

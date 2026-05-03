@@ -98,7 +98,7 @@ A regulator verifying a report:
 4. payViaKeeperHubMarketplace                    @keeperhub/wallet shim
    ├─ HTTP 402 challenge from KH MCP endpoint
    ├─ x402 settlement on Base Sepolia            packages/workflow/src/x402.ts
-   │   - EIP-3009 USDC transferWithAuthorization
+   │   - KH facilitator settles USDC on-chain
    │   - settles to FeeSplitter or AgentReceiverWallet
    └─ retry with X-PAYMENT header → workflow run
 5. KH returns runId + result                     audit row in TUI
@@ -115,7 +115,7 @@ packages/
   workflow ◄── audit-agent, swap-agent, mcp-adapter, demo, tui (live)
   router   ◄── demo, agents (mode classifier optional)
   oracle-data ◄── apps/agents/oracle
-  wallet-aa ◄── tui (park/unpark, ERC-4337 hooks)
+  wallet-aa ◄── tui (aa-deploy, aa-send UserOp via Pimlico bundler)
   ui, env, config (multi-app shared, not on the agent path)
 
 apps/
@@ -144,12 +144,12 @@ template-baseline packages: `config`, `env`, `ui`).
 | `AgentRegistry.sol` (ERC-8004) | 0G Galileo | `Deploy0GContracts.s.sol` | `packages/workflow/src/erc8004.ts:postReceipt`, `apps/zhgg-mcp-adapter/src/index.ts:130` |
 | `AxiomCommit.sol` | 0G Galileo | `Deploy0GContracts.s.sol` | `apps/demo/src/loop-helpers.ts` (commit/reveal) |
 | `AgenticCommerce.sol` (ACP / EIP-8183) | 0G Galileo | `Deploy0GContracts.s.sol` | `apps/tui/src/index.ts:1218` (`acp create/release`) |
-| `SpendCap.sol` (ERC-7715) | Base Sepolia | `DeployBaseContracts.s.sol` | `packages/workflow/src/x402.ts` (pre-flight gate) |
+| `SpendCap.sol` (ERC-7715) | Base Sepolia | `DeployBaseContracts.s.sol` | `packages/workflow/src/x402.ts` (pre-flight gate); deployed with `enforced=false` — checks and logs, does not hard-block |
 | `FeeSplitter.sol` (ERC-8021) | Base Sepolia | `DeployBaseContracts.s.sol` | `packages/workflow/src/x402.ts` (settle target), TUI live-feed |
 | `OwnerMirror.sol` | Base Sepolia | `DeployBaseContracts.s.sol` | `AgentReceiverWallet.splitMyBalance` reads `ownerOf` |
 | `AgentReceiverWalletFactory.sol` | Base Sepolia | `DeployBaseContracts.s.sol` | `apps/tui/src/index.ts:1062` (park/unpark + split) |
 | `DelegationManager.sol` (ERC-7710) | Base Sepolia | `DeployBaseContracts.s.sol` | `apps/tui/src/index.ts:799` (delegate intent), `packages/workflow/src/delegation.ts` |
-| `AgentSimpleAccountFactory.sol` (ERC-4337) | Base Sepolia | `DeployBaseContracts.s.sol` | `packages/wallet-aa/*` |
+| `AgentSimpleAccountFactory.sol` (ERC-4337) | Base Sepolia | `DeployBaseContracts.s.sol` | `packages/wallet-aa/*`; `apps/tui/src/index.ts` (`aa deploy` / `aa send`) |
 | `MockERC4626.sol` (yield) | Base Sepolia | `DeployYieldVault.s.sol` | TUI `park <amt> <USDC|WETH>` via `AgentReceiverWallet.parkIdle` |
 | `ENSRegistrar.sol` | mainnet ENS | external (zhgg.eth owner) | `apps/mint-agent/src/index.ts:237` (optional, gated on `ENS_REGISTRAR_ADDRESS`) |
 

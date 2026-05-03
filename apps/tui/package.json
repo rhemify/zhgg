@@ -13,6 +13,7 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@opentui/core": "^0.2.2",
     "@zhgg/audit-agent": "workspace:*",
     "@zhgg/keeperhub-agent": "workspace:*",
     "@zhgg/mint-agent": "workspace:*",
