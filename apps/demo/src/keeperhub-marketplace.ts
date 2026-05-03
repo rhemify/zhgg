@@ -25,7 +25,7 @@
 /// with a public `splitMyBalance()` function anyone can call to fan out
 /// via FeeSplitter — removes the Turnkey-signs-FeeSplitter problem.
 
-import { createPaymentSigner, type WalletConfig } from '@keeperhub/wallet';
+import { createPaymentSigner, KeeperHubClient, type WalletConfig } from '@keeperhub/wallet';
 import type { Address, Hex } from 'viem';
 
 export interface KeeperHubMarketplaceConfig {
@@ -67,14 +67,21 @@ export async function payViaKeeperHubMarketplace(
     hmacSecret: cfg.hmacSecret,
   };
 
-  // Inject the wallet via `walletLoader` so we don't touch
-  // ~/.keeperhub/wallet.json on the host.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const signer: any = (createPaymentSigner as any)({
-    walletLoader: async () => wallet,
-  });
+  // Normalise baseUrl: treat empty string the same as unset.
+  // KEEPERHUB_API_URL="" in .env means process.env returns "" which the
+  // ?? fallback does NOT catch (it only catches null/undefined). We fix
+  // it here so KeeperHubClient never receives an empty baseUrl and tries
+  // to construct relative URLs like /api/agentic-wallet/sign → "URL is invalid".
+  const baseUrl = (cfg.baseUrl && cfg.baseUrl.length > 0)
+    ? cfg.baseUrl
+    : 'https://app.keeperhub.com';
 
-  const baseUrl = cfg.baseUrl ?? 'https://app.keeperhub.com';
+  // Inject the wallet via walletLoader + clientFactory so we don't touch
+  // ~/.keeperhub/wallet.json and KeeperHubClient uses our resolved baseUrl.
+  const signer = createPaymentSigner({
+    walletLoader: async () => wallet,
+    clientFactory: (w) => new KeeperHubClient(w, { baseUrl }),
+  });
   const resourceUrl = `${baseUrl.replace(/\/$/, '')}/api/mcp/workflows/${encodeURIComponent(cfg.marketplaceSlug)}/call`;
 
   // Validate URL before calling signer.fetch — a bad slug surfaces a
