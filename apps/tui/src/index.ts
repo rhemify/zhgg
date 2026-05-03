@@ -106,6 +106,7 @@ import {
 } from '@zhgg/workflow';
 import { resolveRecipient } from '../../transfer-agent/src/resolve-recipient.js';
 import { executePark, executeUnpark } from './yield-intents.js';
+import { apyTrendHint, DEMO_APY_PCT, DEMO_APY_SAMPLES_30D } from './sparkline.js';
 import {
   ENTRYPOINT_V07_ADDRESS,
   buildUserOp,
@@ -1981,7 +1982,7 @@ function handleIntentKey(key: string): boolean {
   // Backspace (0x7f / 0x08).
   if (key === '\x7f' || key === '\b') {
     intentBuffer = intentBuffer.slice(0, -1)
-    intentHint = ''
+    refreshLivePreview()
     return true
   }
   // Esc — close help overlay first, otherwise clear input. Two-step
@@ -2009,11 +2010,29 @@ function handleIntentKey(key: string): boolean {
     const code = key.charCodeAt(0)
     if (code >= 32 && code < 127) {
       intentBuffer += key
-      intentHint = ''
+      refreshLivePreview()
       return true
     }
   }
   return false
+}
+
+/// Re-parse the intent buffer on every keystroke and set a pre-Enter
+/// hint when the buffer resolves to a decision-supporting intent (today:
+/// just `park`, where the operator's pre-decision question is "is the
+/// APY a peak, a trough, or a stable plateau?"). Other intents leave
+/// the hint empty — there's no useful trend to surface for them.
+function refreshLivePreview(): void {
+  const parsed = parseIntent(intentBuffer)
+  if (parsed.kind === 'park') {
+    intentHint = apyTrendHint({
+      vaultLabel: 'MockERC4626',
+      apyPct: DEMO_APY_PCT,
+      samples: DEMO_APY_SAMPLES_30D,
+    })
+    return
+  }
+  intentHint = ''
 }
 
 process.stdin.on("data", (key: string) => {
