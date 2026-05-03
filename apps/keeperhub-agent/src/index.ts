@@ -192,17 +192,34 @@ export function buildKHFromEnv(
 }
 
 // ─── Re-exports for downstream consumers ─────────────────────────────────
+//
+// `keeperhub-agent/client` and `keeperhub-agent/types` remain granular
+// subpaths; the re-exports below let barrel consumers reach the full
+// public surface (client factory + endpoint helpers + types) from the
+// package root.
 
-export type { KHClient, KHFetch } from './client.js';
-export { KH_DEFAULT_BASE_URL } from './client.js';
+export { createKHClient, KH_DEFAULT_BASE_URL } from './client.js';
+export type {
+  KHClient,
+  KHClientConfig,
+  KHFetch,
+  KHFetchInit,
+  KHFetchResponse,
+} from './client.js';
 export type {
   KHWorkflowExecution,
   KHWorkflowStep,
   KHWorkflowStatus,
 } from './types.js';
+export { listWorkflows } from './endpoints/list-workflows.js';
 export type { KHWorkflowSummary } from './endpoints/list-workflows.js';
+export { listIntegrations } from './endpoints/list-integrations.js';
 export type { KHIntegrationSummary, KHIntegrationType } from './endpoints/list-integrations.js';
+export { discoverWorkflows, inspectWorkflow } from './endpoints/discover.js';
 export type { KHPublicWorkflow, DiscoverFilters } from './endpoints/discover.js';
+export { triggerWorkflow } from './endpoints/workflow-trigger.js';
+export type { TriggerArgs } from './endpoints/workflow-trigger.js';
+export { getWorkflowStatus } from './endpoints/workflow-status.js';
 
 // ─── CLI entrypoint (one-shot) ───────────────────────────────────────────
 

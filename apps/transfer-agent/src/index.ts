@@ -258,3 +258,19 @@ if (import.meta.main) {
     process.exit(1);
   });
 }
+
+// ─── Barrel re-exports (public API of the subpath modules) ────────────────
+//
+// Granular consumers can keep importing `transfer-agent/erc20`,
+// `transfer-agent/native`, or `transfer-agent/resolve-recipient`. The
+// re-exports below let barrel consumers reach the same surface from the
+// package root.
+
+export { sendErc20Transfer } from './erc20.js';
+export type { Erc20TransferRequest, Erc20TransferResult } from './erc20.js';
+
+export { sendNativeTransfer } from './native.js';
+export type { NativeTransferRequest, NativeTransferResult } from './native.js';
+
+export { resolveRecipient } from './resolve-recipient.js';
+export type { ResolveError, ResolveOptions, ResolveResult } from './resolve-recipient.js';

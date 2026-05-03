@@ -1,6 +1,10 @@
 /// `bun run apps/swap-agent <amount> <fromSym> <toSym>` — real swap on
 /// Base Sepolia.
 ///
+/// This file is the package barrel. Granular subpath consumers can still
+/// import `swap-agent/uniswap-v3` or `swap-agent/wrap-fallback`; the
+/// re-exports below give barrel consumers the same public surface.
+///
 /// Two routes:
 ///   - ETH ↔ WETH  → WETH9.deposit / WETH9.withdraw (no pool needed).
 ///   - else        → Uniswap V3 SwapRouter02.exactInputSingle, probing
@@ -335,3 +339,31 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   void main();
 }
+
+// ─── Barrel re-exports (public API of the subpath modules) ────────────────
+
+export {
+  ensureErc20Allowance,
+  FEE_TIERS,
+  findUniswapV3Pool,
+  submitErc20OutEthExactInputSingle,
+  submitEthInExactInputSingle,
+  submitExactInputSingle,
+  SWAP_ROUTER_02,
+  V3_FACTORY,
+} from './uniswap-v3.js';
+export type {
+  EnsureAllowanceArgs,
+  ExactInputSingleArgs,
+  ExactInputSingleDeps,
+  ExactInputSingleParams,
+  FeeTier,
+  FindPoolDeps,
+} from './uniswap-v3.js';
+
+export {
+  depositEthToWeth,
+  WETH9_BASE_SEPOLIA,
+  withdrawWethToEth,
+} from './wrap-fallback.js';
+export type { WrapArgs, WrapDeps } from './wrap-fallback.js';

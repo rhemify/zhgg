@@ -564,3 +564,23 @@ if (isMain) {
     process.exit(1);
   });
 }
+
+// ─── Barrel re-exports (public API of the subpath modules) ────────────────
+//
+// `mint-agent/steps` remains a granular subpath; the re-exports below let
+// barrel consumers reach the same step primitives from the package root.
+
+export {
+  grantSpendCap,
+  mintAgentNFT,
+  mintSubname,
+  registerAgent,
+} from './steps.js';
+export type {
+  GrantSpendCapArgs,
+  MintAgentNFTArgs,
+  MintError,
+  MintExecutor,
+  MintSubnameArgs,
+  RegisterAgentArgs,
+} from './steps.js';
