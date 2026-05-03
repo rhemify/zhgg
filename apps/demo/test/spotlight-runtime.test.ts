@@ -62,6 +62,8 @@ function makeBundle(): SpotlightDepsBundle {
         cost_usd: 0.0006,
         latency_ms: 240,
         attestation_root: null,
+        tee_verified: null,
+        tee_provider: null,
         receipt: `cmpl-fake-${probeIndex}`,
         provider_id: 'qwen3.6-plus-fake',
         tee_verified_locally: null,

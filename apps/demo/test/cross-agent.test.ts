@@ -13,11 +13,18 @@ const TARGET = {
 const okJson = (compliant: boolean, finding: string) =>
   JSON.stringify({ compliant, finding });
 
-const okResp = (text: string, attestation: string | null = null): ZGInferenceResult => ({
+const okResp = (
+  text: string,
+  attestation: string | null = null,
+  teeVerified: boolean | null = null,
+  teeProvider: string | null = null
+): ZGInferenceResult => ({
   response: text,
   cost_usd: 0.0006,
   latency_ms: 100,
   attestation_root: attestation,
+  tee_verified: teeVerified,
+  tee_provider: teeProvider,
   receipt: 'cmpl-x',
   provider_id: 'qwen3.6-plus',
   tee_verified_locally: null,
@@ -227,5 +234,87 @@ describe('runCrossAgentDemo', () => {
     expect(transcript.auditReport?.verdict).toBe('non_compliant');
     const completeStep = transcript.steps.find((s) => s.name === 'audit.complete');
     expect(completeStep?.detail?.verdict).toBe('non_compliant');
+  });
+
+  /// Commit 6 — structured TEE evidence flows from inferZG router-trace
+  /// fields through audit-agent into the canonical AuditReport. Pre-fix,
+  /// only the legacy `attestation_root` sentinel string crossed the
+  /// boundary; the router's `trace.tee_verified` boolean was lost in the
+  /// /^0x[0-9a-fA-F]+$/ regex check on the cross-agent side. Now the
+  /// structured fields ride alongside, omitted (not zeroed) when the
+  /// router didn't return a trace block.
+  it('threads structured TEE verdict (teeVerified + teeProvider) into canonical AuditReport', async () => {
+    const teeOk: ZGInferenceResult = {
+      response: okJson(true, 'discloses ai'),
+      cost_usd: 0.0006,
+      latency_ms: 100,
+      attestation_root: 'tee_verified:qwen-tee-1',
+      tee_verified: true,
+      tee_provider: 'qwen-tee-1',
+      receipt: 'cmpl-tee-1',
+      provider_id: 'qwen3.6-plus',
+      tee_verified_locally: null,
+      tee_verifier_reason: null,
+    };
+    const transcript = await runCrossAgentDemo(
+      {
+        settleOraclePayment: async () => null,
+        auditDeps: makeAuditDeps({
+          inferResponses: [
+            { ok: true, value: teeOk },
+            { ok: true, value: teeOk },
+            { ok: true, value: teeOk },
+          ],
+        }),
+      },
+      {
+        target: TARGET,
+        oracleTopic: 'eu-ai-act',
+        auditOptions: {
+          apiKey: 'sk-fake',
+          registryAddress: '0x1111111111111111111111111111111111111111',
+          agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
+          clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
+        },
+      }
+    );
+    const qwen = transcript.canonicalAuditReport?.evidenceChain?.qwenInference;
+    expect(qwen).toBeTruthy();
+    expect(qwen?.teeVerified).toBe(true);
+    expect(qwen?.teeProvider).toBe('qwen-tee-1');
+    // Legacy slot stays absent because the sentinel string isn't valid hex.
+    expect(qwen?.teeAttestation).toBeUndefined();
+  });
+
+  it('omits teeVerified entirely when router returned no trace (honest unknown)', async () => {
+    // Default `okResp` helper sets tee_verified + tee_provider to null —
+    // matches the "no trace block" path. Canonical bytes must omit both
+    // fields rather than emit `false` / empty string, so a regulator can
+    // distinguish "router rejected" (false) from "no trace" (omitted).
+    const transcript = await runCrossAgentDemo(
+      {
+        settleOraclePayment: async () => null,
+        auditDeps: makeAuditDeps({
+          inferResponses: [
+            { ok: true, value: okResp(okJson(true, 'a')) },
+            { ok: true, value: okResp(okJson(true, 'b')) },
+            { ok: true, value: okResp(okJson(true, 'c')) },
+          ],
+        }),
+      },
+      {
+        target: TARGET,
+        oracleTopic: 'eu-ai-act',
+        auditOptions: {
+          apiKey: 'sk-fake',
+          registryAddress: '0x1111111111111111111111111111111111111111',
+          agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111',
+          clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222',
+        },
+      }
+    );
+    const qwen = transcript.canonicalAuditReport?.evidenceChain?.qwenInference;
+    expect(qwen?.teeVerified).toBeUndefined();
+    expect(qwen?.teeProvider).toBeUndefined();
   });
 });

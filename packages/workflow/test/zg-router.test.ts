@@ -165,6 +165,12 @@ describe('inferZG', () => {
       if (!result.ok) throw new Error('unreachable');
       expect(result.value.attestation_root).toBe('tee_verified:qwen-tee-1');
       expect(result.value.tee_verified_locally).toBe(true);
+      // Structured TEE fields surface the router's actual trace verdict
+      // — independent of the legacy `attestation_root` sentinel string.
+      // Regulator-side parsers can now bind on a typed boolean instead
+      // of pattern-matching the sentinel.
+      expect(result.value.tee_verified).toBe(true);
+      expect(result.value.tee_provider).toBe('qwen-tee-1');
       // Sidecar must have received the envelope's intel_quote + signing_address.
       expect(verifierBody).not.toBeNull();
       const sentToVerifier = JSON.parse(verifierBody!);
@@ -196,6 +202,10 @@ describe('inferZG', () => {
       expect(result.value.attestation_root).toBe('tee_verified:qwen-tee-1');
       expect(result.value.tee_verified_locally).toBeNull();
       expect(result.value.tee_verifier_reason).toBe('no_attestation_envelope');
+      // Structured fields independent of the envelope — present whenever
+      // the router returned a trace, regardless of header attestation.
+      expect(result.value.tee_verified).toBe(true);
+      expect(result.value.tee_provider).toBe('qwen-tee-1');
     });
 
     it('trace.tee_verified=false → attestation_root falls back to header (or null), no sidecar call', async () => {
@@ -223,6 +233,28 @@ describe('inferZG', () => {
       // hitting the sidecar.
       expect(verifierCalled).toBe(false);
       expect(result.value.tee_verifier_reason).toBe('no_attestation_envelope');
+      // Structured: router explicitly said `false` — record that, don't
+      // collapse to null. Regulator can distinguish "router rejected"
+      // from "no trace returned."
+      expect(result.value.tee_verified).toBe(false);
+      expect(result.value.tee_provider).toBeNull();
+    });
+
+    it('no trace block → tee_verified + tee_provider both null (honest unknown)', async () => {
+      // When the router doesn't return a trace block at all (e.g.
+      // verifyTee not requested, or older router build), both structured
+      // fields stay `null`. This is the "honest unknown" path — never
+      // silently `false`, which would imply the router rejected.
+      const fetchImpl = mockFetch(async () => okBody('ok'));
+      const result = await inferZG('p', {
+        apiKey: FAKE_KEY,
+        // verifyTee NOT set
+        fetchImpl,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable');
+      expect(result.value.tee_verified).toBeNull();
+      expect(result.value.tee_provider).toBeNull();
     });
 
     it('header present but envelope missing signing_address → envelope_missing_required_fields', async () => {

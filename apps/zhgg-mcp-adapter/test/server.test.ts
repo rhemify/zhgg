@@ -20,6 +20,8 @@ const FAKE_REPORT: AuditReport = {
   ],
   findings: ['ok'],
   attestationRoot: null,
+  teeVerified: null,
+  teeProvider: null,
   receiptTxHash: '0xabc',
 };
 

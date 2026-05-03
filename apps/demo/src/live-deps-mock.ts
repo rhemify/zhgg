@@ -37,6 +37,8 @@ export const syntheticInferImpl: AuditDeps['infer'] = async (_prompt, _opts) => 
       cost_usd: 0.0006,
       latency_ms: 240,
       attestation_root: null,
+      tee_verified: null,
+      tee_provider: null,
       receipt: `cmpl-mock-${probeCounter}`,
       provider_id: 'qwen3.6-plus-mock',
       tee_verified_locally: null,

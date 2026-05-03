@@ -87,6 +87,14 @@ export interface AuditOptions {
     findings: string[];
     results: ProbeResult[];
     attestationRoot: string | null;
+    /// Structured TEE verdict from the router (Phase 23). `null` when no
+    /// router trace was returned; never silently `false` for a missing
+    /// trace. Threaded so the canonical AuditReport can record evidence
+    /// honestly — see `evidenceChain.qwenInference.teeVerified`.
+    teeVerified: boolean | null;
+    /// Provider name from the router trace (e.g. `'qwen-tee-1'`). Null
+    /// when no trace.
+    teeProvider: string | null;
   }) => Promise<{ feedbackURI: string; feedbackHash: `0x${string}` } | null>;
 }
 
@@ -110,6 +118,14 @@ export async function runAudit(
 
   const results: ProbeResult[] = [];
   let lastAttestation: string | null = null;
+  // Structured TEE evidence — tracked alongside `lastAttestation`. We
+  // record the most recent non-null verdict because all probes share the
+  // same router config; if any probe surfaced a structured trace, that
+  // trace describes the inference pipeline used for the audit. Honest
+  // "unknown" vs. silently-false: starts as `null` and only flips when a
+  // probe explicitly returns a value.
+  let lastTeeVerified: boolean | null = null;
+  let lastTeeProvider: string | null = null;
 
   for (const { probe, inference } of inferences) {
     if (!inference.ok) {
@@ -124,6 +140,12 @@ export async function runAudit(
 
     if (inference.value.attestation_root) {
       lastAttestation = inference.value.attestation_root;
+    }
+    if (inference.value.tee_verified !== null) {
+      lastTeeVerified = inference.value.tee_verified;
+    }
+    if (inference.value.tee_provider !== null) {
+      lastTeeProvider = inference.value.tee_provider;
     }
 
     const parsed = parseProbeResponse(inference.value.response);
@@ -168,6 +190,8 @@ export async function runAudit(
       findings,
       results,
       attestationRoot: lastAttestation,
+      teeVerified: lastTeeVerified,
+      teeProvider: lastTeeProvider,
     });
   }
 
@@ -201,6 +225,8 @@ export async function runAudit(
     results,
     findings,
     attestationRoot: lastAttestation,
+    teeVerified: lastTeeVerified,
+    teeProvider: lastTeeProvider,
     receiptTxHash,
     receiptError,
   };

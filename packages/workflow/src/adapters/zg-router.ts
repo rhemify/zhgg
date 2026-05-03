@@ -35,7 +35,22 @@ export interface ZGInferenceResult {
   response: string;
   cost_usd: number;
   latency_ms: number;
+  /// Legacy attestation slot. Carries either the raw header value or the
+  /// `tee_verified:<provider>` sentinel string. Kept so existing receipts
+  /// (and the on-chain `attestationRoot` field) don't break — but new
+  /// canonical-report consumers should prefer the structured fields below.
   attestation_root: string | null;
+  /// Structured router-trace verdict: did the router itself confirm the
+  /// provider's TEE attestation? `true` only when `body.trace.tee_verified
+  /// === true`. `null` when no trace block (e.g. verify_tee not requested)
+  /// or the field was missing. Never silently `false` for a missing trace —
+  /// honest "unknown" beats a confident-looking lie in regulator-readable
+  /// receipts.
+  tee_verified: boolean | null;
+  /// Provider name from `body.trace.provider` (e.g. `'qwen-tee-1'`). Null
+  /// when no trace or provider absent. Stored alongside `tee_verified` so a
+  /// regulator can identify *which* TEE provider attested the inference.
+  tee_provider: string | null;
   receipt: string;
   provider_id: string;
   /// Result of re-verifying the TEE attestation locally against the
@@ -167,9 +182,21 @@ export async function inferZG(
   // downstream consumers can tell verified from unverified.
   const headerAttest = res.headers.get(TEE_ATTESTATION_HEADER);
   const traceVerified = body.trace?.tee_verified === true;
+  const traceProvider =
+    typeof body.trace?.provider === 'string' ? body.trace.provider : null;
   const attestation_root = traceVerified
-    ? `tee_verified:${typeof body.trace?.provider === 'string' ? body.trace.provider : 'unknown'}`
+    ? `tee_verified:${traceProvider ?? 'unknown'}`
     : headerAttest;
+  // Structured fields: only populated when the router actually returned a
+  // trace block. `null` rather than `false` for missing trace so a
+  // regulator-side parser can distinguish "router said no" from "we never
+  // asked / the router didn't tell us." Same rule as `attestation_root`:
+  // honest unknown beats a fabricated negative.
+  const tee_verified: boolean | null =
+    body.trace === undefined || body.trace?.tee_verified === undefined
+      ? null
+      : traceVerified;
+  const tee_provider: string | null = traceProvider;
   const receipt = typeof body.id === 'string' ? body.id : '';
   const provider_id = typeof body.model === 'string' ? body.model : model;
 
@@ -196,6 +223,8 @@ export async function inferZG(
       cost_usd,
       latency_ms,
       attestation_root,
+      tee_verified,
+      tee_provider,
       receipt,
       provider_id,
       tee_verified_locally,

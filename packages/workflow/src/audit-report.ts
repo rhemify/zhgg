@@ -73,6 +73,19 @@ export interface AuditReport {
       /// unfunded → synthetic inference). Honest signal to the regulator:
       /// no attestation means no in-TEE proof of inference.
       teeAttestation?: Hex;
+      /// Structured TEE verdict from the router's `trace.tee_verified`
+      /// field. `true` = router confirmed the provider's TEE attestation,
+      /// `false` = router explicitly rejected. Both record real evidence;
+      /// the field is OMITTED entirely (vs. set to false) when no router
+      /// trace was returned, preserving the "honest unknown" signal in
+      /// the canonical bytes — a regulator can tell a missing trace from
+      /// a router-rejected one. Optional so existing canonical hashes for
+      /// older receipts (no field present) stay valid.
+      teeVerified?: boolean;
+      /// Provider name from `trace.provider` (e.g. `'qwen-tee-1'`). Pairs
+      /// with `teeVerified` so the regulator knows *which* TEE provider
+      /// attested. Omitted when no trace.
+      teeProvider?: string;
       verifiedAtBlock?: string;
     };
     settlement?: {

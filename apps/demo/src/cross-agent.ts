@@ -408,6 +408,8 @@ export async function runCrossAgentDemo(
       finding: string;
     }>;
     attestationRoot: string | null;
+    teeVerified: boolean | null;
+    teeProvider: string | null;
   }): Promise<{ feedbackURI: string; feedbackHash: Hex } | null> => {
     const auditor = opts.auditorIdentity;
     const subject = opts.subjectIdentity;
@@ -475,12 +477,23 @@ export async function runCrossAgentDemo(
           modelId: 'qwen3.6-plus',
           promptHash,
           responseHash,
-          // null teeAttestation when ZG_ROUTER_KEY unfunded — honest
-          // "not in TEE" signal.
+          // teeAttestation is the legacy raw-hex slot — only populated
+          // when the attestation_root is a valid hex envelope (real
+          // x-tee-attestation header path). The router's `trace.tee_verified`
+          // sentinel string `'tee_verified:<provider>'` is NOT hex and
+          // intentionally fails this regex; that case is captured by
+          // the structured `teeVerified` + `teeProvider` fields below.
           teeAttestation:
             preReceipt.attestationRoot && /^0x[0-9a-fA-F]+$/.test(preReceipt.attestationRoot)
               ? (preReceipt.attestationRoot as Hex)
               : undefined,
+          // Structured TEE evidence — `undefined` (omitted from canonical
+          // bytes) when no router trace was returned. Setting to `false`
+          // would imply the router rejected verification; setting to
+          // `undefined` honestly says "no trace block was present."
+          teeVerified:
+            preReceipt.teeVerified === null ? undefined : preReceipt.teeVerified,
+          teeProvider: preReceipt.teeProvider ?? undefined,
         },
         settlement:
           settle && /^0x[0-9a-fA-F]+$/.test(settle.txHash)

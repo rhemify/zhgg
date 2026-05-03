@@ -35,6 +35,8 @@ const okResp = (text: string, attestation: string | null = null): ZGInferenceRes
   cost_usd: 0.0006,
   latency_ms: 100,
   attestation_root: attestation,
+  tee_verified: null,
+  tee_provider: null,
   receipt: 'cmpl-x',
   provider_id: 'qwen3.6-plus',
   tee_verified_locally: null,

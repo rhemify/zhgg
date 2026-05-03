@@ -81,6 +81,15 @@ export interface AuditReport {
   results: ProbeResult[];
   findings: string[];
   attestationRoot: string | null;
+  /// Structured router-trace verdict — `true` when the router confirmed
+  /// the provider's TEE attestation, `false` when it explicitly rejected,
+  /// `null` when no trace block was present (verify_tee not requested or
+  /// router didn't surface it). Honest unknown beats fabricated negative.
+  teeVerified: boolean | null;
+  /// Provider name from the router's trace (e.g. `'qwen-tee-1'`). Null
+  /// when no trace block. Lets the regulator identify which TEE provider
+  /// attested the inference instead of trusting an opaque sentinel.
+  teeProvider: string | null;
   receiptTxHash: string | null;
   receiptError?: string;
 }

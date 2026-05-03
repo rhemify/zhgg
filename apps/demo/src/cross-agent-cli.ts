@@ -81,6 +81,10 @@ function makeMockedAuditDeps(): AuditDeps {
         // up on-chain. Live mode (live-deps.ts) populates this from the
         // real 0G Compute response header.
         attestation_root: null,
+        // Structured TEE fields — null in mock for the same reason. Live
+        // mode populates from `body.trace.tee_verified` + `provider`.
+        tee_verified: null,
+        tee_provider: null,
         receipt: `cmpl-mock-${probeIndex}`,
         provider_id: 'qwen3.6-plus-mock',
         tee_verified_locally: null,
