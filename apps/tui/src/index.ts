@@ -107,6 +107,9 @@ import {
 import { resolveRecipient } from '../../transfer-agent/src/resolve-recipient.js';
 import { executePark, executeUnpark } from './yield-intents.js';
 import { apyTrendHint, DEMO_APY_PCT, DEMO_APY_SAMPLES_30D } from './sparkline.js';
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   ENTRYPOINT_V07_ADDRESS,
   buildUserOp,
@@ -119,6 +122,34 @@ import {
   sendUserOperation,
   signUserOp,
 } from '@zhgg/wallet-aa';
+
+// ── Singleton lock — prevent stacked TUI instances ───────────────────────────
+//
+// Write current PID to ~/.zhgg/tui.pid on startup. If a PID file already
+// exists and the process is still alive, kill it so only one TUI runs.
+{
+  const zhggDir = join(homedir(), '.zhgg');
+  const pidFile = join(zhggDir, 'tui.pid');
+  try { mkdirSync(zhggDir, { recursive: true }); } catch {}
+  if (existsSync(pidFile)) {
+    try {
+      const oldPid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
+      if (!isNaN(oldPid) && oldPid !== process.pid) {
+        try {
+          process.kill(oldPid, 'SIGTERM');
+          // Brief pause so the old process can clean up its terminal state
+          await new Promise<void>(r => setTimeout(r, 200));
+        } catch {
+          // Old process already gone — fine
+        }
+      }
+    } catch {}
+  }
+  try { writeFileSync(pidFile, String(process.pid)); } catch {}
+  const removePid = () => { try { unlinkSync(pidFile); } catch {} };
+  process.on('exit', removePid);
+  process.on('SIGTERM', () => { removePid(); process.exit(0); });
+}
 
 // ANSI primitives, layout constants, agent-status, audit-trail, flow-state,
 // and the live-bundle factory have been moved to focused modules
