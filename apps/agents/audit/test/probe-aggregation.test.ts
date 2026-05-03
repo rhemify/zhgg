@@ -19,6 +19,8 @@ const probeOf = (id: string, articleRef: string, compliant: boolean | null, find
   articleRef,
   compliant,
   finding,
+  renderedPrompt: '',
+  modelId: '',
 });
 
 describe('parseProbeResponse — additional edge cases', () => {

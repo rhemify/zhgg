@@ -317,4 +317,70 @@ describe('runCrossAgentDemo', () => {
     expect(qwen?.teeVerified).toBeUndefined();
     expect(qwen?.teeProvider).toBeUndefined();
   });
+
+  /// Commit 7 — modelId comes from the router's actual `provider_id`,
+  /// promptHash comes from the FULLY-RENDERED probe text the model saw.
+  /// Pre-fix, modelId was hardcoded `'qwen3.6-plus'` and promptHash
+  /// hashed the un-rendered manifest. A regulator re-running with a
+  /// different ProbePrompt set would compute the same `promptHash` even
+  /// though the actual model input was different — defeating the hash.
+  it('records router-actual modelId + rendered-prompt promptHash in canonical report', async () => {
+    const customResp = (model: string): ZGInferenceResult => ({
+      response: okJson(true, 'ok'),
+      cost_usd: 0.0006,
+      latency_ms: 100,
+      attestation_root: null,
+      tee_verified: null,
+      tee_provider: null,
+      receipt: 'cmpl-x',
+      provider_id: model,
+      tee_verified_locally: null,
+      tee_verifier_reason: null,
+    });
+    const target1 = { ...TARGET, manifest: 'first manifest' };
+    const target2 = { ...TARGET, manifest: 'second manifest' };
+    const ROUTER_MODEL = 'qwen3.6-plus-tee-2025-04';
+    const auditOpts = {
+      apiKey: 'sk-fake',
+      registryAddress: '0x1111111111111111111111111111111111111111' as `0x${string}`,
+      agentRegistryCaip: 'eip155:16602:0x1111111111111111111111111111111111111111' as const,
+      clientAddress: 'eip155:84532:0x2222222222222222222222222222222222222222' as const,
+    };
+
+    const t1 = await runCrossAgentDemo(
+      {
+        settleOraclePayment: async () => null,
+        auditDeps: makeAuditDeps({
+          inferResponses: [
+            { ok: true, value: customResp(ROUTER_MODEL) },
+            { ok: true, value: customResp(ROUTER_MODEL) },
+            { ok: true, value: customResp(ROUTER_MODEL) },
+          ],
+        }),
+      },
+      { target: target1, oracleTopic: 'eu-ai-act', auditOptions: auditOpts }
+    );
+    const t2 = await runCrossAgentDemo(
+      {
+        settleOraclePayment: async () => null,
+        auditDeps: makeAuditDeps({
+          inferResponses: [
+            { ok: true, value: customResp(ROUTER_MODEL) },
+            { ok: true, value: customResp(ROUTER_MODEL) },
+            { ok: true, value: customResp(ROUTER_MODEL) },
+          ],
+        }),
+      },
+      { target: target2, oracleTopic: 'eu-ai-act', auditOptions: auditOpts }
+    );
+
+    const qwen1 = t1.canonicalAuditReport?.evidenceChain?.qwenInference;
+    const qwen2 = t2.canonicalAuditReport?.evidenceChain?.qwenInference;
+    expect(qwen1?.modelId).toBe(ROUTER_MODEL);
+    expect(qwen2?.modelId).toBe(ROUTER_MODEL);
+    // Different manifest → different rendered prompts → different hash.
+    // Pre-Commit-7, both runs would compute the same promptHash because
+    // we hashed the manifest, not the rendered prompts.
+    expect(qwen1?.promptHash).not.toBe(qwen2?.promptHash);
+  });
 });

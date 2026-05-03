@@ -73,6 +73,18 @@ export interface ProbeResult {
   articleRef: string;
   compliant: boolean | null; // null = parse failure / unclear
   finding: string;
+  /// Fully-rendered prompt (with `{{manifest}}` substituted) actually
+  /// fed to the model. Empty string when the probe failed before
+  /// rendering. Captured so the canonical AuditReport's `promptHash`
+  /// is computed over the EXACT bytes the model saw, not the un-rendered
+  /// manifest. Pre-fix, `promptHash = keccak256(manifest)` — a regulator
+  /// re-running the audit with a different manifest template would get
+  /// a divergent hash even though the actual probe text was identical.
+  renderedPrompt: string;
+  /// Provider/model identifier the router actually served (e.g.
+  /// `'qwen3.6-plus-tee-2025-04'`). May differ from the requested model
+  /// when the router falls back. Empty string when inference failed.
+  modelId: string;
 }
 
 export interface AuditReport {

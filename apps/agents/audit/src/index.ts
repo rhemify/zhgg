@@ -112,7 +112,7 @@ export async function runAudit(
       const prompt = renderProbe(probe, target.manifest);
       return deps
         .infer(prompt, { apiKey: opts.apiKey })
-        .then((inference) => ({ probe, inference } as const));
+        .then((inference) => ({ probe, prompt, inference } as const));
     })
   );
 
@@ -127,13 +127,18 @@ export async function runAudit(
   let lastTeeVerified: boolean | null = null;
   let lastTeeProvider: string | null = null;
 
-  for (const { probe, inference } of inferences) {
+  for (const { probe, prompt, inference } of inferences) {
     if (!inference.ok) {
       results.push({
         id: probe.id,
         articleRef: probe.articleRef,
         compliant: null,
         finding: `inference failed (${inference.error.kind}): ${inference.error.reason}`,
+        // Capture rendered prompt even on failure so the regulator can
+        // see what the model was asked. modelId is empty because nothing
+        // came back to identify the provider.
+        renderedPrompt: prompt,
+        modelId: '',
       });
       continue;
     }
@@ -155,6 +160,8 @@ export async function runAudit(
         articleRef: probe.articleRef,
         compliant: null,
         finding: `model returned non-JSON response`,
+        renderedPrompt: prompt,
+        modelId: inference.value.provider_id,
       });
       continue;
     }
@@ -164,6 +171,8 @@ export async function runAudit(
       articleRef: probe.articleRef,
       compliant: parsed.compliant,
       finding: parsed.finding,
+      renderedPrompt: prompt,
+      modelId: inference.value.provider_id,
     });
   }
 

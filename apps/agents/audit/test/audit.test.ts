@@ -91,6 +91,8 @@ describe('aggregateVerdict', () => {
       articleRef: p.articleRef,
       compliant: true,
       finding: 'ok',
+      renderedPrompt: '',
+      modelId: '',
     }));
     expect(aggregateVerdict(r)).toBe('compliant');
   });
@@ -98,9 +100,9 @@ describe('aggregateVerdict', () => {
   it('any non-compliant → non_compliant', () => {
     expect(
       aggregateVerdict([
-        { id: 'a', articleRef: 'A', compliant: true, finding: '' },
-        { id: 'b', articleRef: 'B', compliant: false, finding: '' },
-        { id: 'c', articleRef: 'C', compliant: true, finding: '' },
+        { id: 'a', articleRef: 'A', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
+        { id: 'b', articleRef: 'B', compliant: false, finding: '', renderedPrompt: '', modelId: '' },
+        { id: 'c', articleRef: 'C', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
       ])
     ).toBe('non_compliant');
   });
@@ -108,8 +110,8 @@ describe('aggregateVerdict', () => {
   it('clean except null → unclear', () => {
     expect(
       aggregateVerdict([
-        { id: 'a', articleRef: 'A', compliant: true, finding: '' },
-        { id: 'b', articleRef: 'B', compliant: null, finding: '' },
+        { id: 'a', articleRef: 'A', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
+        { id: 'b', articleRef: 'B', compliant: null, finding: '', renderedPrompt: '', modelId: '' },
       ])
     ).toBe('unclear');
   });
@@ -120,9 +122,9 @@ describe('aggregateVerdict', () => {
 
   it('majority quorum: 2/3 compliant → compliant', () => {
     const r = [
-      { id: 'a', articleRef: 'A', compliant: true, finding: '' },
-      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
-      { id: 'c', articleRef: 'C', compliant: true, finding: '' },
+      { id: 'a', articleRef: 'A', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'c', articleRef: 'C', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
     ];
     expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('compliant');
     expect(aggregateVerdict(r, { quorum: 'all' })).toBe('non_compliant');
@@ -130,18 +132,18 @@ describe('aggregateVerdict', () => {
 
   it('majority quorum: 2/3 non_compliant → non_compliant', () => {
     const r = [
-      { id: 'a', articleRef: 'A', compliant: false, finding: '' },
-      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
-      { id: 'c', articleRef: 'C', compliant: true, finding: '' },
+      { id: 'a', articleRef: 'A', compliant: false, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'c', articleRef: 'C', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
     ];
     expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('non_compliant');
   });
 
   it('majority quorum: 1/3 each way + 1 unclear → unclear (no majority)', () => {
     const r = [
-      { id: 'a', articleRef: 'A', compliant: true, finding: '' },
-      { id: 'b', articleRef: 'B', compliant: false, finding: '' },
-      { id: 'c', articleRef: 'C', compliant: null, finding: '' },
+      { id: 'a', articleRef: 'A', compliant: true, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'b', articleRef: 'B', compliant: false, finding: '', renderedPrompt: '', modelId: '' },
+      { id: 'c', articleRef: 'C', compliant: null, finding: '', renderedPrompt: '', modelId: '' },
     ];
     expect(aggregateVerdict(r, { quorum: 'majority' })).toBe('unclear');
   });

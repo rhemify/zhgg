@@ -406,6 +406,8 @@ export async function runCrossAgentDemo(
       articleRef: string;
       compliant: boolean | null;
       finding: string;
+      renderedPrompt: string;
+      modelId: string;
     }>;
     attestationRoot: string | null;
     teeVerified: boolean | null;
@@ -429,12 +431,24 @@ export async function runCrossAgentDemo(
       evidence: r.finding,
     }));
 
-    // Hash prompt = hash of the manifest fed into probes (the full
-    // prompt template is deterministic given the manifest). Hash response
-    // = hash of the joined raw findings text. Both are content-derived so
-    // a re-run with identical inputs produces identical hashes.
-    const promptHash = keccak256(toBytes(preReceipt.target.manifest));
+    // Hash prompt = hash over the FULLY-RENDERED probe text the model
+    // actually saw, joined deterministically by probe id. Pre-Commit-7 we
+    // hashed `target.manifest` (just the user-supplied manifest blurb),
+    // which produced identical hashes for runs whose probe templates had
+    // diverged — a regulator re-running with a different ProbePrompt set
+    // would compute the same `promptHash`, defeating its purpose. Joining
+    // by `\n---PROBE---\n` keeps the canonical bytes language-agnostic.
+    const renderedPrompts = preReceipt.results
+      .map((r) => `${r.id}\n${r.renderedPrompt}`)
+      .join('\n---PROBE---\n');
+    const promptHash = keccak256(toBytes(renderedPrompts));
     const responseHash = keccak256(toBytes(JSON.stringify(preReceipt.results)));
+    // Use the router-returned model identifier when available — falls
+    // back to `'qwen3.6-plus'` so old transcripts (before Commit 7) stay
+    // recognizable. Picks the FIRST non-empty modelId across probes
+    // (parallel probes share router config; differences would be a bug).
+    const observedModelId =
+      preReceipt.results.find((r) => r.modelId.length > 0)?.modelId ?? 'qwen3.6-plus';
 
     const draft = buildAuditReport({
       auditorAgent: {
@@ -474,7 +488,7 @@ export async function runCrossAgentDemo(
               }
             : undefined,
         qwenInference: {
-          modelId: 'qwen3.6-plus',
+          modelId: observedModelId,
           promptHash,
           responseHash,
           // teeAttestation is the legacy raw-hex slot — only populated

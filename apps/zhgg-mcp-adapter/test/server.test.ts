@@ -16,7 +16,14 @@ const FAKE_REPORT: AuditReport = {
   target: { agentId: 7n, agentName: 'oracle.zhgg.eth' },
   verdict: 'compliant',
   results: [
-    { id: 'eu-aiact-article-5', articleRef: 'EU AI Act Article 5', compliant: true, finding: 'ok' },
+    {
+      id: 'eu-aiact-article-5',
+      articleRef: 'EU AI Act Article 5',
+      compliant: true,
+      finding: 'ok',
+      renderedPrompt: '',
+      modelId: '',
+    },
   ],
   findings: ['ok'],
   attestationRoot: null,
