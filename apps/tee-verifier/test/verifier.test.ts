@@ -174,6 +174,27 @@ describe('verifyTdxQuote', () => {
     expect(r.measurements?.teeTcbSvn.toLowerCase()).toBe(teeTcbSvn);
   });
 
+  describe('signing_algo (codex Q6 — close direct-caller hole)', () => {
+    it('rejects when signing_algo is not ecdsa', () => {
+      const q = buildQuote({ qeVendor: INTEL_QE_VENDOR_ID, signingAddress: TEST_ADDR });
+      const r = verifyTdxQuote({ intel_quote: q, signing_address: TEST_ADDR, signing_algo: 'rsa' });
+      expect(r.valid).toBe(false);
+      expect(r.reason).toContain('unsupported_algo: rsa');
+    });
+
+    it('accepts when signing_algo is omitted (backward-compatible)', () => {
+      const q = buildQuote({ qeVendor: INTEL_QE_VENDOR_ID, signingAddress: TEST_ADDR });
+      const r = verifyTdxQuote({ intel_quote: q, signing_address: TEST_ADDR });
+      expect(r.valid).toBe(true);
+    });
+
+    it('accepts when signing_algo is ecdsa', () => {
+      const q = buildQuote({ qeVendor: INTEL_QE_VENDOR_ID, signingAddress: TEST_ADDR });
+      const r = verifyTdxQuote({ intel_quote: q, signing_address: TEST_ADDR, signing_algo: 'ecdsa' });
+      expect(r.valid).toBe(true);
+    });
+  });
+
   describe('request_nonce binding (LLM-format report_data[32..64])', () => {
     const NONCE = '0x' + '034b9c390f073a9c8f8a1b50e537342fff3952bf2f32f145174e8d87588ed2da'.toLowerCase();
 

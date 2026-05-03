@@ -65,6 +65,15 @@ export interface VerifyResponse {
 /// Run the verifier and return a structured verdict. Pure function —
 /// no I/O. Server side wraps this in an HTTP handler.
 export function verifyTdxQuote(req: VerifyRequest): VerifyResponse {
+  // 0. signing_algo is optional, but when provided MUST be ecdsa.
+  //    The wrapper at packages/workflow/tee-attestation.ts already
+  //    rejects other algos (SUPPORTED_ALGOS, line 31), but direct
+  //    sidecar callers (curl, KH workflow) bypass that — without
+  //    this check they could submit `rsa`/`none` and get valid:true.
+  if (req.signing_algo !== undefined && req.signing_algo !== 'ecdsa') {
+    return { valid: false, reason: `unsupported_algo: ${req.signing_algo}` };
+  }
+
   const parsed: ParseOutcome = parseQuote((req.intel_quote.startsWith('0x') ? req.intel_quote : `0x${req.intel_quote}`) as `0x${string}`);
   if (!parsed.ok) {
     return { valid: false, reason: `parse_error: ${parsed.error.kind}` };
