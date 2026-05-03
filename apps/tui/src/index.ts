@@ -177,6 +177,25 @@ let panelOverlay: PanelOverlay = 'none'
 let toast: { kind: 'ok' | 'err' | 'info'; text: string } | null = null
 function setToast(kind: 'ok' | 'err' | 'info', text: string): void { toast = { kind, text } }
 
+// Cached wallet balances — refreshed in background every 30s.
+let balanceHint = ''
+
+function formatViemCrash(e: unknown): { summary: string; reason: string | null } {
+  const msg = e instanceof Error ? e.message : String(e);
+  // Viem revert format: "The contract function "X" reverted with the following reason:\nSomeReason\n\nContract Call:..."
+  const marker = 'reverted with the following reason:\n';
+  const idx = msg.indexOf(marker);
+  if (idx !== -1) {
+    const after = msg.slice(idx + marker.length);
+    const reason = after.split('\n').find(l => l.trim().length > 0) ?? null;
+    // Extract function name from "The contract function "X" reverted"
+    const fnMatch = msg.match(/contract function "([^"]+)"/);
+    const fn = fnMatch ? fnMatch[1] : 'contract';
+    return { summary: `crash: ${fn} reverted`, reason };
+  }
+  return { summary: `crash: ${msg}`, reason: null };
+}
+
 // `LiveBundle`, the lazy `tryBuildLiveBundle()` factory, and the
 // `getLiveBundleError()` accessor live in `./live-bundle.ts`. They are
 // imported at the top of this file. Anywhere the dispatchers used to
@@ -217,6 +236,7 @@ function render() {
     grantModalLines,
     helpOverlayOpen,
     panelOverlay,
+    balanceHint,
   }))
 }
 
@@ -284,7 +304,9 @@ async function dispatchAuditIntent(intent: Extract<IntentCommand, { kind: 'audit
       },
     )
   } catch (e) {
-    pushAudit('orchestrator', `crash: ${e instanceof Error ? e.message : String(e)}`, 'err')
+    const { summary, reason } = formatViemCrash(e)
+    pushAudit('orchestrator', summary, 'err')
+    if (reason) pushAudit('orchestrator', `reason: ${reason}`, 'err')
   } finally {
     for (const name of KNOWN_STEPS) events.off(name, onAny)
     runningCommand = 'idle'
@@ -1870,15 +1892,37 @@ async function dispatchKHHireIntent(
       },
       provided,
     )
-    pushAudit('kh', `hire.payment ${settlement.paymentTxHash} (${settlement.network})`, 'ok')
+    // Payment row — all-zeros = free workflow, no USDC charged
+    const isFreeTx = /^0x0+$/.test(settlement.paymentTxHash ?? '')
+    if (isFreeTx) {
+      pushAudit('kh', `payment: free workflow — no USDC charged`, 'ok')
+    } else {
+      pushAudit('kh', `payment: ${shortHash(settlement.paymentTxHash as `0x${string}`)} on ${settlement.network}`, 'ok')
+    }
 
-    // Truncate the response to 160 chars in the audit row; the receipt
-    // panel keeps the full JSON below.
-    const responseJson = JSON.stringify(settlement.marketplaceResponse)
-    const truncated = responseJson.length > 160
-      ? `${responseJson.slice(0, 160)}…`
-      : responseJson
-    pushAudit('kh', `hire.response ${truncated}`, 'ok')
+    // Interpret the workflow response in plain English instead of raw JSON
+    const r = settlement.marketplaceResponse as Record<string, unknown>
+    if (r && typeof r === 'object') {
+      if (r.status === 'error' || typeof r.error === 'string') {
+        pushAudit('kh', `workflow ERROR: ${String(r.error ?? 'unknown').slice(0, 120)}`, 'err')
+      } else if (r.type === 'calldata' && typeof r.to === 'string') {
+        const ethValue = typeof r.value === 'string' && r.value !== '0'
+          ? ` · attach ${(Number(r.value) / 1e18).toFixed(4)} ETH` : ''
+        pushAudit('kh', `workflow returned calldata tx${ethValue}`, 'ok')
+        pushAudit('kh', `  to:   ${r.to}`, 'info')
+        pushAudit('kh', `  data: ${String(r.data ?? '').slice(0, 10)}…  (paste into your wallet to execute)`, 'info')
+      } else if (typeof r.executionId === 'string') {
+        const status = String(r.status ?? 'running')
+        const ok = status === 'error' ? 'err' : 'ok'
+        pushAudit('kh', `workflow ${status}  id=${r.executionId}`, ok)
+        if (r.error) pushAudit('kh', `  error: ${String(r.error).slice(0, 120)}`, 'err')
+      } else if (typeof r.result !== 'undefined') {
+        pushAudit('kh', `workflow result: ${JSON.stringify(r.result).slice(0, 120)}`, 'ok')
+      } else {
+        const json = JSON.stringify(r)
+        pushAudit('kh', `workflow: ${json.slice(0, 120)}${json.length > 120 ? '…' : ''}`, 'ok')
+      }
+    }
 
     receiptEnvelope = {
       ...receiptEnvelope,
@@ -2119,6 +2163,25 @@ process.stdout.on("resize", render)
 // Refresh clock + receipt JSON in header every second. Async dispatchers
 // mutate state in the background; this tick is what paints them.
 renderTimer = setInterval(render, 1000)
+
+// Background balance refresh — polls 0G OG + Base Sepolia USDC every 30s
+// so the header always shows current holdings without blocking the UI.
+async function refreshBalances(): Promise<void> {
+  const bundle = tryBuildLiveBundle();
+  if (!bundle) return;
+  try {
+    const rows = await showBalances({
+      account: bundle.account.address,
+      zgRpcUrl: bundle.config.ZG_RPC_URL,
+      basePublicClient: bundle.publicClient,
+    });
+    // Pull the single headline row (the one with OG · ETH · USDC · WETH)
+    const headline = rows.find(r => r.ok === 'ok' && r.event.includes('OG'));
+    if (headline) balanceHint = headline.event;
+  } catch { /* non-fatal — stale hint persists */ }
+}
+refreshBalances();
+setInterval(refreshBalances, 30_000);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
