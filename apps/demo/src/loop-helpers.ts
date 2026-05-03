@@ -120,20 +120,17 @@ export async function commitPlan(
       args: [args.tokenId, planHash],
     });
     const txHash = (await args.walletClient.writeContract(sim.request)) as Hex;
-    // Fire-and-forget: 0G testnet nodes often return errors on the first
-    // receipt poll even for valid txs. Snapshot the current block number
-    // before submission to derive commitId without waiting for confirmation.
-    const blockNumber = await args.publicClient.getBlockNumber().catch(() => 0n);
+    // Wait for confirmation and use receipt.blockNumber — the contract stores
+    // block.number at mine time, so computing commitId from a pre-submission
+    // snapshot produces a wrong hash and causes reveal to fail with CommitNotFound.
+    const receipt = await args.publicClient
+      .waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 });
     const commitId = computeCommitId(
       args.tokenId,
       planHash,
       args.walletClient.account.address as Address,
-      blockNumber,
+      receipt.blockNumber,
     );
-    // Background-confirm so the demo flow never stalls on 0G latency.
-    args.publicClient
-      .waitForTransactionReceipt({ hash: txHash, timeout: 300_000, pollingInterval: 2_000 })
-      .catch(() => { /* non-fatal — tx was submitted, chain will include it */ });
     return { ok: true, value: { commitId, txHash, planHash } };
   } catch (e) {
     return { ok: false, error: { kind: 'commit_failed', reason: errMsg(e) } };

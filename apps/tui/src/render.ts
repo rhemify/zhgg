@@ -55,6 +55,8 @@ export interface FrameState {
   helpOverlayOpen: boolean;
   panelOverlay: PanelOverlay;
   balanceHint: string;
+  /// Index into AUDIT array for the highlighted row (-1 = none / follow-tail).
+  auditCursor: number;
 }
 
 // Build entire frame as a string (prevents flicker vs multiple writes)
@@ -63,7 +65,7 @@ export function buildFrame(state: FrameState): string {
     flow, stagedIntent, runningCommand, receiptEnvelope,
     intentBuffer, intentMode, intentHint, toast,
     grantModalOpen, grantModalLines, helpOverlayOpen, panelOverlay,
-    balanceHint,
+    balanceHint, auditCursor,
   } = state;
   const w = W(), h = H(), mid = MID();
   let f = '';
@@ -196,29 +198,35 @@ export function buildFrame(state: FrameState): string {
   put(botStart, mid + 28, railPillColor + railPillText + $.reset);
   // Controls hint (right-aligned in header). SPACE/A removed since the
   // mock walk-through was deleted in Slice C.
-  const hint = ' ?·R·G·TAB·Q ';
+  const hint = ' ?·R·G·C·TAB·Q ';
   put(botStart, w - hint.length, $.gray + hint + $.reset);
   put(botStart, w, $.cyan + '║' + $.reset);
 
   // Audit trail (live AUDIT array, sticky-bottom).
   const logEnd = ROW_LOG() - 1;
   const auditCapacity = Math.max(0, logEnd - botStart);
-  const visible = AUDIT.slice(-auditCapacity);
+  const startIdx = Math.max(0, AUDIT.length - auditCapacity);
+  const visible = AUDIT.slice(startIdx);
   const nowMs = Date.now();
   visible.forEach((e, i) => {
     const r = botStart + 1 + i;
     if (r > logEnd) return;
     const flash = nowMs < e.flashUntil;
-    // Sidebar glyph: flashing rows get a bright accent bar instead of '║'
-    const sideGlyph = flash
-      ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan) + '▐' + $.reset
-      : $.cyan + '║' + $.reset;
+    const isCursor = auditCursor === startIdx + i;
+    // Sidebar glyph
+    const sideGlyph = isCursor
+      ? $.bold + $.white + '▶' + $.reset
+      : flash
+        ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan) + '▐' + $.reset
+        : $.cyan + '║' + $.reset;
     put(r, 1, sideGlyph);
-    // Text: flashing rows pop in bold+bright with a leading trade-tick glyph
-    const ec = flash
-      ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan)
-      : (e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite);
-    const prefix = flash ? (e.ok === 'ok' ? '▶ ' : e.ok === 'err' ? '✕ ' : '◈ ') : '  ';
+    // Text color: cursor row = inverted white, flash = bright, normal = dim
+    const ec = isCursor
+      ? $.bold + $.white + $.bgCursor
+      : flash
+        ? (e.ok === 'ok' ? $.bold + $.green : e.ok === 'err' ? $.bold + $.red : $.bold + $.cyan)
+        : (e.ok === 'ok' ? $.dgreen : e.ok === 'err' ? $.dred : $.dwhite);
+    const prefix = isCursor ? '► ' : flash ? (e.ok === 'ok' ? '▶ ' : e.ok === 'err' ? '✕ ' : '◈ ') : '  ';
     const line = e.time + ' ' + pad(e.agent, 10) + ' ' + prefix + e.event;
     put(r, 3, ec + line.slice(0, mid - 4) + $.reset);
   });

@@ -15,6 +15,7 @@
 // RECEIPT band push the minimum a few rows above the previous 28.
 
 import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import {
   createPublicClient,
   createWalletClient,
@@ -200,9 +201,24 @@ let helpOverlayOpen = false
 
 // Full-screen overlay for a single panel. Z = audit, X = flow, Esc = close.
 let panelOverlay: PanelOverlay = 'none'
+let auditCursor = -1  // -1 = follow-tail; ≥0 = index into AUDIT
 
 let toast: { kind: 'ok' | 'err' | 'info'; text: string } | null = null
 function setToast(kind: 'ok' | 'err' | 'info', text: string): void { toast = { kind, text } }
+
+function copyAuditToClipboard(): void {
+  if (AUDIT.length === 0) { setToast('info', 'nothing to copy — audit trail is empty'); render(); return }
+  const row = auditCursor >= 0 && auditCursor < AUDIT.length ? AUDIT[auditCursor] : null
+  if (!row) { setToast('info', 'no row selected — use ↑↓ to highlight a row first'); render(); return }
+  const text = `${row.time} ${row.agent.padEnd(10)} ${row.event}`
+  const pb = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] })
+  pb.stdin.write(text)
+  pb.stdin.end()
+  pb.on('close', (code) => {
+    setToast(code === 0 ? 'ok' : 'err', code === 0 ? 'copied' : 'copy failed (pbcopy error)')
+    render()
+  })
+}
 
 // Cached wallet balances — refreshed in background every 30s.
 let balanceHint = ''
@@ -256,6 +272,7 @@ function getState() {
     helpOverlayOpen,
     panelOverlay,
     balanceHint,
+    auditCursor,
   };
 }
 
@@ -2199,6 +2216,27 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
     // handler below. Most users won't reach this path.
   }
 
+  // Idle-mode audit cursor navigation (up/down when not editing).
+  if (intentMode === 'idle') {
+    if (ev.name === 'up') {
+      auditCursor = auditCursor < 0 ? AUDIT.length - 1 : Math.max(0, auditCursor - 1)
+      render()
+      return
+    }
+    if (ev.name === 'down') {
+      if (auditCursor >= 0) {
+        auditCursor = auditCursor >= AUDIT.length - 1 ? -1 : auditCursor + 1
+      }
+      render()
+      return
+    }
+    if (ev.name === 'escape') {
+      auditCursor = -1
+      render()
+      return
+    }
+  }
+
   // Global hotkeys (Ctrl+C always escapes).
   if (ev.ctrl && ev.name === 'c') { cleanup(); process.exit(0) }
   if (key === 'q' || key === 'Q') {
@@ -2219,6 +2257,8 @@ tuiRenderer.keyInput.on('keypress', (ev: KeyEvent) => {
       setGrantModal: (lines, open) => { grantModalLines = lines; grantModalOpen = open },
       render,
     })
+  } else if ((key === 'c' || key === 'C') && intentMode !== 'editing') {
+    copyAuditToClipboard()
   } else if (key === 'z' || key === 'Z') {
     panelOverlay = panelOverlay === 'audit' ? 'none' : 'audit'
   } else if (key === 'x' || key === 'X') {

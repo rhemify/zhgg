@@ -113,9 +113,10 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       if (txHash) {
         pushAudit('receipt', `Base Sepolia: https://sepolia.basescan.org/tx/${txHash}`, 'ok');
       }
-      if (txHash && liveBundleCached) {
+      const isZeroHash = !txHash || /^0x0+$/.test(txHash);
+      if (!isZeroHash && liveBundleCached) {
         liveBundleCached.receiptFeed
-          .fetchSplit(txHash)
+          .fetchSplit(txHash!)
           .then((split) => {
             if (split) {
               setReceiptEnvelope({ ...getReceiptEnvelope(), status: 'settled', split });
@@ -173,18 +174,23 @@ export function applyOrchestratorStep(env: OrchestratorStepEnv, step: Transcript
       flow.nodes = ['done', 'done', 'done', 'done'];
       flow.complete = true;
       const liveBundleCached = tryBuildLiveBundle();
-      if (txHash && liveBundleCached) {
-        liveBundleCached.receiptFeed
-          .fetchNewFeedback(txHash)
-          .then((nf) => {
-            if (nf) {
-              setReceiptEnvelope({ ...getReceiptEnvelope(), status: 'settled+receipt', newFeedback: nf });
-              pushAudit('receipt', `NewFeedback decoded idx=${nf.feedbackIndex}`, 'ok');
-            }
-          })
-          .catch((e) => {
-            pushAudit('receipt', `NewFeedback fetch failed: ${e instanceof Error ? e.message : String(e)}`, 'err');
-          });
+      const isZeroFeedbackHash = !txHash || /^0x0+$/.test(txHash);
+      if (!isZeroFeedbackHash && liveBundleCached) {
+        // 0G Galileo takes ~15s to mine — delay before polling so we don't
+        // flood with "not found" errors on a tx that's still in the mempool.
+        setTimeout(() => {
+          liveBundleCached!.receiptFeed
+            .fetchNewFeedback(txHash!)
+            .then((nf) => {
+              if (nf) {
+                setReceiptEnvelope({ ...getReceiptEnvelope(), status: 'settled+receipt', newFeedback: nf });
+                pushAudit('receipt', `NewFeedback decoded idx=${nf.feedbackIndex}`, 'ok');
+              }
+            })
+            .catch((e) => {
+              pushAudit('receipt', `NewFeedback fetch failed: ${e instanceof Error ? e.message : String(e)}`, 'err');
+            });
+        }, 15_000);
       }
       break;
     }

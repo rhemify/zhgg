@@ -32,8 +32,9 @@ export const $ = {
   indigo: fg(140, 130, 255),
   amber:  fg(245, 158, 11),
   // backgrounds
-  bgDark:  bg(4,   6,   8),
-  bgPanel: bg(8,   14,  22),   // panel header row tint
-  bgNode:  bg(0,   22,  14),
-  bgRej:   bg(30,  8,   8),
+  bgDark:   bg(4,   6,   8),
+  bgPanel:  bg(8,   14,  22),   // panel header row tint
+  bgNode:   bg(0,   22,  14),
+  bgRej:    bg(30,  8,   8),
+  bgCursor: bg(30,  50,  80),   // audit row highlight
 };
