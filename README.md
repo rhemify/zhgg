@@ -12,50 +12,30 @@ Live testnet addresses — see [Deployed contracts](#deployed-contracts) below.
 
 ## Headline scenario
 
-```
-audit oracle                                 TUI command (one keystroke)
-        │
-        ▼
-role → AgentNFT.tokenId (ERC-7857, 0G)       apps/tui/src/agent-registry.ts
-        │
-        ▼
-SpendCap pre-flight (ERC-7715, Base)         apps/demo/src/spend-cap.ts
-        │
-        ▼
-AxiomCommit.commitPlan (0G)                  apps/demo/src/loop-helpers.ts
-        │
-        ▼
-0G Compute Router (TEE Qwen, verify_tee)     packages/workflow/src/adapters/zg-router.ts:18
-        │
-        ▼
-FeeSplitter 85/5/5/5 split (Base, ERC-8021)  contracts/src/FeeSplitter.sol:22
-   OR  KeeperHub x402 marketplace pay        apps/demo/src/keeperhub-marketplace.ts:60
-        │
-        ▼
-ERC-8004 giveFeedback receipt (0G)           apps/zhgg-mcp-adapter/src/index.ts:130
-        │
-        ▼
-canonical AuditReport bytes →
-0G Storage Log rootHash (anchor)             packages/workflow/src/audit-report.ts:283
-        │
-        ▼
-AxiomCommit.revealPlan (0G)                  apps/demo/src/loop-helpers.ts
+```mermaid
+flowchart TD
+    A["audit oracle — TUI command"] --> B["AgentNFT.tokenId\nERC-7857 · 0G Galileo\napps/tui/src/agent-registry.ts"]
+    B --> C["SpendCap pre-flight\nERC-7715 · Base Sepolia\napps/demo/src/spend-cap.ts"]
+    C --> D["AxiomCommit.commitPlan\n0G Galileo\napps/demo/src/loop-helpers.ts"]
+    D --> E["0G Compute Router\nTEE Qwen · verify_tee\npackages/workflow/src/adapters/zg-router.ts"]
+    E --> F1["FeeSplitter 85/5/5/5\nERC-8021 · Base Sepolia\ncontracts/src/FeeSplitter.sol"]
+    E --> F2["KeeperHub x402 pay\napps/demo/src/keeperhub-marketplace.ts"]
+    F1 --> G["ERC-8004 giveFeedback\n0G Galileo\napps/zhgg-mcp-adapter/src/index.ts:130"]
+    F2 --> G
+    G --> H["0G Storage rootHash anchor\ncanonical AuditReport bytes\npackages/workflow/src/audit-report.ts:283"]
+    H --> I["AxiomCommit.revealPlan\n0G Galileo\napps/demo/src/loop-helpers.ts"]
 ```
 
 ## Bidirectional KH ↔ zhgg loop
 
-```
-                       ┌──────────────────────────────────────┐
-                       │  zhgg TUI  (operator-driven)         │
-   kh hire <slug> ────►│  apps/tui/src/index.ts:1568          │── x402 settle ──┐
-                       │  → payViaKeeperHubMarketplace        │                  ▼
-                       └──────────────────────────────────────┘   ┌─────────────────────────┐
-                                                                  │  KeeperHub marketplace  │
-                       ┌──────────────────────────────────────┐   │  (mainnet HTTPS + 402)  │
-   POST /agents/audit  │  zhgg-mcp-adapter HTTP server        │◄──│                         │
-   POST /agents/swap ──►  apps/zhgg-mcp-adapter/src/server.ts │   └─────────────────────────┘
-   POST /agents/oracle │  Bearer MCP_AUTH_TOKEN               │
-                       └──────────────────────────────────────┘
+```mermaid
+flowchart LR
+    TUI["zhgg TUI\napps/tui/src/index.ts:1568\npayViaKeeperHubMarketplace"]
+    KH["KeeperHub marketplace\nmainnet HTTPS + x402"]
+    MCP["zhgg-mcp-adapter\napps/zhgg-mcp-adapter/src/server.ts\nBearer MCP_AUTH_TOKEN"]
+
+    TUI -->|"kh hire &lt;slug&gt;\nx402 settle"| KH
+    KH -->|"POST /agents/audit\nPOST /agents/swap\nPOST /agents/oracle"| MCP
 ```
 
 zhgg consumes KH (left arrow), zhgg agents are exposed AS KH-callable
