@@ -375,6 +375,50 @@ No Python, no Redis, no OPA, no Macaroons, no paywall server.
 
 ---
 
+## KeeperHub Submission
+
+### Project name
+**zhgg** — Bidirectional Agentic Commerce Runtime
+
+### Team
+- **Sean Hoe Kai Zher** — Full-stack / Smart contracts
+- Contact: sean@teelapp.io
+- GitHub: [github.com/LingSiewWin/zhgg](https://github.com/LingSiewWin/zhgg)
+
+### Working demo
+
+Live testnet deployment on Base Sepolia (84532) + 0G Galileo (16602).
+
+```bash
+git clone https://github.com/LingSiewWin/zhgg && cd zhgg
+bun install
+cp .env.example .env   # fill KH_AUTHOR_* + BASE_SEPOLIA_PRIVATE_KEY
+bun run apps/tui/src/index.ts
+```
+
+Demo commands:
+
+```
+kh discover aave           # search KeeperHub marketplace
+kh inspect eth-price-x402  # view workflow schema + price
+kh hire eth-price-x402     # x402 pay-and-trigger, on-chain settlement
+audit oracle               # full audit loop with ERC-8004 receipt
+```
+
+### Approach & how KeeperHub is used
+
+zhgg solves a gap between KeeperHub and 0G: KeeperHub has the marketplace and payment rails but workflows are anonymous — no on-chain identity, no compliance receipts. 0G has iNFT identity and TEE compute but no marketplace. We built the bridge in both directions.
+
+**Consumer side — zhgg hires KeeperHub workflows:**
+`kh hire <slug>` calls `payViaKeeperHubMarketplace` — an x402 pay-and-trigger that settles on-chain via KeeperHub's facilitator and fires the workflow. Any workflow in the public catalog is callable with one command and a USDC balance. Implemented at [`apps/demo/src/keeperhub-marketplace.ts`](./apps/demo/src/keeperhub-marketplace.ts).
+
+**Producer side — KeeperHub hires zhgg agents:**
+Our agents (audit, oracle, swap) are exposed as KH-callable workflows over Bearer-authenticated HTTP at [`apps/zhgg-mcp-adapter`](./apps/zhgg-mcp-adapter). A KeeperHub workflow POSTs to `/agents/audit/call`, receives a 402, pays, and gets back an ERC-8004 reputation receipt on 0G Galileo as the response payload. The receipt hash becomes the job's on-chain `completionReason`.
+
+**The result:** a KeeperHub hire directly causes a 0G TEE audit, producing a cryptographic compliance receipt that satisfies EU AI Act Article 12. One marketplace action, two chains, no intermediaries.
+
+---
+
 ## Contributing / license / cite
 
 This repo is the ETHGlobal OpenAgents submission for `@LingSiewWin` (`siewwin` branch).
